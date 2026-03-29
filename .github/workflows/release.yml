@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build plugin
+        working-directory: plugin
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package plugin
+        run: |
+          mkdir -p dist
+          cp plugin/main.js dist/
+          cp plugin/manifest.json dist/
+          cp plugin/styles.css dist/ 2>/dev/null || true
+          cd dist && zip -r ../meetnote-plugin.zip .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            meetnote-plugin.zip
+            plugin/main.js
+            plugin/manifest.json
+          body: |
+            ## MeetNote ${{ github.ref_name }}
+
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+
+            ### Plugin Installation
+            1. Download `meetnote-plugin.zip`
+            2. Extract to `<vault>/.obsidian/plugins/meetnote/`
+            3. Enable in Obsidian Settings → Community Plugins
+
+            ### Backend Setup
+            See [docs/SETUP.md](docs/SETUP.md)

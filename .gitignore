@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+*.egg
+
+# Backend data (user-specific)
+backend/recordings/
+backend/speakers.json
+backend/meetnote.key
+backend/audit.log
+backend/*.enc
+
+# Node
+node_modules/
+plugin/node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Obsidian plugin build output (tracked intentionally for easy install)
+# plugin/main.js — intentionally tracked
+
+# Secrets
+.env
+*.secret
+
+# Claude Code
+.claude/

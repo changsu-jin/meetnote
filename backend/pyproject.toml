@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meetnote-backend"
+version = "0.1.0"
+description = "MeetNote backend — local meeting transcription, diarization, and summarization"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+    "faster-whisper>=1.0.0",
+    "pyannote.audio>=3.1.0",
+    "torch>=2.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "websockets>=12.0",
+    "pyyaml>=6.0",
+    "cryptography>=42.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+mlx = ["mlx-whisper>=0.1.0"]
+dev = ["pytest>=8.0", "black>=24.0", "mypy>=1.8", "ruff>=0.3.0"]
+
+[project.scripts]
+meetnote-server = "server:main"
+
+[tool.setuptools.packages.find]
+include = ["recorder*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true

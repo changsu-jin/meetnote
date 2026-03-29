@@ -1,0 +1,43 @@
+server:
+  host: "0.0.0.0"
+  port: 8765
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_duration: 30  # 준실시간 전사 청크 크기 (초)
+  device: null  # null이면 기본 디바이스, 이름 또는 인덱스 지정 가능
+  save_path: "./recordings"
+
+whisper:
+  model_size: "large-v3-turbo"  # tiny, base, small, medium, large-v3, large-v3-turbo
+  language: "ko"
+  device: "cpu"  # cpu 또는 cuda
+  compute_type: "int8"  # int8, float16, float32
+  initial_prompt: "회의, 프로젝트, 스프린트, API, 배포, 리뷰, QA, 일정, 담당자"  # 도메인 키워드 힌트 (전사 정확도 향상)
+
+diarization:
+  huggingface_token: ""  # HuggingFace 토큰 (pyannote 모델 다운로드용) — https://huggingface.co/settings/tokens 에서 발급
+  min_speakers: null  # null이면 자동 감지
+  max_speakers: null  # null이면 자동 감지
+
+merger:
+  merge_consecutive: true  # 연속된 동일 화자 발화 합치기
+
+speaker_db:
+  path: "./speakers.json"  # 화자 embedding DB 파일 경로
+  similarity_threshold: 0.70  # cosine similarity 매칭 임계값 (0.0~1.0)
+
+summary:
+  timeout: 120  # 요약 생성 타임아웃 (초)
+  ollama_model: "llama3.1:8b"  # Ollama 사용 시 모델명
+
+slack:
+  enabled: false  # Slack 전송 활성화
+  webhook_url: ""  # Slack Incoming Webhook URL
+
+security:
+  encryption_enabled: false  # 녹음 파일 AES 암호화
+  key_path: "./meetnote.key"  # 암호화 키 파일 경로 (자동 생성)
+  auto_delete_days: 0  # N일 이상 된 녹음 파일 자동 삭제 (0이면 비활성화)
+  audit_log_path: "./audit.log"  # 감사 로그 경로

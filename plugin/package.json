@@ -1,0 +1,16 @@
+{
+	"name": "obsidian-meetnote",
+	"version": "0.1.0",
+	"description": "MeetNote - 회의 음성을 자동 녹음하고 화자구분하여 회의록을 작성하는 Obsidian 플러그인",
+	"main": "main.js",
+	"scripts": {
+		"build": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node",
+		"dev": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node --watch"
+	},
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"esbuild": "^0.21.0",
+		"obsidian": "latest",
+		"typescript": "^5.4.0"
+	}
+}
