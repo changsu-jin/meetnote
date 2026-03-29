@@ -127,15 +127,32 @@ MVP 이후 단계적으로 구현할 차별화 기능들. 우선순위는 영향
 4. 디스크 ~5GB (Whisper large-v3-turbo + pyannote 모델)
 5. 최초 1회 인터넷 연결 필요 (모델 다운로드), 이후 완전 오프라인 동작 가능
 
-### Phase 2: 독립 플러그인 (sherpa-onnx)
+### Phase 2: 독립 플러그인 (sherpa-onnx) — 진행 중
 
-Python 의존성을 제거하고 sherpa-onnx (C++ 기반, Node.js 바인딩)로 전환하여 플러그인만으로 동작.
+Python 백엔드를 제거하고 sherpa-onnx (C++ 기반, Node.js 바인딩)로 전환하여 플러그인만으로 동작.
 
-- STT + 화자구분을 sherpa-onnx 단일 라이브러리로 처리
-- 사용자가 Python 설치 불필요
-- 옵시디안 커뮤니티 플러그인으로 배포 가능
+**기술 스택 전환:**
+| 구성요소 | Phase 1 | Phase 2 |
+|----------|---------|---------|
+| STT | MLX Whisper (Python) | sherpa-onnx Whisper (Node.js) |
+| 화자구분 | pyannote-audio (Python) | sherpa-onnx pyannote-seg-3.0 (Node.js) |
+| 화자 embedding | wespeaker (Python) | sherpa-onnx 3D-Speaker (Node.js) |
+| 서버 | FastAPI + WebSocket | 없음 (플러그인 내장) |
+| 설치 | Python venv + npm | npm install만 |
 
-> Phase 2는 Phase 1의 핵심 로직이 검증된 후 진행.
+**핵심 변경:**
+- `npm install sherpa-onnx`로 STT + 화자구분 + embedding 통합
+- 모델은 최초 사용 시 자동 다운로드 (lazy download)
+- 비즈니스 로직(요약, Slack, 태그, 검색 등)은 Python → TypeScript 포팅
+- Electron 호환: `enableExternalBuffer: false` 설정 필요
+- 모델 캐시: `~/.obsidian/plugins/meetnote/models/`
+
+**모델 선택:**
+- STT: Whisper small (한국어, ~300MB) — 품질/크기 균형
+- 화자구분: pyannote-segmentation-3.0 ONNX (~200MB)
+- 화자 embedding: 3D-Speaker (~100MB)
+
+> Phase 1 코드는 `master` 브랜치에 유지, Phase 2는 `phase2/sherpa-onnx` 브랜치에서 진행.
 
 ## 기술 스택 (Phase 1)
 
