@@ -30,7 +30,12 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 ## 프로젝트 3대 원칙
 
-1. **모든 작업은 backlog로 태스크 관리** — 작업 시작 전 backlog에 태스크 생성, In Progress → Done, 사용자 컨펌 후 다음 태스크. **버그 수정, 품질 개선, 테스트 등 계획에 없던 작업도 반드시 backlog에 사후 등록**하여 작업 이력이 누락되지 않도록 한다.
+1. **모든 작업은 backlog로 태스크 관리 (예외 없음)**
+   - 작업 시작 전: backlog에 태스크 확인/생성 → In Progress
+   - 작업 완료 즉시: Done + finalSummary 작성 (다음 작업 전에 반드시)
+   - 계획 외 작업(버그, 개선, 테스트): 발생 즉시 backlog 등록
+   - 세션 종료 전: 누락된 backlog 없는지 최종 확인
+   - **"끝까지 진행해줘" 모드에서도 예외 없음** — 속도보다 backlog 정합성 우선
 2. **작업 연속성 유지 (세션 독립적)** — 사용자가 지시하는 모든 내용을 프로젝트 내 파일로 저장. 세션이 끊기고 다시 접속해도 이어서 작업 가능해야 함. 핵심 파일: `TEST_PROGRESS.md`, `PRD.md`, backlog 태스크
 3. **FAANG 수준 완성도** — 에러 핸들링, 타입 안정성, 테스트, 로깅, 보안, 문서화 등 프로덕션 기준. 코드뿐 아니라 모든 산출물에 적용
 4. **PRD.md 실시간 갱신** — 개발 중 변경된 요구사항, 아키텍처 결정, 기술 스택 변경 등을 PRD.md에 즉시 반영. PRD는 항상 현재 상태를 정확히 반영해야 함
