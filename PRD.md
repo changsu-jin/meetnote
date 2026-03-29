@@ -127,7 +127,7 @@ MVP 이후 단계적으로 구현할 차별화 기능들. 우선순위는 영향
 4. 디스크 ~5GB (Whisper large-v3-turbo + pyannote 모델)
 5. 최초 1회 인터넷 연결 필요 (모델 다운로드), 이후 완전 오프라인 동작 가능
 
-### Phase 2: 독립 플러그인 (sherpa-onnx) — 진행 중
+### Phase 2: 독립 플러그인 (sherpa-onnx) — 보류
 
 Python 백엔드를 제거하고 sherpa-onnx (C++ 기반, Node.js 바인딩)로 전환하여 플러그인만으로 동작.
 
@@ -152,7 +152,9 @@ Python 백엔드를 제거하고 sherpa-onnx (C++ 기반, Node.js 바인딩)로 
 - 화자구분: pyannote-segmentation-3.0 ONNX (~200MB)
 - 화자 embedding: 3D-Speaker (~100MB)
 
-> Phase 1 코드는 `master` 브랜치에 유지, Phase 2는 `phase2/sherpa-onnx` 브랜치에서 진행.
+> 2026-03-30 시도 후 보류: sherpa-onnx는 GPU 미지원(CPU only, 3~5배 느림), Whisper small 한국어 품질 부족, 배포 편의성 외 장점 없음.
+> Phase 1 유지 결정. 코드는 `phase2/sherpa-onnx` 브랜치에 보존.
+> sherpa-onnx가 GPU(MPS) 지원하거나, 크로스플랫폼 필요 시 재검토.
 
 ## 기술 스택 (Phase 1)
 
