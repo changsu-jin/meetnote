@@ -5,7 +5,7 @@ server:
 audio:
   sample_rate: 16000
   channels: 1
-  chunk_duration: 30  # 준실시간 전사 청크 크기 (초)
+  chunk_duration: 10  # 준실시간 전사 청크 크기 (초) — 작을수록 볼륨 차이에 강함
   device: null  # null이면 기본 디바이스, 이름 또는 인덱스 지정 가능
   save_path: "./recordings"
 
@@ -18,7 +18,7 @@ whisper:
 
 diarization:
   huggingface_token: ""  # HuggingFace 토큰 (pyannote 모델 다운로드용) — https://huggingface.co/settings/tokens 에서 발급
-  min_speakers: null  # null이면 자동 감지
+  min_speakers: 2  # 최소 화자 수 (1인 회의는 드물므로 2 권장)
   max_speakers: null  # null이면 자동 감지
 
 merger:

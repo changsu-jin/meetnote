@@ -621,21 +621,6 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
         save_path=audio_cfg_raw.get("save_path", "./recordings"),
     )
 
-    # Ensure transcriber uses the effective config.
-    state.transcriber = Transcriber(effective_config)
-    await asyncio.to_thread(state.transcriber.load_model)
-
-    # Update diarizer with per-session config (e.g., HuggingFace token).
-    diar_cfg = effective_config.get("diarization", {})
-    hf_token = diar_cfg.get("huggingface_token")
-    if hf_token:
-        state.diarizer = Diarizer(
-            huggingface_token=hf_token,
-            min_speakers=diar_cfg.get("min_speakers"),
-            max_speakers=diar_cfg.get("max_speakers"),
-        )
-        logger.info("Diarizer updated with HuggingFace token.")
-
     chunk_duration = audio_config.chunk_duration
     loop = asyncio.get_event_loop()
     state.chunk_index = 0
@@ -691,6 +676,27 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
     await send_status(ws)
     logger.info("Recording started via WebSocket.")
 
+    # Load/reuse models AFTER recording started (audio captures from the start)
+    whisper_cfg = effective_config.get("whisper", {})
+    current_model = whisper_cfg.get("model_size", "large-v3-turbo")
+    if state.transcriber is None or state.transcriber._model_size != current_model:
+        state.transcriber = Transcriber(effective_config)
+        await asyncio.to_thread(state.transcriber.load_model)
+    else:
+        logger.info("Transcriber reused (model unchanged: %s).", current_model)
+
+    diar_cfg = effective_config.get("diarization", {})
+    hf_token = diar_cfg.get("huggingface_token")
+    if hf_token and (state.diarizer is None or state.diarizer._token != hf_token):
+        state.diarizer = Diarizer(
+            huggingface_token=hf_token,
+            min_speakers=diar_cfg.get("min_speakers"),
+            max_speakers=diar_cfg.get("max_speakers"),
+        )
+        logger.info("Diarizer updated with HuggingFace token.")
+    else:
+        logger.info("Diarizer reused.")
+
 
 async def handle_stop(ws: WebSocket):
     """Stop recording and run post-processing (diarization + merge)."""
@@ -731,13 +737,29 @@ async def handle_stop(ws: WebSocket):
     await send_status(ws)
 
     try:
-        # 2a. Reuse chunk transcription results (skip full-file re-transcription)
+        # 2a. Reuse chunk transcription results + transcribe tail from WAV
         transcription_segments = list(state.chunk_segments)
         if transcription_segments:
             logger.info(
-                "Reusing %d chunk transcription segments (skipping re-transcription).",
+                "Reusing %d chunk transcription segments.",
                 len(transcription_segments),
             )
+            await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 30.0})
+
+            # Transcribe remaining tail audio from WAV file (safe: runs after stop)
+            chunk_duration = _config.get("audio", {}).get("chunk_duration", 30)
+            covered_seconds = state.chunk_index * chunk_duration
+            try:
+                tail_segments = await asyncio.to_thread(
+                    state.transcriber.transcribe_file_from_offset, wav_path, covered_seconds,
+                )
+                if tail_segments:
+                    transcription_segments.extend(tail_segments)
+                    logger.info("Tail transcription: %d segments from %.1fs.",
+                               len(tail_segments), covered_seconds)
+            except Exception as tail_exc:
+                logger.warning("Tail transcription skipped: %s", tail_exc)
+
             await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 50.0})
         else:
             # Fallback: no chunks collected (e.g., very short recording) — transcribe full file

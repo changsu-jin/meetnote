@@ -229,9 +229,15 @@ export class BackendClient {
 	}
 
 	sendStop(): void {
-		// Always use HTTP for stop — more reliable than WebSocket
-		console.log("[BackendClient] Sending stop via HTTP");
-		this.httpStop();
+		// Try WebSocket first (works even when HTTP is blocked by chunk transcription)
+		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+			console.log("[BackendClient] Sending stop via WebSocket");
+			this.ws.send(JSON.stringify({ type: "stop" }));
+		} else {
+			// Fallback to HTTP
+			console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
+			this.httpStop();
+		}
 	}
 
 	private async httpStop(): Promise<void> {

@@ -410,7 +410,7 @@ class AudioRecorder:
             del self._mix_stop_event
             del self._mix_thread
 
-        # Stop and close all streams — use abort() to avoid blocking on callbacks
+        # Stop and close all streams — abort to avoid blocking
         for stream in self._streams:
             try:
                 stream.abort()

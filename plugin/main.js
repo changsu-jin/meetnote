@@ -269,8 +269,13 @@ var BackendClient = class {
     this.send({ type: "start", config });
   }
   sendStop() {
-    console.log("[BackendClient] Sending stop via HTTP");
-    this.httpStop();
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log("[BackendClient] Sending stop via WebSocket");
+      this.ws.send(JSON.stringify({ type: "stop" }));
+    } else {
+      console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
+      this.httpStop();
+    }
   }
   async httpStop() {
     try {
@@ -582,13 +587,29 @@ var MeetingWriter = class {
     const body = [];
     body.push("## \uB179\uCDE8\uB85D");
     body.push("");
-    for (const seg of segments) {
-      const wallClock = secondsToWallClock(seg.timestamp, startTime);
-      const ts = formatTime(wallClock);
+    let i = 0;
+    while (i < segments.length) {
+      const seg = segments[i];
       const speakerLabel = seg.speaker.startsWith("SPEAKER_") ? seg.speaker.replace(/^SPEAKER_(\d+)$/, (_, n) => `\uD654\uC790${parseInt(n) + 1}`) : seg.speaker;
-      body.push(`### ${ts}`);
-      body.push(`**${speakerLabel}**: ${seg.text.trim()}`);
+      const groupStart = secondsToWallClock(seg.timestamp, startTime);
+      const texts = [seg.text.trim()];
+      let lastTimestamp = seg.timestamp;
+      while (i + 1 < segments.length && segments[i + 1].speaker === seg.speaker) {
+        i++;
+        texts.push(segments[i].text.trim());
+        lastTimestamp = segments[i].timestamp;
+      }
+      const groupEnd = secondsToWallClock(lastTimestamp, startTime);
+      const tsStart = formatTime(groupStart);
+      if (texts.length > 1) {
+        const tsEnd = formatTime(groupEnd);
+        body.push(`### ${tsStart} ~ ${tsEnd}`);
+      } else {
+        body.push(`### ${tsStart}`);
+      }
+      body.push(`**${speakerLabel}**: ${texts.join(" ")}`);
       body.push("");
+      i++;
     }
     const finalContent = [...header, ...summarySection, ...body].join("\n");
     const frontmatter = buildFrontmatter(

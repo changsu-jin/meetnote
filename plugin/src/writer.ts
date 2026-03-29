@@ -232,15 +232,40 @@ export class MeetingWriter {
 		const body: string[] = [];
 		body.push("## 녹취록");
 		body.push("");
-		for (const seg of segments) {
-			const wallClock = secondsToWallClock(seg.timestamp, startTime);
-			const ts = formatTime(wallClock);
+
+		// Group consecutive segments by same speaker
+		let i = 0;
+		while (i < segments.length) {
+			const seg = segments[i];
 			const speakerLabel = seg.speaker.startsWith("SPEAKER_")
 				? seg.speaker.replace(/^SPEAKER_(\d+)$/, (_, n: string) => `화자${parseInt(n) + 1}`)
 				: seg.speaker;
-			body.push(`### ${ts}`);
-			body.push(`**${speakerLabel}**: ${seg.text.trim()}`);
+
+			const groupStart = secondsToWallClock(seg.timestamp, startTime);
+			const texts: string[] = [seg.text.trim()];
+			let lastTimestamp = seg.timestamp;
+
+			// Collect consecutive segments from the same speaker
+			while (i + 1 < segments.length && segments[i + 1].speaker === seg.speaker) {
+				i++;
+				texts.push(segments[i].text.trim());
+				lastTimestamp = segments[i].timestamp;
+			}
+
+			const groupEnd = secondsToWallClock(lastTimestamp, startTime);
+			const tsStart = formatTime(groupStart);
+
+			if (texts.length > 1) {
+				// Multiple segments grouped: show time range
+				const tsEnd = formatTime(groupEnd);
+				body.push(`### ${tsStart} ~ ${tsEnd}`);
+			} else {
+				body.push(`### ${tsStart}`);
+			}
+
+			body.push(`**${speakerLabel}**: ${texts.join(" ")}`);
 			body.push("");
+			i++;
 		}
 
 		const finalContent = [...header, ...summarySection, ...body].join("\n");

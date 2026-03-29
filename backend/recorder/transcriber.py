@@ -154,6 +154,28 @@ class Transcriber:
         else:
             return self._fw_transcribe_file(file_path)
 
+    def transcribe_file_from_offset(
+        self, file_path: str | Path, offset_seconds: float
+    ) -> list[TranscriptionSegment]:
+        """Transcribe the tail portion of a WAV file starting from offset_seconds."""
+        audio = self._load_wav_as_float32(Path(file_path))
+        offset_samples = int(offset_seconds * self._sample_rate)
+
+        if offset_samples >= len(audio):
+            return []
+
+        tail = audio[offset_samples:]
+        if len(tail) < self._sample_rate:  # less than 1 second
+            return []
+
+        logger.info("Transcribing tail: %.1fs audio from offset %.1fs.",
+                    len(tail) / self._sample_rate, offset_seconds)
+
+        if self._use_mlx:
+            return self._mlx_transcribe_audio(tail, time_offset=offset_seconds)
+        else:
+            return self._fw_transcribe_audio(tail, time_offset=offset_seconds)
+
     # ------------------------------------------------------------------
     # MLX Whisper backend
     # ------------------------------------------------------------------
@@ -197,14 +219,14 @@ class Transcriber:
             text = seg.get("text", "").strip()
             if not text:
                 continue
-            # Filter out likely hallucinated segments:
-            # - no_speech_prob > 0.5 means the model thinks there's no speech
-            # - very high compression ratio means repetitive/garbage text
+            # Filter out likely hallucinated segments (relaxed thresholds)
             no_speech = seg.get("no_speech_prob", 0.0)
             compression = seg.get("compression_ratio", 0.0)
-            if no_speech > 0.5:
+            if no_speech > 0.8:
+                logger.debug("Filtered (no_speech=%.2f): %s", no_speech, text[:50])
                 continue
-            if compression > 2.4:
+            if compression > 3.0:
+                logger.debug("Filtered (compression=%.1f): %s", compression, text[:50])
                 continue
             segments.append(
                 TranscriptionSegment(
@@ -298,11 +320,20 @@ class Transcriber:
 
     @staticmethod
     def _prepare_audio(audio: np.ndarray) -> np.ndarray:
-        """Ensure audio is a 1-D float32 array."""
+        """Ensure audio is a 1-D float32 array with RMS normalization.
+
+        RMS normalization prevents loud speakers near the mic from
+        suppressing quieter speakers further away.
+        """
         if audio.ndim > 1:
             audio = audio[:, 0]
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
+        # RMS normalization: bring average volume to consistent level
+        rms = np.sqrt(np.mean(audio ** 2))
+        if rms > 0.0005:
+            audio = audio * (0.05 / rms)
+            np.clip(audio, -1.0, 1.0, out=audio)
         return audio
 
     @staticmethod
