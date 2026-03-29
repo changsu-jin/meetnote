@@ -28,7 +28,7 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 <!-- BACKLOG.MD MCP GUIDELINES END -->
 
-## 프로젝트 3대 원칙
+## 프로젝트 핵심 원칙
 
 1. **모든 작업은 backlog로 태스크 관리 (예외 없음)**
    - 작업 시작 전: backlog에 태스크 확인/생성 → In Progress
