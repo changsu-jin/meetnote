@@ -1,13 +1,10 @@
-import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type MeetNotePlugin from "./main";
 
 export interface MeetNoteSettings {
-	serverUrl: string;
-	modelSize: string;
-	huggingfaceToken: string;
+	language: string;
 	minSpeakers: number | null;
 	maxSpeakers: number | null;
-	recordingPath: string;
 	slackEnabled: boolean;
 	slackWebhookUrl: string;
 	encryptionEnabled: boolean;
@@ -16,12 +13,9 @@ export interface MeetNoteSettings {
 }
 
 export const DEFAULT_SETTINGS: MeetNoteSettings = {
-	serverUrl: "ws://localhost:8765/ws",
-	modelSize: "large-v3-turbo",
-	huggingfaceToken: "",
+	language: "ko",
 	minSpeakers: null,
 	maxSpeakers: null,
-	recordingPath: "./recordings",
 	slackEnabled: false,
 	slackWebhookUrl: "",
 	encryptionEnabled: false,
@@ -44,45 +38,17 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 		containerEl.createEl("h2", { text: "MeetNote 설정" });
 
 		new Setting(containerEl)
-			.setName("서버 URL")
-			.setDesc("백엔드 WebSocket 서버 주소")
-			.addText((text) =>
-				text
-					.setPlaceholder("ws://localhost:8765/ws")
-					.setValue(this.plugin.settings.serverUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.serverUrl = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Whisper 모델 크기")
-			.setDesc("음성 인식에 사용할 Whisper 모델 크기")
+			.setName("전사 언어")
+			.setDesc("음성 인식 언어")
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOption("tiny", "tiny")
-					.addOption("base", "base")
-					.addOption("small", "small")
-					.addOption("medium", "medium")
-					.addOption("large-v3", "large-v3")
-					.addOption("large-v3-turbo", "large-v3-turbo")
-					.setValue(this.plugin.settings.modelSize)
+					.addOption("ko", "한국어")
+					.addOption("en", "English")
+					.addOption("ja", "日本語")
+					.addOption("zh", "中文")
+					.setValue(this.plugin.settings.language)
 					.onChange(async (value) => {
-						this.plugin.settings.modelSize = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("HuggingFace 토큰")
-			.setDesc("화자 분리(diarization)를 위한 HuggingFace API 토큰")
-			.addText((text) =>
-				text
-					.setPlaceholder("hf_...")
-					.setValue(this.plugin.settings.huggingfaceToken)
-					.onChange(async (value) => {
-						this.plugin.settings.huggingfaceToken = value;
+						this.plugin.settings.language = value;
 						await this.plugin.saveSettings();
 					})
 			);
@@ -123,19 +89,6 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName("녹음 저장 경로")
-			.setDesc("녹음 파일이 저장될 경로")
-			.addText((text) =>
-				text
-					.setPlaceholder("./recordings")
-					.setValue(this.plugin.settings.recordingPath)
-					.onChange(async (value) => {
-						this.plugin.settings.recordingPath = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
 		// ── Slack 설정 ─────────────────────────────────────────────────
 		containerEl.createEl("h2", { text: "Slack 연동" });
 
@@ -162,7 +115,6 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.slackWebhookUrl = value;
 						await this.plugin.saveSettings();
-						await this.syncSlackConfig();
 					})
 			);
 
@@ -173,21 +125,12 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 				button
 					.setButtonText("테스트")
 					.onClick(async () => {
-						await this.syncSlackConfig();
-						try {
-							const baseUrl = this.getHttpBaseUrl();
-							const resp = await requestUrl({
-								url: `${baseUrl}/slack/test`,
-								method: "POST",
-							});
-							const result = resp.json;
-							if (result.ok) {
-								new Notice("Slack 연결 성공! 채널을 확인하세요.");
-							} else {
-								new Notice(`Slack 연결 실패: ${result.message}`);
-							}
-						} catch (err) {
-							new Notice("백엔드 서버에 연결할 수 없습니다.");
+						const { testSlackConnection } = require("./services/slack-sender");
+						const result = await testSlackConnection(this.plugin.settings.slackWebhookUrl);
+						if (result.success) {
+							new Notice("Slack 연결 성공! 채널을 확인하세요.");
+						} else {
+							new Notice(`Slack 연결 실패: ${result.error}`);
 						}
 					})
 			);
@@ -204,7 +147,6 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.encryptionEnabled = value;
 						await this.plugin.saveSettings();
-						await this.syncSecurityConfig();
 					})
 			);
 
@@ -218,7 +160,6 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.autoDeleteDays = parseInt(value, 10) || 0;
 						await this.plugin.saveSettings();
-						await this.syncSecurityConfig();
 					})
 			);
 
@@ -238,44 +179,4 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private getHttpBaseUrl(): string {
-		return this.plugin.settings.serverUrl
-			.replace(/^ws(s?):\/\//, "http$1://")
-			.replace(/\/ws\/?$/, "")
-			.replace(/\/$/, "");
-	}
-
-	private async syncSlackConfig(): Promise<void> {
-		try {
-			const baseUrl = this.getHttpBaseUrl();
-			await requestUrl({
-				url: `${baseUrl}/slack/config`,
-				method: "POST",
-				contentType: "application/json",
-				body: JSON.stringify({
-					enabled: this.plugin.settings.slackEnabled,
-					webhook_url: this.plugin.settings.slackWebhookUrl,
-				}),
-			});
-		} catch {
-			// Backend might not be running — config will sync on next connect
-		}
-	}
-
-	private async syncSecurityConfig(): Promise<void> {
-		try {
-			const baseUrl = this.getHttpBaseUrl();
-			await requestUrl({
-				url: `${baseUrl}/security/config`,
-				method: "POST",
-				contentType: "application/json",
-				body: JSON.stringify({
-					encryption_enabled: this.plugin.settings.encryptionEnabled,
-					auto_delete_days: this.plugin.settings.autoDeleteDays,
-				}),
-			});
-		} catch {
-			// Backend might not be running
-		}
-	}
 }
