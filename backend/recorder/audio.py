@@ -156,6 +156,9 @@ class AudioRecorder:
         self._lock = threading.Lock()
         self._recording = False
         self._start_time: Optional[float] = None
+        # Streaming WAV writer — writes directly to disk during recording
+        self._wav_file: Optional[wave.Wave_write] = None
+        self._wav_path: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Device resolution
@@ -207,7 +210,14 @@ class AudioRecorder:
         data = indata.copy()
 
         with self._lock:
-            self._frames.append(data)
+            # Stream to WAV file (no memory accumulation for long recordings)
+            if self._wav_file is not None:
+                try:
+                    int16_data = np.clip(data, -1.0, 1.0)
+                    int16_data = (int16_data * 32767).astype(np.int16)
+                    self._wav_file.writeframes(int16_data.tobytes())
+                except Exception:
+                    pass
 
             if self.chunk_callback is not None:
                 self._chunk_buffer.append(data)
@@ -248,6 +258,16 @@ class AudioRecorder:
         self._chunk_buffer.clear()
         self._chunk_samples_collected = 0
         self._streams.clear()
+
+        # Open WAV file for streaming write
+        save_dir = Path(self.config.save_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        self._wav_path = str(save_dir / f"{self.filename_prefix}_{timestamp}.wav")
+        self._wav_file = wave.open(self._wav_path, "wb")
+        self._wav_file.setnchannels(self.config.channels)
+        self._wav_file.setsampwidth(2)  # 16-bit
+        self._wav_file.setframerate(self.config.sample_rate)
 
         if self.mode == RecordingMode.MIC:
             self._start_single_stream(self._resolve_mic_device())
@@ -381,7 +401,14 @@ class AudioRecorder:
             mixed = sys_data
 
         with self._lock:
-            self._frames.append(mixed)
+            # Write mixed audio to WAV file in real-time
+            if self._wav_file is not None:
+                try:
+                    int16_data = np.clip(mixed, -1.0, 1.0)
+                    int16_data = (int16_data * 32767).astype(np.int16)
+                    self._wav_file.writeframes(int16_data.tobytes())
+                except Exception:
+                    pass
 
             if self.chunk_callback is not None:
                 self._chunk_buffer.append(mixed)
@@ -431,20 +458,42 @@ class AudioRecorder:
             if self.chunk_callback is not None and self._chunk_buffer:
                 self._flush_chunk()
 
-        if not self._frames:
-            logger.warning("No audio frames captured")
+        # Close the streaming WAV file
+        wav_path = None
+        if self._wav_file is not None:
+            try:
+                self._wav_file.close()
+                wav_path = self._wav_path
+                logger.info("WAV file closed: %s", wav_path)
+            except Exception as exc:
+                logger.warning("Failed to close WAV file: %s", exc)
+            self._wav_file = None
+
+        if not save or wav_path is None:
             return None
 
-        if save:
-            return self.save()
-        return None
+        abs_path = str(Path(wav_path).resolve())
+        logger.info("Audio saved to %s", abs_path)
+        return abs_path
 
     # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
 
     def get_audio_data(self) -> np.ndarray:
-        """Return all recorded audio as a single numpy array."""
+        """Return all recorded audio as a single numpy array.
+
+        Reads from the streaming WAV file if available, otherwise from memory.
+        """
+        if self._wav_path and Path(self._wav_path).exists() and not self._recording:
+            try:
+                with wave.open(self._wav_path, "rb") as wf:
+                    raw = wf.readframes(wf.getnframes())
+                audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                return audio
+            except Exception:
+                pass
+        # Fallback to memory (for short recordings or during recording)
         with self._lock:
             if not self._frames:
                 return np.array([], dtype="float32")
