@@ -17,7 +17,7 @@ whisper:
   initial_prompt: "회의, 프로젝트, 스프린트, API, 배포, 리뷰, QA, 일정, 담당자"  # 도메인 키워드 힌트 (전사 정확도 향상)
 
 diarization:
-  huggingface_token: ""  # HuggingFace 토큰 (pyannote 모델 다운로드용) — https://huggingface.co/settings/tokens 에서 발급
+  huggingface_token: ""  # .env 파일 또는 환경변수 HUGGINGFACE_TOKEN으로 설정
   min_speakers: 2  # 최소 화자 수 (1인 회의는 드물므로 2 권장)
   max_speakers: null  # null이면 자동 감지
 

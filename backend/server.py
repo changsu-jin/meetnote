@@ -45,9 +45,25 @@ CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict[str, Any]:
-    """Load the full config.yaml as a dict."""
+    """Load config.yaml, with .env overrides for secrets."""
+    import os
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        config = yaml.safe_load(f) or {}
+
+    # Load .env if exists (for secrets like HF token)
+    env_path = Path(__file__).resolve().parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().strip().split("\n"):
+            if "=" in line and not line.startswith("#"):
+                key, val = line.split("=", 1)
+                os.environ[key.strip()] = val.strip()
+
+    # Override config from environment variables
+    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    if hf_token:
+        config.setdefault("diarization", {})["huggingface_token"] = hf_token
+
+    return config
 
 
 # Global mutable config that can be patched at runtime via POST /config.
