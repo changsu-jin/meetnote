@@ -308,7 +308,8 @@ export class MeetNoteSidePanel extends ItemView {
 			}
 
 			// ── Speaker Search Section (global DB) ──
-			container.createEl("h4", { text: "등록된 화자 검색" });
+			container.createEl("h4", { text: "등록된 참석자" });
+			container.createEl("p", { text: "이전 회의에서 음성이 등록된 참석자입니다. 다음 회의 시 자동으로 인식됩니다.", cls: "meetnote-section-desc" });
 
 			const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
 			const searchInput = searchWrapper.createEl("input", {

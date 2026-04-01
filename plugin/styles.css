@@ -184,6 +184,13 @@
 	font-size: 0.85em;
 }
 
+.meetnote-section-desc {
+	color: var(--text-muted);
+	font-size: 0.78em;
+	margin: -4px 0 8px 0;
+	line-height: 1.4;
+}
+
 .meetnote-search-wrapper {
 	margin-bottom: 8px;
 }

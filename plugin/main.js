@@ -1030,7 +1030,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       } else {
         container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
-      container.createEl("h4", { text: "\uB4F1\uB85D\uB41C \uD654\uC790 \uAC80\uC0C9" });
+      container.createEl("h4", { text: "\uB4F1\uB85D\uB41C \uCC38\uC11D\uC790" });
+      container.createEl("p", { text: "\uC774\uC804 \uD68C\uC758\uC5D0\uC11C \uC74C\uC131\uC774 \uB4F1\uB85D\uB41C \uCC38\uC11D\uC790\uC785\uB2C8\uB2E4. \uB2E4\uC74C \uD68C\uC758 \uC2DC \uC790\uB3D9\uC73C\uB85C \uC778\uC2DD\uB429\uB2C8\uB2E4.", cls: "meetnote-section-desc" });
       const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
       const searchInput = searchWrapper.createEl("input", {
         type: "text",
