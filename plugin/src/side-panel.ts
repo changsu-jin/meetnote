@@ -20,6 +20,7 @@ interface PendingRecording {
 	created: number;
 	processed?: boolean;
 	document_name?: string;
+	document_path?: string;
 }
 
 interface SpeakerInfo {
@@ -97,7 +98,17 @@ export class MeetNoteSidePanel extends ItemView {
 
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
 					if (rec.document_name) {
-						info.createEl("div", { text: rec.document_name, cls: "meetnote-recording-title" });
+						const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+						titleEl.addEventListener("click", async (e) => {
+							e.preventDefault();
+							const docPath = rec.document_path || "";
+							if (docPath) {
+								const file = this.app.vault.getAbstractFileByPath(docPath);
+								if (file) {
+									await this.app.workspace.getLeaf().openFile(file as any);
+								}
+							}
+						});
 					}
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;

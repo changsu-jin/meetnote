@@ -55,6 +55,13 @@
 .meetnote-recording-title {
 	font-weight: 600;
 	font-size: 0.9em;
+	color: var(--text-accent);
+	cursor: pointer;
+	text-decoration: none;
+}
+
+.meetnote-recording-title:hover {
+	text-decoration: underline;
 }
 
 .meetnote-recording-meta {

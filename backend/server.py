@@ -291,10 +291,12 @@ async def get_pending_recordings():
         # Load metadata if exists
         meta_path = f.with_suffix(".meta.json")
         document_name = ""
+        document_path = ""
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 document_name = meta.get("document_name", "")
+                document_path = meta.get("document_path", "")
             except Exception:
                 pass
 
@@ -305,6 +307,7 @@ async def get_pending_recordings():
             "duration_minutes": round(duration_est / 60, 1),
             "created": stat.st_mtime,
             "document_name": document_name,
+            "document_path": document_path,
         })
 
     return {"recordings": pending}
