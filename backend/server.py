@@ -608,7 +608,23 @@ async def process_file(req: ProcessFileRequest):
                 )
                 await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 82.0})
 
-                if state.speaker_db and speaker_embeddings:
+                # Check if speaker matching should be skipped (requeue)
+                skip_matching = False
+                try:
+                    import json as _jm
+                    meta_path = Path(req.file_path).with_suffix(".meta.json")
+                    if meta_path.exists():
+                        meta_data = _jm.loads(meta_path.read_text())
+                        skip_matching = meta_data.get("skip_speaker_matching", False)
+                        if skip_matching:
+                            # Clear the flag after reading
+                            meta_data.pop("skip_speaker_matching", None)
+                            meta_path.write_text(_jm.dumps(meta_data, ensure_ascii=False))
+                            logger.info("Speaker matching skipped (requeue mode).")
+                except Exception:
+                    pass
+
+                if state.speaker_db and speaker_embeddings and not skip_matching:
                     match_results = state.speaker_db.match_speakers(speaker_embeddings)
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
 
@@ -1201,6 +1217,7 @@ async def requeue_recording(req: RecordingRequeueRequest):
             meta.pop("speaker_map", None)
             meta.pop("embeddings", None)
             meta.pop("manual_participants", None)
+            meta["skip_speaker_matching"] = True
             meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
         except Exception:
             pass
