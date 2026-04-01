@@ -230,11 +230,11 @@ export class MeetNoteSidePanel extends ItemView {
 						: `${dateStr} · ${rec.duration_minutes}분 ✓`;
 					info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
 
-					const mapBtn = item.createEl("button", { text: "관리", cls: "meetnote-process-btn" });
+					const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+					const mapBtn = btnGroup.createEl("button", { text: "관리", cls: "meetnote-process-btn" });
 					mapBtn.addEventListener("click", async () => {
 						this.selectedWavPath = rec.path;
 						this.selectedDocName = rec.document_name || rec.filename;
-						// Open the linked document
 						const docPath = rec.document_path || "";
 						if (docPath) {
 							const file = this.app.vault.getAbstractFileByPath(docPath);
@@ -243,6 +243,19 @@ export class MeetNoteSidePanel extends ItemView {
 							}
 						}
 						await this.render();
+					});
+					const requeueBtn = btnGroup.createEl("button", { text: "재처리", cls: "meetnote-edit-btn" });
+					requeueBtn.addEventListener("click", async () => {
+						try {
+							await this.api("/recordings/requeue", {
+								method: "POST",
+								body: { wav_path: rec.path },
+							});
+							new Notice("대기 중으로 이동됨");
+							await this.render();
+						} catch {
+							new Notice("이동 실패");
+						}
 					});
 				}
 				if (completed.length > 3) {

@@ -1102,6 +1102,21 @@ async def delete_recording(req: RecordingDeleteRequest):
     return {"ok": True, "deleted": deleted}
 
 
+class RecordingRequeueRequest(BaseModel):
+    wav_path: str
+
+
+@app.post("/recordings/requeue")
+async def requeue_recording(req: RecordingRequeueRequest):
+    """Move a completed recording back to pending by removing .done marker."""
+    done_marker = Path(req.wav_path).with_suffix(".done")
+    if done_marker.exists():
+        done_marker.unlink()
+        logger.info("Requeued recording: %s", req.wav_path)
+        return {"ok": True}
+    return {"ok": False, "message": "이미 대기 중입니다."}
+
+
 @app.get("/speakers/search")
 async def search_speakers(q: str = ""):
     """Search registered speakers by name."""

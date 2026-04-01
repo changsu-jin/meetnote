@@ -1002,7 +1002,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const statusIcon = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? "\u26A0" : "\u2713";
           const statusText = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 ${statusIcon} \uBBF8\uB4F1\uB85D ${rec.unregistered_speakers}\uBA85` : `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`;
           info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
-          const mapBtn = item.createEl("button", { text: "\uAD00\uB9AC", cls: "meetnote-process-btn" });
+          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+          const mapBtn = btnGroup.createEl("button", { text: "\uAD00\uB9AC", cls: "meetnote-process-btn" });
           mapBtn.addEventListener("click", async () => {
             this.selectedWavPath = rec.path;
             this.selectedDocName = rec.document_name || rec.filename;
@@ -1014,6 +1015,19 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
               }
             }
             await this.render();
+          });
+          const requeueBtn = btnGroup.createEl("button", { text: "\uC7AC\uCC98\uB9AC", cls: "meetnote-edit-btn" });
+          requeueBtn.addEventListener("click", async () => {
+            try {
+              await this.api("/recordings/requeue", {
+                method: "POST",
+                body: { wav_path: rec.path }
+              });
+              new import_obsidian3.Notice("\uB300\uAE30 \uC911\uC73C\uB85C \uC774\uB3D9\uB428");
+              await this.render();
+            } catch {
+              new import_obsidian3.Notice("\uC774\uB3D9 \uC2E4\uD328");
+            }
           });
         }
         if (completed.length > 3) {
