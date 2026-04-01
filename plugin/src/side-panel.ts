@@ -204,7 +204,11 @@ export class MeetNoteSidePanel extends ItemView {
 			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
 			const lastMeeting: LastMeetingSpeaker = lastResp;
 
-			if (lastMeeting.available_labels.length > 0) {
+			const hasUnregistered = lastMeeting.available_labels.some(
+				(l) => (lastMeeting.speaker_map[l] || l).startsWith("화자")
+			);
+
+			if (hasUnregistered && lastMeeting.available_labels.length > 0) {
 				// Show which recording this mapping is for
 				if (this.selectedDocName) {
 					container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
@@ -354,12 +358,40 @@ export class MeetNoteSidePanel extends ItemView {
 
 				for (const speaker of speakers) {
 					const row = container.createDiv({ cls: "meetnote-speaker-row" });
-					row.createEl("span", { text: `${speaker.name}`, cls: "meetnote-speaker-name" });
+					const infoSpan = row.createDiv({ cls: "meetnote-speaker-info-col" });
+					infoSpan.createEl("span", { text: speaker.name, cls: "meetnote-speaker-name" });
 					if (speaker.email) {
-						row.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
+						infoSpan.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
 					}
 
-					const delBtn = row.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
+					const btnGroup = row.createDiv({ cls: "meetnote-btn-group" });
+
+					const editBtn = btnGroup.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
+					editBtn.addEventListener("click", () => {
+						// Replace info with edit form
+						infoSpan.empty();
+						const nameInput = infoSpan.createEl("input", { type: "text", value: speaker.name, cls: "meetnote-speaker-input" });
+						const emailInput = infoSpan.createEl("input", { type: "text", value: speaker.email || "", cls: "meetnote-speaker-input", placeholder: "이메일" });
+
+						btnGroup.empty();
+						const saveBtn = btnGroup.createEl("button", { text: "저장", cls: "meetnote-register-btn" });
+						saveBtn.addEventListener("click", async () => {
+							try {
+								await this.api(`/speakers/${speaker.id}`, {
+									method: "PUT",
+									body: { name: nameInput.value.trim(), email: emailInput.value.trim() },
+								});
+								new Notice(`${nameInput.value.trim()} 수정 완료`);
+								await this.render();
+							} catch {
+								new Notice("수정 실패");
+							}
+						});
+						const cancelBtn = btnGroup.createEl("button", { text: "취소", cls: "meetnote-delete-btn" });
+						cancelBtn.addEventListener("click", () => this.render());
+					});
+
+					const delBtn = btnGroup.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
 					delBtn.addEventListener("click", async () => {
 						try {
 							await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });

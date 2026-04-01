@@ -189,6 +189,23 @@
 	background: var(--background-modifier-hover);
 }
 
+.meetnote-speaker-info-col {
+	flex: 1;
+	min-width: 0;
+}
+
+.meetnote-btn-group {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.meetnote-edit-btn {
+	font-size: 0.75em;
+	padding: 2px 6px;
+	cursor: pointer;
+}
+
 .meetnote-delete-btn {
 	font-size: 0.75em;
 	padding: 2px 6px;

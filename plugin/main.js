@@ -940,7 +940,10 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
         const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
         const lastMeeting = lastResp;
-        if (lastMeeting.available_labels.length > 0) {
+        const hasUnregistered = lastMeeting.available_labels.some(
+          (l) => (lastMeeting.speaker_map[l] || l).startsWith("\uD654\uC790")
+        );
+        if (hasUnregistered && lastMeeting.available_labels.length > 0) {
           if (this.selectedDocName) {
             container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
           } else if (lastMeeting.wav_path) {
@@ -1072,11 +1075,35 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         container.createEl("div", { text: `\uB4F1\uB85D\uB41C \uD654\uC790 (${speakers.length}\uBA85):`, cls: "meetnote-subsection" });
         for (const speaker of speakers) {
           const row = container.createDiv({ cls: "meetnote-speaker-row" });
-          row.createEl("span", { text: `${speaker.name}`, cls: "meetnote-speaker-name" });
+          const infoSpan = row.createDiv({ cls: "meetnote-speaker-info-col" });
+          infoSpan.createEl("span", { text: speaker.name, cls: "meetnote-speaker-name" });
           if (speaker.email) {
-            row.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
+            infoSpan.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
           }
-          const delBtn = row.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+          const btnGroup = row.createDiv({ cls: "meetnote-btn-group" });
+          const editBtn = btnGroup.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
+          editBtn.addEventListener("click", () => {
+            infoSpan.empty();
+            const nameInput = infoSpan.createEl("input", { type: "text", value: speaker.name, cls: "meetnote-speaker-input" });
+            const emailInput = infoSpan.createEl("input", { type: "text", value: speaker.email || "", cls: "meetnote-speaker-input", placeholder: "\uC774\uBA54\uC77C" });
+            btnGroup.empty();
+            const saveBtn = btnGroup.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn" });
+            saveBtn.addEventListener("click", async () => {
+              try {
+                await this.api(`/speakers/${speaker.id}`, {
+                  method: "PUT",
+                  body: { name: nameInput.value.trim(), email: emailInput.value.trim() }
+                });
+                new import_obsidian3.Notice(`${nameInput.value.trim()} \uC218\uC815 \uC644\uB8CC`);
+                await this.render();
+              } catch {
+                new import_obsidian3.Notice("\uC218\uC815 \uC2E4\uD328");
+              }
+            });
+            const cancelBtn = btnGroup.createEl("button", { text: "\uCDE8\uC18C", cls: "meetnote-delete-btn" });
+            cancelBtn.addEventListener("click", () => this.render());
+          });
+          const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
           delBtn.addEventListener("click", async () => {
             try {
               await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });

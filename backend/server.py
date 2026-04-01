@@ -727,6 +727,21 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
         email=req.email,
         embedding=embedding,
     )
+
+    # Update speaker_map in meta file
+    if req.wav_path:
+        try:
+            import json as _json
+            meta_path = Path(req.wav_path).with_suffix(".meta.json")
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text())
+                if "speaker_map" not in meta:
+                    meta["speaker_map"] = {}
+                meta["speaker_map"][req.speaker_label] = req.name
+                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        except Exception as exc:
+            logger.warning("Failed to update speaker_map in meta: %s", exc)
+
     return {"ok": True, "speaker": {"id": profile.id, "name": profile.name, "email": profile.email}}
 
 
