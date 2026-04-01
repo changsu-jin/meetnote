@@ -1032,6 +1032,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           });
           const requeueBtn = btnGroup.createEl("button", { text: "\uC7AC\uCC98\uB9AC", cls: "meetnote-edit-btn" });
           requeueBtn.addEventListener("click", async () => {
+            const confirmed = confirm("\uC7AC\uCC98\uB9AC\uD558\uBA74 \uAE30\uC874 \uD654\uC790 \uB9E4\uD551 \uBC0F \uCC38\uC11D\uC790 \uC815\uBCF4\uAC00 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4.\n\uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?");
+            if (!confirmed) return;
             try {
               await this.api("/recordings/requeue", {
                 method: "POST",

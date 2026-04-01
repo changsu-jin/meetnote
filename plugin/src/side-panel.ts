@@ -242,6 +242,8 @@ export class MeetNoteSidePanel extends ItemView {
 					});
 					const requeueBtn = btnGroup.createEl("button", { text: "재처리", cls: "meetnote-edit-btn" });
 					requeueBtn.addEventListener("click", async () => {
+						const confirmed = confirm("재처리하면 기존 화자 매핑 및 참석자 정보가 초기화됩니다.\n계속하시겠습니까?");
+						if (!confirmed) return;
 						try {
 							await this.api("/recordings/requeue", {
 								method: "POST",
