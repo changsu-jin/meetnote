@@ -19,6 +19,7 @@ interface PendingRecording {
 	duration_minutes: number;
 	created: number;
 	processed?: boolean;
+	document_name?: string;
 }
 
 interface SpeakerInfo {
@@ -95,13 +96,12 @@ export class MeetNoteSidePanel extends ItemView {
 					const item = container.createDiv({ cls: "meetnote-recording-item" });
 
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
+					if (rec.document_name) {
+						info.createEl("div", { text: rec.document_name, cls: "meetnote-recording-title" });
+					}
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-					info.createEl("div", { text: dateStr, cls: "meetnote-recording-date" });
-					info.createEl("div", {
-						text: `${rec.duration_minutes}분 · ${rec.size_mb}MB`,
-						cls: "meetnote-recording-meta",
-					});
+					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분`, cls: "meetnote-recording-meta" });
 
 					const btn = item.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
 					btn.addEventListener("click", () => this.processRecording(rec, btn));

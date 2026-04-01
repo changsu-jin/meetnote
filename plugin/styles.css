@@ -52,8 +52,8 @@
 	border-bottom: 1px solid var(--background-modifier-border-hover);
 }
 
-.meetnote-recording-date {
-	font-weight: 500;
+.meetnote-recording-title {
+	font-weight: 600;
 	font-size: 0.9em;
 }
 

@@ -853,13 +853,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         for (const rec of recordings) {
           const item = container.createDiv({ cls: "meetnote-recording-item" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
+          if (rec.document_name) {
+            info.createEl("div", { text: rec.document_name, cls: "meetnote-recording-title" });
+          }
           const date = new Date(rec.created * 1e3);
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-          info.createEl("div", { text: dateStr, cls: "meetnote-recording-date" });
-          info.createEl("div", {
-            text: `${rec.duration_minutes}\uBD84 \xB7 ${rec.size_mb}MB`,
-            cls: "meetnote-recording-meta"
-          });
+          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84`, cls: "meetnote-recording-meta" });
           const btn = item.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
           btn.addEventListener("click", () => this.processRecording(rec, btn));
         }
@@ -1203,7 +1202,9 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         min_speakers: this.settings.minSpeakers || void 0,
         max_speakers: this.settings.maxSpeakers || void 0
       },
-      previous_context: previousContext || void 0
+      previous_context: previousContext || void 0,
+      document_name: activeFile.basename,
+      document_path: activeFile.path
     });
     new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
   }

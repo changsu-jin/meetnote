@@ -199,6 +199,8 @@ export default class MeetNotePlugin extends Plugin {
 				max_speakers: this.settings.maxSpeakers || undefined,
 			},
 			previous_context: previousContext || undefined,
+			document_name: activeFile.basename,
+			document_path: activeFile.path,
 		});
 
 		new Notice("녹음을 시작합니다.");

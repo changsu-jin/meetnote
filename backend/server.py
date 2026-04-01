@@ -279,6 +279,7 @@ async def get_pending_recordings():
     if not recordings_dir.exists():
         return {"recordings": []}
 
+    import json as _json
     pending = []
     for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
         done_marker = f.with_suffix(".done")
@@ -286,12 +287,24 @@ async def get_pending_recordings():
             continue
         stat = f.stat()
         duration_est = stat.st_size / (16000 * 2)  # 16kHz, 16-bit mono
+
+        # Load metadata if exists
+        meta_path = f.with_suffix(".meta.json")
+        document_name = ""
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text())
+                document_name = meta.get("document_name", "")
+            except Exception:
+                pass
+
         pending.append({
             "filename": f.name,
             "path": str(f.resolve()),
             "size_mb": round(stat.st_size / 1024 / 1024, 1),
             "duration_minutes": round(duration_est / 60, 1),
             "created": stat.st_mtime,
+            "document_name": document_name,
         })
 
     return {"recordings": pending}
@@ -707,6 +720,13 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
     else:
         state.previous_context = ""
 
+    # Extract document info for metadata
+    state._document_name = ""
+    state._document_path = ""
+    if config_overrides:
+        state._document_name = config_overrides.pop("document_name", "")
+        state._document_path = config_overrides.pop("document_path", "")
+
     # Apply any per-session config overrides.
     effective_config = dict(_config)
     if config_overrides:
@@ -782,6 +802,17 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
 
     await send_status(ws)
     logger.info("Recording started via WebSocket.")
+
+    # Save metadata alongside WAV file
+    if state.recorder and state.recorder._wav_path:
+        import json as _json
+        meta_path = Path(state.recorder._wav_path).with_suffix(".meta.json")
+        meta = {
+            "document_name": getattr(state, "_document_name", ""),
+            "document_path": getattr(state, "_document_path", ""),
+            "started_at": __import__("datetime").datetime.now().isoformat(),
+        }
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Load/reuse models AFTER recording started (audio captures from the start)
     whisper_cfg = effective_config.get("whisper", {})
