@@ -931,203 +931,134 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const progressBar = container.createDiv({ cls: "meetnote-progress" });
       progressBar.createDiv({ cls: "meetnote-progress-bar" });
     }
-    container.createEl("h4", { text: "\uD654\uC790 \uAD00\uB9AC" });
+    container.createEl("h4", { text: "\uD654\uC790 \uB9E4\uD551" });
     if (this.cachedNames.length === 0) {
       this.cachedNames = await this.loadSuggestNames();
     }
     try {
       if (this.selectedWavPath) {
-        const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
-        const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
-        const lastMeeting = lastResp;
-        const speakersResp2 = await this.api("/speakers");
-        const registeredNames = new Set((speakersResp2 || []).map((s) => s.name));
-        const hasUnregistered = lastMeeting.available_labels.some((l) => {
-          const name = lastMeeting.speaker_map[l] || l;
-          return name.startsWith("\uD654\uC790") || !registeredNames.has(name);
-        });
         if (this.selectedDocName) {
           container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
         }
-        if (lastMeeting.available_labels.length > 0 && !hasUnregistered) {
-          container.createEl("div", { text: "\uB9E4\uCE6D\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
-          for (const label of lastMeeting.available_labels) {
-            const name = lastMeeting.speaker_map[label] || label;
-            const row = container.createDiv({ cls: "meetnote-speaker-row" });
-            row.createEl("span", { text: `${name} \u2713`, cls: "meetnote-matched" });
-          }
-        }
-        if (hasUnregistered && lastMeeting.available_labels.length > 0) {
-          container.createEl("div", { text: "\uAC10\uC9C0\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
+        const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+        const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+        const lastMeeting = lastResp;
+        if (lastMeeting.available_labels.length > 0) {
           const speakerInputs = [];
           for (const label of lastMeeting.available_labels) {
             const displayName = lastMeeting.speaker_map[label] || label;
+            const isUnregistered = displayName.startsWith("\uD654\uC790");
             const row = container.createDiv({ cls: "meetnote-speaker-row" });
-            row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
-            if (displayName.startsWith("\uD654\uC790")) {
-              const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
-              const input = inputWrapper.createEl("input", {
-                type: "text",
-                placeholder: "\uC774\uB984",
-                cls: "meetnote-speaker-input"
-              });
-              const emailInput = row.createEl("input", {
-                type: "text",
-                placeholder: "\uC774\uBA54\uC77C",
-                cls: "meetnote-speaker-input"
-              });
-              speakerInputs.push({ label, nameInput: input, emailInput });
-              const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
-              suggestList.style.display = "none";
-              let selectedIdx = -1;
-              let currentMatches = [];
-              const selectName = (name) => {
-                input.value = name;
-                suggestList.style.display = "none";
-                selectedIdx = -1;
-                const email = this.nameEmailMap[name];
-                if (email) emailInput.value = email;
-              };
-              const updateHighlight = () => {
-                const items = suggestList.querySelectorAll(".meetnote-suggest-item");
-                items.forEach((el, i) => {
-                  el.classList.toggle("meetnote-suggest-active", i === selectedIdx);
-                });
-              };
-              input.addEventListener("input", () => {
-                const val = input.value.trim().toLowerCase();
-                suggestList.empty();
-                selectedIdx = -1;
-                if (val.length === 0) {
-                  suggestList.style.display = "none";
-                  return;
-                }
-                currentMatches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
-                if (currentMatches.length === 0) {
-                  suggestList.style.display = "none";
-                  return;
-                }
-                suggestList.style.display = "block";
-                for (const name of currentMatches) {
-                  const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
-                  opt.addEventListener("click", () => selectName(name));
-                }
-              });
-              input.addEventListener("keydown", (e) => {
-                if (suggestList.style.display === "none" || currentMatches.length === 0) return;
-                if (e.key === "ArrowDown") {
-                  e.preventDefault();
-                  selectedIdx = Math.min(selectedIdx + 1, currentMatches.length - 1);
-                  updateHighlight();
-                } else if (e.key === "ArrowUp") {
-                  e.preventDefault();
-                  selectedIdx = Math.max(selectedIdx - 1, 0);
-                  updateHighlight();
-                } else if (e.key === "Enter" && selectedIdx >= 0) {
-                  e.preventDefault();
-                  selectName(currentMatches[selectedIdx]);
-                }
-              });
-              input.addEventListener("blur", () => {
-                setTimeout(() => {
-                  suggestList.style.display = "none";
-                }, 200);
-              });
+            row.createEl("span", { text: displayName, cls: isUnregistered ? "meetnote-speaker-label" : "meetnote-matched" });
+            const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
+            const nameInput = inputWrapper.createEl("input", {
+              type: "text",
+              placeholder: "\uC774\uB984",
+              value: isUnregistered ? "" : "",
+              cls: "meetnote-speaker-input"
+            });
+            if (!isUnregistered) {
+              nameInput.style.display = "none";
+            }
+            const emailInput = row.createEl("input", {
+              type: "text",
+              placeholder: "\uC774\uBA54\uC77C",
+              cls: "meetnote-speaker-input"
+            });
+            if (!isUnregistered) {
+              emailInput.style.display = "none";
+            }
+            if (isUnregistered) {
+              speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+              this.addAutoSuggest(inputWrapper, nameInput, emailInput);
             } else {
-              row.createEl("span", { text: ` ${displayName} \u2713`, cls: "meetnote-matched" });
+              const editBtn = row.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
+              editBtn.addEventListener("click", () => {
+                nameInput.style.display = "";
+                emailInput.style.display = "";
+                nameInput.placeholder = `\uBCC0\uACBD\uD560 \uC774\uB984 (\uD604\uC7AC: ${displayName})`;
+                editBtn.style.display = "none";
+                speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+                this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+              });
             }
           }
-          if (speakerInputs.length > 0) {
-            const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
-            const batchBtn = btnRow.createEl("button", { text: "\uC77C\uAD04 \uB4F1\uB85D", cls: "meetnote-register-btn meetnote-batch-btn" });
-            batchBtn.addEventListener("click", async () => {
-              const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
-              let registered = 0;
-              const replacements = [];
-              for (const { label, nameInput, emailInput } of speakerInputs) {
-                const name = nameInput.value.trim();
-                if (!name) continue;
-                const displayName = lastMeeting.speaker_map[label] || label;
-                try {
+          const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+          const batchBtn = btnRow.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
+          batchBtn.addEventListener("click", async () => {
+            const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+            let count = 0;
+            const replacements = [];
+            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+              const newName = nameInput.value.trim();
+              if (!newName) continue;
+              try {
+                if (currentName.startsWith("\uD654\uC790")) {
                   await this.api("/speakers/register", {
                     method: "POST",
-                    body: { speaker_label: label, name, email: emailInput.value.trim(), wav_path: wavPath }
+                    body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath }
                   });
-                  registered++;
-                  if (displayName.startsWith("\uD654\uC790")) {
-                    replacements.push({ from: displayName, to: name });
-                  }
-                } catch {
+                  replacements.push({ from: currentName, to: newName });
+                } else {
+                  await this.api("/speakers/reassign", {
+                    method: "POST",
+                    body: {
+                      wav_path: wavPath,
+                      speaker_label: label,
+                      old_name: currentName,
+                      new_name: newName,
+                      new_email: emailInput.value.trim()
+                    }
+                  });
+                  replacements.push({ from: currentName, to: newName });
                 }
-              }
-              if (replacements.length > 0) {
-                await this.updateDocumentSpeakers(replacements);
-              }
-              if (registered > 0) {
-                new import_obsidian3.Notice(`${registered}\uBA85 \uB4F1\uB85D \uC644\uB8CC! \uBB38\uC11C\uAC00 \uC5C5\uB370\uC774\uD2B8\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`);
-                await this.render();
-              } else {
-                new import_obsidian3.Notice("\uB4F1\uB85D\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
-              }
-            });
-          }
-        }
-      } else {
-        container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uD654\uC790\uB97C \uB4F1\uB85D\uD558\uC138\uC694.", cls: "meetnote-empty" });
-      }
-      const speakersResp = await this.api("/speakers");
-      const speakers = speakersResp || [];
-      if (speakers.length > 0) {
-        container.createEl("div", { text: `\uB4F1\uB85D\uB41C \uD654\uC790 (${speakers.length}\uBA85):`, cls: "meetnote-subsection" });
-        for (const speaker of speakers) {
-          const row = container.createDiv({ cls: "meetnote-speaker-row" });
-          const infoSpan = row.createDiv({ cls: "meetnote-speaker-info-col" });
-          infoSpan.createEl("span", { text: speaker.name, cls: "meetnote-speaker-name" });
-          if (speaker.email) {
-            infoSpan.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
-          }
-          const btnGroup = row.createDiv({ cls: "meetnote-btn-group" });
-          const editBtn = btnGroup.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
-          editBtn.addEventListener("click", () => {
-            infoSpan.empty();
-            const nameInput = infoSpan.createEl("input", { type: "text", value: speaker.name, cls: "meetnote-speaker-input" });
-            const emailInput = infoSpan.createEl("input", { type: "text", value: speaker.email || "", cls: "meetnote-speaker-input", placeholder: "\uC774\uBA54\uC77C" });
-            btnGroup.empty();
-            const saveBtn = btnGroup.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn" });
-            saveBtn.addEventListener("click", async () => {
-              const newName = nameInput.value.trim();
-              const oldName = speaker.name;
-              try {
-                await this.api(`/speakers/${speaker.id}`, {
-                  method: "PUT",
-                  body: { name: newName, email: emailInput.value.trim() }
-                });
-                if (oldName !== newName && this.selectedWavPath) {
-                  await this.updateDocumentSpeakers([{ from: oldName, to: newName }]);
-                }
-                new import_obsidian3.Notice(`${newName} \uC218\uC815 \uC644\uB8CC`);
-                await this.render();
+                count++;
               } catch {
-                new import_obsidian3.Notice("\uC218\uC815 \uC2E4\uD328");
               }
-            });
-            const cancelBtn = btnGroup.createEl("button", { text: "\uCDE8\uC18C", cls: "meetnote-delete-btn" });
-            cancelBtn.addEventListener("click", () => this.render());
-          });
-          const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
-          delBtn.addEventListener("click", async () => {
-            try {
-              await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });
-              new import_obsidian3.Notice(`${speaker.name} \uC0AD\uC81C\uB428`);
+            }
+            if (replacements.length > 0) {
+              await this.updateDocumentSpeakers(replacements);
+            }
+            if (count > 0) {
+              new import_obsidian3.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
               await this.render();
-            } catch {
-              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
+            } else {
+              new import_obsidian3.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
             }
           });
         }
       } else {
-        container.createEl("p", { text: "\uB4F1\uB85D\uB41C \uD654\uC790\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
+        container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
+      container.createEl("h4", { text: "\uD654\uC790 \uAC80\uC0C9" });
+      const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
+      const searchInput = searchWrapper.createEl("input", {
+        type: "text",
+        placeholder: "\u{1F50D} \uC774\uB984 \uAC80\uC0C9...",
+        cls: "meetnote-search-input"
+      });
+      const searchResults = container.createDiv({ cls: "meetnote-search-results" });
+      searchInput.addEventListener("input", async () => {
+        const q = searchInput.value.trim();
+        searchResults.empty();
+        if (q.length === 0) return;
+        try {
+          const resp = await this.api(`/speakers/search?q=${encodeURIComponent(q)}`);
+          const results = resp.speakers || [];
+          if (results.length === 0) {
+            searchResults.createEl("p", { text: "\uACB0\uACFC \uC5C6\uC74C", cls: "meetnote-empty" });
+          } else {
+            for (const s of results) {
+              const row = searchResults.createDiv({ cls: "meetnote-speaker-row meetnote-search-result" });
+              row.createEl("span", { text: s.name, cls: "meetnote-speaker-name" });
+              if (s.email) {
+                row.createEl("span", { text: ` (${s.email})`, cls: "meetnote-speaker-email" });
+              }
+            }
+          }
+        } catch {
+        }
+      });
     } catch (err) {
       container.createEl("p", { text: "\uC11C\uBC84 \uC5F0\uACB0 \uD544\uC694", cls: "meetnote-error" });
     }
@@ -1244,6 +1175,65 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /** Add auto-suggest dropdown to a name input */
+  addAutoSuggest(wrapper, nameInput, emailInput) {
+    const suggestList = wrapper.createDiv({ cls: "meetnote-suggest-list" });
+    suggestList.style.display = "none";
+    let selectedIdx = -1;
+    let currentMatches = [];
+    const selectName = (name) => {
+      nameInput.value = name;
+      suggestList.style.display = "none";
+      selectedIdx = -1;
+      const email = this.nameEmailMap[name];
+      if (email) emailInput.value = email;
+      emailInput.style.display = "";
+    };
+    const updateHighlight = () => {
+      suggestList.querySelectorAll(".meetnote-suggest-item").forEach((el, i) => {
+        el.classList.toggle("meetnote-suggest-active", i === selectedIdx);
+      });
+    };
+    nameInput.addEventListener("input", () => {
+      const val = nameInput.value.trim().toLowerCase();
+      suggestList.empty();
+      selectedIdx = -1;
+      if (!val) {
+        suggestList.style.display = "none";
+        return;
+      }
+      currentMatches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+      if (!currentMatches.length) {
+        suggestList.style.display = "none";
+        return;
+      }
+      suggestList.style.display = "block";
+      for (const name of currentMatches) {
+        const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
+        opt.addEventListener("click", () => selectName(name));
+      }
+    });
+    nameInput.addEventListener("keydown", (e) => {
+      if (suggestList.style.display === "none" || !currentMatches.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        selectedIdx = Math.min(selectedIdx + 1, currentMatches.length - 1);
+        updateHighlight();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        selectedIdx = Math.max(selectedIdx - 1, 0);
+        updateHighlight();
+      } else if (e.key === "Enter" && selectedIdx >= 0) {
+        e.preventDefault();
+        selectName(currentMatches[selectedIdx]);
+      }
+    });
+    nameInput.addEventListener("blur", () => {
+      setTimeout(() => {
+        suggestList.style.display = "none";
+      }, 200);
+    });
   }
   /** Replace speaker names in the linked document */
   async updateDocumentSpeakers(replacements) {

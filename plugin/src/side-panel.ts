@@ -189,238 +189,157 @@ export class MeetNoteSidePanel extends ItemView {
 			progressBar.createDiv({ cls: "meetnote-progress-bar" });
 		}
 
-		// ── Speaker Mapping Section ──
-		container.createEl("h4", { text: "화자 관리" });
+		// ── Speaker Mapping Section (document-specific) ──
+		container.createEl("h4", { text: "화자 매핑" });
 
-		// Load auto-suggest names from vault
 		if (this.cachedNames.length === 0) {
 			this.cachedNames = await this.loadSuggestNames();
 		}
 
 		try {
-			// Only show mapping UI when a specific recording is selected
 			if (this.selectedWavPath) {
-			const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
-			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
-			const lastMeeting: LastMeetingSpeaker = lastResp;
-
-			// Check against registered speaker DB, not just meta speaker_map
-			const speakersResp2 = await this.api("/speakers");
-			const registeredNames = new Set((speakersResp2 || []).map((s: any) => s.name));
-			const hasUnregistered = lastMeeting.available_labels.some((l) => {
-				const name = lastMeeting.speaker_map[l] || l;
-				return name.startsWith("화자") || !registeredNames.has(name);
-			});
-
-			// Always show document name when a recording is selected
-			if (this.selectedDocName) {
-				container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
-			}
-
-			// Show matched speakers for this recording
-			if (lastMeeting.available_labels.length > 0 && !hasUnregistered) {
-				container.createEl("div", { text: "매칭된 화자:", cls: "meetnote-subsection" });
-				for (const label of lastMeeting.available_labels) {
-					const name = lastMeeting.speaker_map[label] || label;
-					const row = container.createDiv({ cls: "meetnote-speaker-row" });
-					row.createEl("span", { text: `${name} ✓`, cls: "meetnote-matched" });
+				if (this.selectedDocName) {
+					container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
 				}
-			}
 
-			if (hasUnregistered && lastMeeting.available_labels.length > 0) {
+				const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+				const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+				const lastMeeting: LastMeetingSpeaker = lastResp;
 
-				container.createEl("div", { text: "감지된 화자:", cls: "meetnote-subsection" });
+				if (lastMeeting.available_labels.length > 0) {
+					const speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
 
-				const speakerInputs: Array<{ label: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
+					for (const label of lastMeeting.available_labels) {
+						const displayName = lastMeeting.speaker_map[label] || label;
+						const isUnregistered = displayName.startsWith("화자");
+						const row = container.createDiv({ cls: "meetnote-speaker-row" });
 
-				for (const label of lastMeeting.available_labels) {
-					const displayName = lastMeeting.speaker_map[label] || label;
-					const row = container.createDiv({ cls: "meetnote-speaker-row" });
+						row.createEl("span", { text: displayName, cls: isUnregistered ? "meetnote-speaker-label" : "meetnote-matched" });
 
-					row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
-
-					if (displayName.startsWith("화자")) {
+						// Name input (for unregistered) or edit button (for registered)
 						const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
-						const input = inputWrapper.createEl("input", {
+						const nameInput = inputWrapper.createEl("input", {
 							type: "text",
 							placeholder: "이름",
+							value: isUnregistered ? "" : "",
 							cls: "meetnote-speaker-input",
 						});
+						if (!isUnregistered) {
+							nameInput.style.display = "none";
+						}
 
 						const emailInput = row.createEl("input", {
 							type: "text",
 							placeholder: "이메일",
 							cls: "meetnote-speaker-input",
 						});
-
-						speakerInputs.push({ label, nameInput: input, emailInput });
-
-						// Auto-suggest dropdown
-						const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
-						suggestList.style.display = "none";
-
-						let selectedIdx = -1;
-						let currentMatches: string[] = [];
-
-						const selectName = (name: string) => {
-							input.value = name;
-							suggestList.style.display = "none";
-							selectedIdx = -1;
-							const email = this.nameEmailMap[name];
-							if (email) emailInput.value = email;
-						};
-
-						const updateHighlight = () => {
-							const items = suggestList.querySelectorAll(".meetnote-suggest-item");
-							items.forEach((el, i) => {
-								(el as HTMLElement).classList.toggle("meetnote-suggest-active", i === selectedIdx);
-							});
-						};
-
-						input.addEventListener("input", () => {
-							const val = input.value.trim().toLowerCase();
-							suggestList.empty();
-							selectedIdx = -1;
-							if (val.length === 0) { suggestList.style.display = "none"; return; }
-							currentMatches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
-							if (currentMatches.length === 0) { suggestList.style.display = "none"; return; }
-							suggestList.style.display = "block";
-							for (const name of currentMatches) {
-								const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
-								opt.addEventListener("click", () => selectName(name));
-							}
-						});
-
-						input.addEventListener("keydown", (e: KeyboardEvent) => {
-							if (suggestList.style.display === "none" || currentMatches.length === 0) return;
-							if (e.key === "ArrowDown") {
-								e.preventDefault();
-								selectedIdx = Math.min(selectedIdx + 1, currentMatches.length - 1);
-								updateHighlight();
-							} else if (e.key === "ArrowUp") {
-								e.preventDefault();
-								selectedIdx = Math.max(selectedIdx - 1, 0);
-								updateHighlight();
-							} else if (e.key === "Enter" && selectedIdx >= 0) {
-								e.preventDefault();
-								selectName(currentMatches[selectedIdx]);
-							}
-						});
-
-						input.addEventListener("blur", () => {
-							setTimeout(() => { suggestList.style.display = "none"; }, 200);
-						});
-					} else {
-						// Already matched — show name with edit ability
-						row.createEl("span", { text: ` ${displayName} ✓`, cls: "meetnote-matched" });
-					}
-				}
-
-				// Batch register button
-				if (speakerInputs.length > 0) {
-					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
-					const batchBtn = btnRow.createEl("button", { text: "일괄 등록", cls: "meetnote-register-btn meetnote-batch-btn" });
-					batchBtn.addEventListener("click", async () => {
-						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
-						let registered = 0;
-						const replacements: Array<{ from: string; to: string }> = [];
-
-						for (const { label, nameInput, emailInput } of speakerInputs) {
-							const name = nameInput.value.trim();
-							if (!name) continue;
-							const displayName = lastMeeting.speaker_map[label] || label;
-							try {
-								await this.api("/speakers/register", {
-									method: "POST",
-									body: { speaker_label: label, name, email: emailInput.value.trim(), wav_path: wavPath },
-								});
-								registered++;
-								if (displayName.startsWith("화자")) {
-									replacements.push({ from: displayName, to: name });
-								}
-							} catch { /* skip failed */ }
+						if (!isUnregistered) {
+							emailInput.style.display = "none";
 						}
 
-						// Update document: replace 화자N → real name
+						if (isUnregistered) {
+							speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+							this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+						} else {
+							// Edit button for registered speakers
+							const editBtn = row.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
+							editBtn.addEventListener("click", () => {
+								nameInput.style.display = "";
+								emailInput.style.display = "";
+								nameInput.placeholder = `변경할 이름 (현재: ${displayName})`;
+								editBtn.style.display = "none";
+								speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+								this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+							});
+						}
+					}
+
+					// Batch action button
+					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const batchBtn = btnRow.createEl("button", { text: "저장", cls: "meetnote-register-btn meetnote-batch-btn" });
+					batchBtn.addEventListener("click", async () => {
+						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+						let count = 0;
+						const replacements: Array<{ from: string; to: string }> = [];
+
+						for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+							const newName = nameInput.value.trim();
+							if (!newName) continue;
+
+							try {
+								if (currentName.startsWith("화자")) {
+									// New registration
+									await this.api("/speakers/register", {
+										method: "POST",
+										body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath },
+									});
+									replacements.push({ from: currentName, to: newName });
+								} else {
+									// Reassign existing speaker
+									await this.api("/speakers/reassign", {
+										method: "POST",
+										body: {
+											wav_path: wavPath,
+											speaker_label: label,
+											old_name: currentName,
+											new_name: newName,
+											new_email: emailInput.value.trim(),
+										},
+									});
+									replacements.push({ from: currentName, to: newName });
+								}
+								count++;
+							} catch { /* skip */ }
+						}
+
 						if (replacements.length > 0) {
 							await this.updateDocumentSpeakers(replacements);
 						}
-
-						if (registered > 0) {
-							new Notice(`${registered}명 등록 완료! 문서가 업데이트되었습니다.`);
+						if (count > 0) {
+							new Notice(`${count}명 처리 완료!`);
 							await this.render();
 						} else {
-							new Notice("등록할 이름을 입력하세요.");
+							new Notice("변경할 이름을 입력하세요.");
 						}
 					});
 				}
-			}
 			} else {
-				container.createEl("p", { text: "완료된 녹음에서 '관리' 버튼을 눌러 화자를 등록하세요.", cls: "meetnote-empty" });
+				container.createEl("p", { text: "완료된 녹음에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
 			}
 
-			// Registered speakers
-			const speakersResp = await this.api("/speakers");
-			const speakers: SpeakerInfo[] = speakersResp || [];
+			// ── Speaker Search Section (global DB) ──
+			container.createEl("h4", { text: "화자 검색" });
 
-			if (speakers.length > 0) {
-				container.createEl("div", { text: `등록된 화자 (${speakers.length}명):`, cls: "meetnote-subsection" });
+			const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
+			const searchInput = searchWrapper.createEl("input", {
+				type: "text",
+				placeholder: "🔍 이름 검색...",
+				cls: "meetnote-search-input",
+			});
+			const searchResults = container.createDiv({ cls: "meetnote-search-results" });
 
-				for (const speaker of speakers) {
-					const row = container.createDiv({ cls: "meetnote-speaker-row" });
-					const infoSpan = row.createDiv({ cls: "meetnote-speaker-info-col" });
-					infoSpan.createEl("span", { text: speaker.name, cls: "meetnote-speaker-name" });
-					if (speaker.email) {
-						infoSpan.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
-					}
+			searchInput.addEventListener("input", async () => {
+				const q = searchInput.value.trim();
+				searchResults.empty();
+				if (q.length === 0) return;
 
-					const btnGroup = row.createDiv({ cls: "meetnote-btn-group" });
-
-					const editBtn = btnGroup.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
-					editBtn.addEventListener("click", () => {
-						// Replace info with edit form
-						infoSpan.empty();
-						const nameInput = infoSpan.createEl("input", { type: "text", value: speaker.name, cls: "meetnote-speaker-input" });
-						const emailInput = infoSpan.createEl("input", { type: "text", value: speaker.email || "", cls: "meetnote-speaker-input", placeholder: "이메일" });
-
-						btnGroup.empty();
-						const saveBtn = btnGroup.createEl("button", { text: "저장", cls: "meetnote-register-btn" });
-						saveBtn.addEventListener("click", async () => {
-							const newName = nameInput.value.trim();
-							const oldName = speaker.name;
-							try {
-								await this.api(`/speakers/${speaker.id}`, {
-									method: "PUT",
-									body: { name: newName, email: emailInput.value.trim() },
-								});
-								// Update document if name changed and a recording is selected
-								if (oldName !== newName && this.selectedWavPath) {
-									await this.updateDocumentSpeakers([{ from: oldName, to: newName }]);
-								}
-								new Notice(`${newName} 수정 완료`);
-								await this.render();
-							} catch {
-								new Notice("수정 실패");
+				try {
+					const resp = await this.api(`/speakers/search?q=${encodeURIComponent(q)}`);
+					const results: SpeakerInfo[] = resp.speakers || [];
+					if (results.length === 0) {
+						searchResults.createEl("p", { text: "결과 없음", cls: "meetnote-empty" });
+					} else {
+						for (const s of results) {
+							const row = searchResults.createDiv({ cls: "meetnote-speaker-row meetnote-search-result" });
+							row.createEl("span", { text: s.name, cls: "meetnote-speaker-name" });
+							if (s.email) {
+								row.createEl("span", { text: ` (${s.email})`, cls: "meetnote-speaker-email" });
 							}
-						});
-						const cancelBtn = btnGroup.createEl("button", { text: "취소", cls: "meetnote-delete-btn" });
-						cancelBtn.addEventListener("click", () => this.render());
-					});
-
-					const delBtn = btnGroup.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
-					delBtn.addEventListener("click", async () => {
-						try {
-							await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });
-							new Notice(`${speaker.name} 삭제됨`);
-							await this.render();
-						} catch {
-							new Notice("삭제 실패");
 						}
-					});
-				}
-			} else {
-				container.createEl("p", { text: "등록된 화자가 없습니다.", cls: "meetnote-empty" });
-			}
+					}
+				} catch { /* ignore */ }
+			});
+
 		} catch (err) {
 			container.createEl("p", { text: "서버 연결 필요", cls: "meetnote-error" });
 		}
@@ -564,6 +483,52 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/** Add auto-suggest dropdown to a name input */
+	private addAutoSuggest(wrapper: HTMLElement, nameInput: HTMLInputElement, emailInput: HTMLInputElement): void {
+		const suggestList = wrapper.createDiv({ cls: "meetnote-suggest-list" });
+		suggestList.style.display = "none";
+		let selectedIdx = -1;
+		let currentMatches: string[] = [];
+
+		const selectName = (name: string) => {
+			nameInput.value = name;
+			suggestList.style.display = "none";
+			selectedIdx = -1;
+			const email = this.nameEmailMap[name];
+			if (email) emailInput.value = email;
+			emailInput.style.display = "";
+		};
+
+		const updateHighlight = () => {
+			suggestList.querySelectorAll(".meetnote-suggest-item").forEach((el, i) => {
+				(el as HTMLElement).classList.toggle("meetnote-suggest-active", i === selectedIdx);
+			});
+		};
+
+		nameInput.addEventListener("input", () => {
+			const val = nameInput.value.trim().toLowerCase();
+			suggestList.empty();
+			selectedIdx = -1;
+			if (!val) { suggestList.style.display = "none"; return; }
+			currentMatches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+			if (!currentMatches.length) { suggestList.style.display = "none"; return; }
+			suggestList.style.display = "block";
+			for (const name of currentMatches) {
+				const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
+				opt.addEventListener("click", () => selectName(name));
+			}
+		});
+
+		nameInput.addEventListener("keydown", (e: KeyboardEvent) => {
+			if (suggestList.style.display === "none" || !currentMatches.length) return;
+			if (e.key === "ArrowDown") { e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, currentMatches.length - 1); updateHighlight(); }
+			else if (e.key === "ArrowUp") { e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); updateHighlight(); }
+			else if (e.key === "Enter" && selectedIdx >= 0) { e.preventDefault(); selectName(currentMatches[selectedIdx]); }
+		});
+
+		nameInput.addEventListener("blur", () => { setTimeout(() => { suggestList.style.display = "none"; }, 200); });
 	}
 
 	/** Replace speaker names in the linked document */

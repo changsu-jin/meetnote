@@ -184,6 +184,21 @@
 	font-size: 0.85em;
 }
 
+.meetnote-search-wrapper {
+	margin-bottom: 8px;
+}
+
+.meetnote-search-input {
+	width: 100%;
+	padding: 6px 8px;
+	font-size: 0.9em;
+}
+
+.meetnote-search-result {
+	padding: 4px 0;
+	opacity: 0.85;
+}
+
 .meetnote-suggest-item:hover,
 .meetnote-suggest-active {
 	background: var(--background-modifier-hover);

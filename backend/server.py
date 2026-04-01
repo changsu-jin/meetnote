@@ -830,6 +830,87 @@ async def last_meeting_speakers(wav_path: str = ""):
     }
 
 
+class SpeakerReassignRequest(BaseModel):
+    """Reassign a speaker label to a different person."""
+    wav_path: str           # Recording WAV path
+    speaker_label: str      # e.g. "SPEAKER_00"
+    old_name: str           # Current name in document
+    new_name: str           # New name to assign
+    new_email: str = ""
+
+
+@app.post("/speakers/reassign")
+async def reassign_speaker(req: SpeakerReassignRequest):
+    """Reassign a speaker: update Speaker DB embedding + meta + return info for doc update."""
+    import json as _json, numpy as np
+
+    if not state.speaker_db:
+        return {"ok": False, "message": "Speaker DB not initialised"}
+
+    # Load embedding from meta
+    meta_path = Path(req.wav_path).with_suffix(".meta.json")
+    if not meta_path.exists():
+        return {"ok": False, "message": "Meta file not found"}
+
+    meta = _json.loads(meta_path.read_text())
+    embs = meta.get("embeddings", {})
+    emb_data = embs.get(req.speaker_label)
+    if emb_data is None:
+        return {"ok": False, "message": f"No embedding for {req.speaker_label}"}
+
+    embedding = np.array(emb_data, dtype=np.float32)
+
+    # Remove old speaker entry if it matches this embedding
+    for profile in state.speaker_db.list_speakers():
+        if profile.name == req.old_name:
+            sim = state.speaker_db._cosine_similarity(
+                embedding, profile.embedding_array()
+            )
+            if sim > 0.5:  # Likely the same person's embedding
+                state.speaker_db.delete_speaker(profile.id)
+                break
+
+    # Register new speaker with the embedding
+    new_profile = state.speaker_db.add_speaker(
+        name=req.new_name,
+        email=req.new_email,
+        embedding=embedding,
+    )
+
+    # Update meta speaker_map
+    if "speaker_map" not in meta:
+        meta["speaker_map"] = {}
+    meta["speaker_map"][req.speaker_label] = req.new_name
+    meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+    logger.info("Speaker reassigned: %s -> %s (label=%s)", req.old_name, req.new_name, req.speaker_label)
+
+    return {
+        "ok": True,
+        "old_name": req.old_name,
+        "new_name": req.new_name,
+        "speaker_id": new_profile.id,
+    }
+
+
+@app.get("/speakers/search")
+async def search_speakers(q: str = ""):
+    """Search registered speakers by name."""
+    if not state.speaker_db:
+        return {"speakers": []}
+    all_speakers = state.speaker_db.list_speakers()
+    if q:
+        q_lower = q.lower()
+        all_speakers = [s for s in all_speakers if q_lower in s.name.lower()]
+    return {
+        "speakers": [
+            {"id": s.id, "name": s.name, "email": s.email,
+             "registered_at": s.registered_at, "last_matched_at": s.last_matched_at}
+            for s in all_speakers[:20]
+        ]
+    }
+
+
 # ---------------------------------------------------------------------------
 # Slack endpoints
 # ---------------------------------------------------------------------------
