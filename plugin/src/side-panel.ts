@@ -88,8 +88,8 @@ export class MeetNoteSidePanel extends ItemView {
 
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const resp = await requestUrl({ url: `${baseUrl}/recordings/pending`, method: "GET" });
-			const recordings: PendingRecording[] = resp.json.recordings || [];
+			const resp = await this.api("/recordings/pending");
+			const recordings: PendingRecording[] = resp.recordings || [];
 
 			if (recordings.length === 0) {
 				container.createEl("p", { text: "미처리 녹음이 없습니다.", cls: "meetnote-empty" });
@@ -126,8 +126,8 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Completed Recordings Section ──
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const allResp = await requestUrl({ url: `${baseUrl}/recordings/all`, method: "GET" });
-			const allRecs: PendingRecording[] = allResp.json.recordings || [];
+			const allResp = await this.api("/recordings/all");
+			const allRecs: PendingRecording[] = allResp.recordings || [];
 			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
 
 			if (completed.length > 0) {
@@ -173,8 +173,8 @@ export class MeetNoteSidePanel extends ItemView {
 			const baseUrl = this.getHttpBaseUrl();
 
 			// Last meeting speakers
-			const lastResp = await requestUrl({ url: `${baseUrl}/speakers/last-meeting`, method: "GET" });
-			const lastMeeting: LastMeetingSpeaker = lastResp.json;
+			const lastResp = await this.api("/speakers/last-meeting");
+			const lastMeeting: LastMeetingSpeaker = lastResp;
 
 			if (lastMeeting.available_labels.length > 0) {
 				container.createEl("div", { text: "최근 회의 화자:", cls: "meetnote-subsection" });
@@ -202,16 +202,14 @@ export class MeetNoteSidePanel extends ItemView {
 							const name = input.value.trim();
 							if (!name) { new Notice("이름을 입력하세요."); return; }
 							try {
-								await requestUrl({
-									url: `${baseUrl}/speakers/register`,
+								await this.api("/speakers/register", {
 									method: "POST",
-									contentType: "application/json",
-									body: JSON.stringify({
+									body: {
 										speaker_label: label,
 										name,
 										email: emailInput.value.trim(),
 										wav_path: lastMeeting.wav_path || "",
-									}),
+									},
 								});
 								new Notice(`${name} 등록 완료!`);
 								await this.render();
@@ -226,8 +224,8 @@ export class MeetNoteSidePanel extends ItemView {
 			}
 
 			// Registered speakers
-			const speakersResp = await requestUrl({ url: `${baseUrl}/speakers`, method: "GET" });
-			const speakers: SpeakerInfo[] = speakersResp.json || [];
+			const speakersResp = await this.api("/speakers");
+			const speakers: SpeakerInfo[] = speakersResp || [];
 
 			if (speakers.length > 0) {
 				container.createEl("div", { text: `등록된 화자 (${speakers.length}명):`, cls: "meetnote-subsection" });
@@ -242,10 +240,7 @@ export class MeetNoteSidePanel extends ItemView {
 					const delBtn = row.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
 					delBtn.addEventListener("click", async () => {
 						try {
-							await requestUrl({
-								url: `${baseUrl}/speakers/${speaker.id}`,
-								method: "DELETE",
-							});
+							await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });
 							new Notice(`${speaker.name} 삭제됨`);
 							await this.render();
 						} catch {
@@ -288,21 +283,18 @@ export class MeetNoteSidePanel extends ItemView {
 		new Notice(`처리 시작: ${rec.document_name || rec.filename}`);
 
 		try {
-			const baseUrl = this.getHttpBaseUrl();
-			const resp = await requestUrl({
-				url: `${baseUrl}/process-file`,
+			const resp = await this.api("/process-file", {
 				method: "POST",
-				contentType: "application/json",
-				body: JSON.stringify({
+				body: {
 					file_path: rec.path,
 					vault_file_path: vaultFilePath,
-				}),
+				},
 			});
 
-			if (resp.json.ok) {
-				new Notice(`처리 완료: ${resp.json.segments}개 세그먼트`);
+			if (resp.ok) {
+				new Notice(`처리 완료: ${resp.segments}개 세그먼트`);
 			} else {
-				new Notice(`처리 실패: ${resp.json.message}`);
+				new Notice(`처리 실패: ${resp.message}`);
 			}
 		} catch (err) {
 			new Notice("처리 실패: 서버 오류");
@@ -346,8 +338,9 @@ export class MeetNoteSidePanel extends ItemView {
 	private async checkServerHealth(): Promise<boolean> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const resp = await requestUrl({ url: `${baseUrl}/health`, method: "GET" });
-			return resp.json?.ok === true;
+			const resp = await fetch(`${baseUrl}/health`);
+			const data = await resp.json();
+			return data?.ok === true;
 		} catch {
 			return false;
 		}
@@ -389,11 +382,7 @@ export class MeetNoteSidePanel extends ItemView {
 
 	private async stopServer(): Promise<void> {
 		try {
-			const baseUrl = this.getHttpBaseUrl();
-			await requestUrl({
-				url: `${baseUrl}/shutdown`,
-				method: "POST",
-			});
+			await this.api("/shutdown", { method: "POST" });
 			new Notice("서버를 중지합니다.");
 		} catch {
 			new Notice("서버 중지 실패");
@@ -405,5 +394,16 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/** Use native fetch instead of Obsidian requestUrl (works offline/no-internet) */
+	private async api(path: string, options?: { method?: string; body?: any }): Promise<any> {
+		const baseUrl = this.getHttpBaseUrl();
+		const resp = await fetch(`${baseUrl}${path}`, {
+			method: options?.method || "GET",
+			headers: options?.body ? { "Content-Type": "application/json" } : undefined,
+			body: options?.body ? JSON.stringify(options.body) : undefined,
+		});
+		return resp.json();
 	}
 }

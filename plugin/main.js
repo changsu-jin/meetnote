@@ -845,8 +845,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     container.createEl("h4", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C" });
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/recordings/pending`, method: "GET" });
-      const recordings = resp.json.recordings || [];
+      const resp = await this.api("/recordings/pending");
+      const recordings = resp.recordings || [];
       if (recordings.length === 0) {
         container.createEl("p", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
       } else {
@@ -878,8 +878,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     }
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const allResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/recordings/all`, method: "GET" });
-      const allRecs = allResp.json.recordings || [];
+      const allResp = await this.api("/recordings/all");
+      const allRecs = allResp.recordings || [];
       const completed = allRecs.filter((r) => r.processed).slice(0, 10);
       if (completed.length > 0) {
         container.createEl("h4", { text: "\uC644\uB8CC\uB41C \uB179\uC74C" });
@@ -914,8 +914,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     container.createEl("h4", { text: "\uD654\uC790 \uAD00\uB9AC" });
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const lastResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/speakers/last-meeting`, method: "GET" });
-      const lastMeeting = lastResp.json;
+      const lastResp = await this.api("/speakers/last-meeting");
+      const lastMeeting = lastResp;
       if (lastMeeting.available_labels.length > 0) {
         container.createEl("div", { text: "\uCD5C\uADFC \uD68C\uC758 \uD654\uC790:", cls: "meetnote-subsection" });
         for (const label of lastMeeting.available_labels) {
@@ -941,16 +941,14 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 return;
               }
               try {
-                await (0, import_obsidian3.requestUrl)({
-                  url: `${baseUrl}/speakers/register`,
+                await this.api("/speakers/register", {
                   method: "POST",
-                  contentType: "application/json",
-                  body: JSON.stringify({
+                  body: {
                     speaker_label: label,
                     name,
                     email: emailInput.value.trim(),
                     wav_path: lastMeeting.wav_path || ""
-                  })
+                  }
                 });
                 new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
                 await this.render();
@@ -963,8 +961,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           }
         }
       }
-      const speakersResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/speakers`, method: "GET" });
-      const speakers = speakersResp.json || [];
+      const speakersResp = await this.api("/speakers");
+      const speakers = speakersResp || [];
       if (speakers.length > 0) {
         container.createEl("div", { text: `\uB4F1\uB85D\uB41C \uD654\uC790 (${speakers.length}\uBA85):`, cls: "meetnote-subsection" });
         for (const speaker of speakers) {
@@ -976,10 +974,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const delBtn = row.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
           delBtn.addEventListener("click", async () => {
             try {
-              await (0, import_obsidian3.requestUrl)({
-                url: `${baseUrl}/speakers/${speaker.id}`,
-                method: "DELETE"
-              });
+              await this.api(`/speakers/${speaker.id}`, { method: "DELETE" });
               new import_obsidian3.Notice(`${speaker.name} \uC0AD\uC81C\uB428`);
               await this.render();
             } catch {
@@ -1017,20 +1012,17 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     this.processing = true;
     new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${rec.document_name || rec.filename}`);
     try {
-      const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian3.requestUrl)({
-        url: `${baseUrl}/process-file`,
+      const resp = await this.api("/process-file", {
         method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({
+        body: {
           file_path: rec.path,
           vault_file_path: vaultFilePath
-        })
+        }
       });
-      if (resp.json.ok) {
-        new import_obsidian3.Notice(`\uCC98\uB9AC \uC644\uB8CC: ${resp.json.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`);
+      if (resp.ok) {
+        new import_obsidian3.Notice(`\uCC98\uB9AC \uC644\uB8CC: ${resp.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`);
       } else {
-        new import_obsidian3.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.json.message}`);
+        new import_obsidian3.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.message}`);
       }
     } catch (err) {
       new import_obsidian3.Notice("\uCC98\uB9AC \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
@@ -1065,8 +1057,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   async checkServerHealth() {
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/health`, method: "GET" });
-      return resp.json?.ok === true;
+      const resp = await fetch(`${baseUrl}/health`);
+      const data = await resp.json();
+      return data?.ok === true;
     } catch {
       return false;
     }
@@ -1100,11 +1093,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   async stopServer() {
     try {
-      const baseUrl = this.getHttpBaseUrl();
-      await (0, import_obsidian3.requestUrl)({
-        url: `${baseUrl}/shutdown`,
-        method: "POST"
-      });
+      await this.api("/shutdown", { method: "POST" });
       new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC911\uC9C0\uD569\uB2C8\uB2E4.");
     } catch {
       new import_obsidian3.Notice("\uC11C\uBC84 \uC911\uC9C0 \uC2E4\uD328");
@@ -1112,6 +1101,16 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /** Use native fetch instead of Obsidian requestUrl (works offline/no-internet) */
+  async api(path, options) {
+    const baseUrl = this.getHttpBaseUrl();
+    const resp = await fetch(`${baseUrl}${path}`, {
+      method: options?.method || "GET",
+      headers: options?.body ? { "Content-Type": "application/json" } : void 0,
+      body: options?.body ? JSON.stringify(options.body) : void 0
+    });
+    return resp.json();
   }
 };
 
