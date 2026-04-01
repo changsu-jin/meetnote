@@ -292,7 +292,7 @@ export class MeetNoteSidePanel extends ItemView {
 				});
 
 				// ── Save button for voice-detected speaker changes ──
-				if (speakerInputs.length > 0 || lastMeeting.available_labels.some((l) => (lastMeeting.speaker_map[l] || l).startsWith("화자"))) {
+				if (lastMeeting.available_labels.length > 0) {
 					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
 					const batchBtn = btnRow.createEl("button", { text: "음성 참석자 저장", cls: "meetnote-register-btn meetnote-batch-btn" });
 					batchBtn.addEventListener("click", async () => {

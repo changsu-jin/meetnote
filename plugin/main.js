@@ -1024,7 +1024,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             new import_obsidian3.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
           }
         });
-        if (speakerInputs.length > 0 || lastMeeting.available_labels.some((l) => (lastMeeting.speaker_map[l] || l).startsWith("\uD654\uC790"))) {
+        if (lastMeeting.available_labels.length > 0) {
           const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
           const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
           batchBtn.addEventListener("click", async () => {
