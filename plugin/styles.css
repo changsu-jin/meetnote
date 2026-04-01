@@ -144,6 +144,28 @@
 	color: var(--text-success);
 }
 
+.meetnote-participant-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 0;
+	border-bottom: 1px solid var(--background-modifier-border-hover);
+	flex-wrap: wrap;
+}
+
+.meetnote-participant-name {
+	min-width: 80px;
+	font-weight: 500;
+	font-size: 0.9em;
+}
+
+.meetnote-participant-action {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 1;
+}
+
 .meetnote-batch-register {
 	margin-top: 8px;
 	text-align: right;
