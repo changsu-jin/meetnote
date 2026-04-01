@@ -823,11 +823,27 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
                        f"Available: {list(state.last_meeting_embeddings.keys())}",
         }
 
-    profile = state.speaker_db.add_speaker(
-        name=req.name,
-        email=req.email,
-        embedding=embedding,
-    )
+    # Check if speaker with same name already exists → update embedding instead of duplicate
+    existing = None
+    for p in state.speaker_db.list_speakers():
+        if p.name == req.name:
+            existing = p
+            break
+
+    if existing:
+        # Update existing speaker's embedding + email
+        profile = state.speaker_db.update_speaker(
+            existing.id,
+            email=req.email or existing.email,
+            embedding=embedding,
+        )
+        logger.info("Updated existing speaker '%s' with new embedding.", req.name)
+    else:
+        profile = state.speaker_db.add_speaker(
+            name=req.name,
+            email=req.email,
+            embedding=embedding,
+        )
 
     # Update meta + document atomically
     old_display_name = ""
@@ -964,12 +980,26 @@ async def reassign_speaker(req: SpeakerReassignRequest):
                 state.speaker_db.delete_speaker(profile.id)
                 break
 
-    # Register new speaker with the embedding
-    new_profile = state.speaker_db.add_speaker(
-        name=req.new_name,
-        email=req.new_email,
-        embedding=embedding,
-    )
+    # Register or update speaker with the embedding
+    existing = None
+    for p in state.speaker_db.list_speakers():
+        if p.name == req.new_name:
+            existing = p
+            break
+
+    if existing:
+        new_profile = state.speaker_db.update_speaker(
+            existing.id,
+            email=req.new_email or existing.email,
+            embedding=embedding,
+        )
+        logger.info("Updated existing speaker '%s' with reassigned embedding.", req.new_name)
+    else:
+        new_profile = state.speaker_db.add_speaker(
+            name=req.new_name,
+            email=req.new_email,
+            embedding=embedding,
+        )
 
     # Update meta speaker_map
     if "speaker_map" not in meta:
