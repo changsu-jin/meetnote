@@ -304,13 +304,12 @@ export class MeetNoteSidePanel extends ItemView {
 				} catch { /* ignore */ }
 
 				// Add manual participant form
-				const addFormRow = container.createDiv({ cls: "meetnote-add-form" });
-				const addWrapper = addFormRow.createDiv({ cls: "meetnote-input-wrapper" });
-				const addInput = addWrapper.createEl("input", { type: "text", placeholder: "이름 입력", cls: "meetnote-speaker-input" });
-				const addEmailInput = addFormRow.createEl("input", { type: "text", placeholder: "이메일", cls: "meetnote-speaker-input" });
-				this.addAutoSuggest(addWrapper, addInput, addEmailInput);
 				const addBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
-				const addBtn = addBtnRow.createEl("button", { text: "참석자 추가", cls: "meetnote-register-btn meetnote-batch-btn" });
+				const addWrapper = addBtnRow.createDiv({ cls: "meetnote-input-wrapper" });
+				const addInput = addWrapper.createEl("input", { type: "text", placeholder: "이름 입력", cls: "meetnote-speaker-input" });
+				const addEmailInput = addBtnRow.createEl("input", { type: "text", placeholder: "이메일", cls: "meetnote-speaker-input" });
+				this.addAutoSuggest(addWrapper, addInput, addEmailInput);
+				const addBtn = addBtnRow.createEl("button", { text: "추가", cls: "meetnote-register-btn meetnote-batch-btn" });
 				addBtn.addEventListener("click", async () => {
 					const name = addInput.value.trim();
 					if (!name) { new Notice("이름을 입력하세요."); return; }

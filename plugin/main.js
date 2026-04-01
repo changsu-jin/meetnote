@@ -1033,13 +1033,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           }
         } catch {
         }
-        const addFormRow = container.createDiv({ cls: "meetnote-add-form" });
-        const addWrapper = addFormRow.createDiv({ cls: "meetnote-input-wrapper" });
-        const addInput = addWrapper.createEl("input", { type: "text", placeholder: "\uC774\uB984 \uC785\uB825", cls: "meetnote-speaker-input" });
-        const addEmailInput = addFormRow.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
-        this.addAutoSuggest(addWrapper, addInput, addEmailInput);
         const addBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
-        const addBtn = addBtnRow.createEl("button", { text: "\uCC38\uC11D\uC790 \uCD94\uAC00", cls: "meetnote-register-btn meetnote-batch-btn" });
+        const addWrapper = addBtnRow.createDiv({ cls: "meetnote-input-wrapper" });
+        const addInput = addWrapper.createEl("input", { type: "text", placeholder: "\uC774\uB984 \uC785\uB825", cls: "meetnote-speaker-input" });
+        const addEmailInput = addBtnRow.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
+        this.addAutoSuggest(addWrapper, addInput, addEmailInput);
+        const addBtn = addBtnRow.createEl("button", { text: "\uCD94\uAC00", cls: "meetnote-register-btn meetnote-batch-btn" });
         addBtn.addEventListener("click", async () => {
           const name = addInput.value.trim();
           if (!name) {
