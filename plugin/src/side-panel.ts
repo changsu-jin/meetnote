@@ -38,6 +38,7 @@ export class MeetNoteSidePanel extends ItemView {
 	plugin: MeetNotePlugin;
 	private refreshInterval: ReturnType<typeof setInterval> | null = null;
 	private processing = false;
+	private serverProcess: any = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: MeetNotePlugin) {
 		super(leaf);
@@ -75,6 +76,9 @@ export class MeetNoteSidePanel extends ItemView {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("meetnote-side-panel");
+
+		// ── Server Status Section ──
+		await this.renderServerSection(container);
 
 		// ── Recording Queue Section ──
 		container.createEl("h4", { text: "미처리 녹음" });
@@ -241,6 +245,88 @@ export class MeetNoteSidePanel extends ItemView {
 		} finally {
 			this.processing = false;
 			await this.render();
+		}
+	}
+
+	// ── Server Management ──
+
+	private async renderServerSection(container: HTMLElement): Promise<void> {
+		const section = container.createDiv({ cls: "meetnote-server-section" });
+		const header = section.createDiv({ cls: "meetnote-server-header" });
+		header.createEl("h4", { text: "서버" });
+
+		const serverOnline = await this.checkServerHealth();
+
+		const statusRow = section.createDiv({ cls: "meetnote-server-status" });
+
+		if (serverOnline) {
+			statusRow.createEl("span", { text: "● 실행 중", cls: "meetnote-status-online" });
+
+			const stopBtn = statusRow.createEl("button", { text: "중지", cls: "meetnote-server-btn" });
+			stopBtn.addEventListener("click", async () => {
+				await this.stopServer();
+				await this.render();
+			});
+		} else {
+			statusRow.createEl("span", { text: "● 중지됨", cls: "meetnote-status-offline" });
+
+			const startBtn = statusRow.createEl("button", { text: "시작", cls: "meetnote-server-btn" });
+			startBtn.addEventListener("click", async () => {
+				await this.startServer();
+				// Wait for server to start
+				setTimeout(() => this.render(), 5000);
+			});
+		}
+	}
+
+	private async checkServerHealth(): Promise<boolean> {
+		try {
+			const baseUrl = this.getHttpBaseUrl();
+			const resp = await requestUrl({
+				url: `${baseUrl}/health`,
+				method: "GET",
+				throw: false,
+			} as any);
+			return resp.status === 200;
+		} catch {
+			return false;
+		}
+	}
+
+	private async startServer(): Promise<void> {
+		try {
+			const { exec } = require("child_process");
+			// Find the backend directory relative to the vault
+			const backendDir = this.plugin.settings.backendDir || "";
+			if (!backendDir) {
+				new Notice("설정에서 백엔드 경로를 지정해주세요.");
+				return;
+			}
+
+			const cmd = `cd "${backendDir}" && source venv/bin/activate && python3 server.py > /tmp/meetnote_server.log 2>&1 &`;
+			exec(cmd, (err: any) => {
+				if (err) {
+					new Notice(`서버 시작 실패: ${err.message}`);
+					console.error("[MeetNote] Server start failed:", err);
+				} else {
+					new Notice("서버를 시작합니다... (약 10초 소요)");
+				}
+			});
+		} catch (err) {
+			new Notice(`서버 시작 실패: ${err}`);
+		}
+	}
+
+	private async stopServer(): Promise<void> {
+		try {
+			const baseUrl = this.getHttpBaseUrl();
+			await requestUrl({
+				url: `${baseUrl}/shutdown`,
+				method: "POST",
+			});
+			new Notice("서버를 중지합니다.");
+		} catch {
+			new Notice("서버 중지 실패");
 		}
 	}
 

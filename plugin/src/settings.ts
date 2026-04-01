@@ -14,6 +14,7 @@ export interface MeetNoteSettings {
 	autoDeleteDays: number;
 	autoLinkEnabled: boolean;
 	processMode: "immediate" | "queue";
+	backendDir: string;
 }
 
 export const DEFAULT_SETTINGS: MeetNoteSettings = {
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: MeetNoteSettings = {
 	autoDeleteDays: 0,
 	autoLinkEnabled: true,
 	processMode: "queue",
+	backendDir: "",
 };
 
 export class MeetNoteSettingTab extends PluginSettingTab {
@@ -44,6 +46,33 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		containerEl.createEl("h2", { text: "MeetNote 설정" });
+
+		new Setting(containerEl)
+			.setName("백엔드 경로")
+			.setDesc("Python 백엔드 디렉토리 (서버 시작/중지에 필요)")
+			.addText((text) =>
+				text
+					.setPlaceholder("/path/to/meetnote/backend")
+					.setValue(this.plugin.settings.backendDir)
+					.onChange(async (value) => {
+						this.plugin.settings.backendDir = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("후처리 모드")
+			.setDesc("녹음 중지 후 즉시 처리 또는 나중에 수동 처리")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("queue", "큐 모드 (나중에 처리)")
+					.addOption("immediate", "즉시 처리")
+					.setValue(this.plugin.settings.processMode)
+					.onChange(async (value) => {
+						this.plugin.settings.processMode = value as "immediate" | "queue";
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl)
 			.setName("서버 URL")

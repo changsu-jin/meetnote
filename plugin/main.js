@@ -38,7 +38,8 @@ var DEFAULT_SETTINGS = {
   encryptionEnabled: false,
   autoDeleteDays: 0,
   autoLinkEnabled: true,
-  processMode: "queue"
+  processMode: "queue",
+  backendDir: ""
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -49,6 +50,18 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "MeetNote \uC124\uC815" });
+    new import_obsidian.Setting(containerEl).setName("\uBC31\uC5D4\uB4DC \uACBD\uB85C").setDesc("Python \uBC31\uC5D4\uB4DC \uB514\uB809\uD1A0\uB9AC (\uC11C\uBC84 \uC2DC\uC791/\uC911\uC9C0\uC5D0 \uD544\uC694)").addText(
+      (text) => text.setPlaceholder("/path/to/meetnote/backend").setValue(this.plugin.settings.backendDir).onChange(async (value) => {
+        this.plugin.settings.backendDir = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\uD6C4\uCC98\uB9AC \uBAA8\uB4DC").setDesc("\uB179\uC74C \uC911\uC9C0 \uD6C4 \uC989\uC2DC \uCC98\uB9AC \uB610\uB294 \uB098\uC911\uC5D0 \uC218\uB3D9 \uCC98\uB9AC").addDropdown(
+      (dropdown) => dropdown.addOption("queue", "\uD050 \uBAA8\uB4DC (\uB098\uC911\uC5D0 \uCC98\uB9AC)").addOption("immediate", "\uC989\uC2DC \uCC98\uB9AC").setValue(this.plugin.settings.processMode).onChange(async (value) => {
+        this.plugin.settings.processMode = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian.Setting(containerEl).setName("\uC11C\uBC84 URL").setDesc("\uBC31\uC5D4\uB4DC WebSocket \uC11C\uBC84 \uC8FC\uC18C").addText(
       (text) => text.setPlaceholder("ws://localhost:8765/ws").setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
         this.plugin.settings.serverUrl = value;
@@ -800,6 +813,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     super(leaf);
     this.refreshInterval = null;
     this.processing = false;
+    this.serverProcess = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -827,6 +841,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("meetnote-side-panel");
+    await this.renderServerSection(container);
     container.createEl("h4", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C" });
     try {
       const baseUrl = this.getHttpBaseUrl();
@@ -967,6 +982,75 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     } finally {
       this.processing = false;
       await this.render();
+    }
+  }
+  // ── Server Management ──
+  async renderServerSection(container) {
+    const section = container.createDiv({ cls: "meetnote-server-section" });
+    const header = section.createDiv({ cls: "meetnote-server-header" });
+    header.createEl("h4", { text: "\uC11C\uBC84" });
+    const serverOnline = await this.checkServerHealth();
+    const statusRow = section.createDiv({ cls: "meetnote-server-status" });
+    if (serverOnline) {
+      statusRow.createEl("span", { text: "\u25CF \uC2E4\uD589 \uC911", cls: "meetnote-status-online" });
+      const stopBtn = statusRow.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-server-btn" });
+      stopBtn.addEventListener("click", async () => {
+        await this.stopServer();
+        await this.render();
+      });
+    } else {
+      statusRow.createEl("span", { text: "\u25CF \uC911\uC9C0\uB428", cls: "meetnote-status-offline" });
+      const startBtn = statusRow.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-server-btn" });
+      startBtn.addEventListener("click", async () => {
+        await this.startServer();
+        setTimeout(() => this.render(), 5e3);
+      });
+    }
+  }
+  async checkServerHealth() {
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const resp = await (0, import_obsidian3.requestUrl)({
+        url: `${baseUrl}/health`,
+        method: "GET",
+        throw: false
+      });
+      return resp.status === 200;
+    } catch {
+      return false;
+    }
+  }
+  async startServer() {
+    try {
+      const { exec } = require("child_process");
+      const backendDir = this.plugin.settings.backendDir || "";
+      if (!backendDir) {
+        new import_obsidian3.Notice("\uC124\uC815\uC5D0\uC11C \uBC31\uC5D4\uB4DC \uACBD\uB85C\uB97C \uC9C0\uC815\uD574\uC8FC\uC138\uC694.");
+        return;
+      }
+      const cmd = `cd "${backendDir}" && source venv/bin/activate && python3 server.py > /tmp/meetnote_server.log 2>&1 &`;
+      exec(cmd, (err) => {
+        if (err) {
+          new import_obsidian3.Notice(`\uC11C\uBC84 \uC2DC\uC791 \uC2E4\uD328: ${err.message}`);
+          console.error("[MeetNote] Server start failed:", err);
+        } else {
+          new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4... (\uC57D 10\uCD08 \uC18C\uC694)");
+        }
+      });
+    } catch (err) {
+      new import_obsidian3.Notice(`\uC11C\uBC84 \uC2DC\uC791 \uC2E4\uD328: ${err}`);
+    }
+  }
+  async stopServer() {
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      await (0, import_obsidian3.requestUrl)({
+        url: `${baseUrl}/shutdown`,
+        method: "POST"
+      });
+      new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC911\uC9C0\uD569\uB2C8\uB2E4.");
+    } catch {
+      new import_obsidian3.Notice("\uC11C\uBC84 \uC911\uC9C0 \uC2E4\uD328");
     }
   }
   getHttpBaseUrl() {

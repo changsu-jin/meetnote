@@ -237,6 +237,33 @@ async def update_config(update: ConfigUpdate):
 
 
 # ---------------------------------------------------------------------------
+# Server management endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/shutdown")
+async def shutdown_server():
+    """Gracefully shut down the server."""
+    import os, signal
+    logger.info("Shutdown requested via API.")
+    # Schedule shutdown after response is sent
+    asyncio.get_event_loop().call_later(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    return {"ok": True, "message": "Shutting down..."}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check with detailed server info."""
+    return {
+        "ok": True,
+        "recording": state.recording,
+        "processing": state.processing,
+        "transcriber": state.transcriber is not None,
+        "diarizer": state.diarizer is not None,
+        "speaker_db_count": len(state.speaker_db.list_speakers()) if state.speaker_db else 0,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Recording queue endpoints
 # ---------------------------------------------------------------------------
 
