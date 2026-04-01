@@ -1572,6 +1572,9 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.backendClient.onChunk((segments) => {
       this.writer.appendChunk(segments);
     }).onFinal(async (segments, summary, speakingStats, slackStatus) => {
+      if (this.settings.processMode === "queue" && !this.isRecording) {
+        return;
+      }
       if (!this.writer.currentFile) {
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile && activeFile.extension === "md") {

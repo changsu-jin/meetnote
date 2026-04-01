@@ -33,6 +33,11 @@ export default class MeetNotePlugin extends Plugin {
 				this.writer.appendChunk(segments);
 			})
 			.onFinal(async (segments, summary, speakingStats, slackStatus) => {
+				// Skip writer in queue mode — process-file writes directly to vault
+				if (this.settings.processMode === "queue" && !this.isRecording) {
+					return;
+				}
+
 				// If writer not initialized (e.g. process-file), init with active file
 				if (!this.writer.currentFile) {
 					const activeFile = this.app.workspace.getActiveFile();
