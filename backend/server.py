@@ -525,9 +525,14 @@ async def get_all_recordings():
             try:
                 meta = _json.loads(meta_path.read_text())
                 sp_map = meta.get("speaker_map", {})
-                for display in sp_map.values():
-                    if display.startswith("화자"):
-                        unregistered_speakers += 1
+                embs = meta.get("embeddings", {})
+                if sp_map:
+                    for display in sp_map.values():
+                        if display.startswith("화자"):
+                            unregistered_speakers += 1
+                elif embs:
+                    # speaker_map empty but embeddings exist → all unregistered
+                    unregistered_speakers = len(embs)
             except Exception:
                 pass
 
@@ -872,8 +877,10 @@ async def last_meeting_speakers(wav_path: str = ""):
         except Exception:
             pass
 
-    # Use meta's speaker_map as source of truth (no re-matching)
-    # Speaker DB matching happens only during process-file, not on every API call
+    # If speaker_map is empty but labels exist, generate default 화자N
+    if available_labels and not speaker_map:
+        for idx, label in enumerate(sorted(available_labels), 1):
+            speaker_map[label] = f"화자{idx}"
 
     return {
         "speaker_map": speaker_map,
