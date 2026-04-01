@@ -517,8 +517,10 @@ export class MeetNoteSidePanel extends ItemView {
 					const editBtn = btnCol.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
 					editBtn.addEventListener("click", () => {
 						infoCol.empty();
-						const nameInput = infoCol.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
+						const inputWrapper = infoCol.createDiv({ cls: "meetnote-input-wrapper" });
+						const nameInput = inputWrapper.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
 						const emailInput = infoCol.createEl("input", { type: "text", value: s.email || "", placeholder: "이메일", cls: "meetnote-speaker-input" });
+						this.addAutoSuggest(inputWrapper, nameInput, emailInput);
 
 						btnCol.empty();
 						const saveBtn = btnCol.createEl("button", { text: "저장", cls: "meetnote-register-btn" });

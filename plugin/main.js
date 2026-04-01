@@ -1284,8 +1284,10 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const editBtn = btnCol.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
           editBtn.addEventListener("click", () => {
             infoCol.empty();
-            const nameInput = infoCol.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
+            const inputWrapper = infoCol.createDiv({ cls: "meetnote-input-wrapper" });
+            const nameInput = inputWrapper.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
             const emailInput = infoCol.createEl("input", { type: "text", value: s.email || "", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
+            this.addAutoSuggest(inputWrapper, nameInput, emailInput);
             btnCol.empty();
             const saveBtn = btnCol.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn" });
             saveBtn.addEventListener("click", async () => {
