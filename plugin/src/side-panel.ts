@@ -65,25 +65,22 @@ export class MeetNoteSidePanel extends ItemView {
 
 	async onOpen(): Promise<void> {
 		await this.render();
-		// Auto-refresh every 10 seconds — skip if user is typing
-		this.refreshInterval = setInterval(() => {
-			const activeEl = document.activeElement;
-			const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
-			if (!this.processing && !isTyping) this.render();
-		}, 10000);
 	}
 
 	async onClose(): Promise<void> {
-		if (this.refreshInterval) {
-			clearInterval(this.refreshInterval);
-			this.refreshInterval = null;
-		}
+		// nothing to clean up
 	}
 
 	async render(): Promise<void> {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("meetnote-side-panel");
+
+		// ── Header with refresh ──
+		const headerRow = container.createDiv({ cls: "meetnote-panel-header" });
+		headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
+		const refreshBtn = headerRow.createEl("button", { text: "↻", cls: "meetnote-refresh-btn" });
+		refreshBtn.addEventListener("click", () => this.render());
 
 		// ── Server Status Section ──
 		await this.renderServerSection(container);

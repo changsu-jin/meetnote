@@ -1,3 +1,28 @@
+.meetnote-panel-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.meetnote-panel-title {
+	font-weight: 700;
+	font-size: 1.1em;
+}
+
+.meetnote-refresh-btn {
+	font-size: 1.1em;
+	padding: 2px 8px;
+	cursor: pointer;
+	background: none;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.meetnote-refresh-btn:hover {
+	background: var(--background-modifier-hover);
+}
+
 .meetnote-server-header {
 	display: flex;
 	justify-content: space-between;

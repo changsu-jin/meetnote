@@ -833,22 +833,17 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   async onOpen() {
     await this.render();
-    this.refreshInterval = setInterval(() => {
-      const activeEl = document.activeElement;
-      const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
-      if (!this.processing && !isTyping) this.render();
-    }, 1e4);
   }
   async onClose() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-    }
   }
   async render() {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("meetnote-side-panel");
+    const headerRow = container.createDiv({ cls: "meetnote-panel-header" });
+    headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
+    const refreshBtn = headerRow.createEl("button", { text: "\u21BB", cls: "meetnote-refresh-btn" });
+    refreshBtn.addEventListener("click", () => this.render());
     await this.renderServerSection(container);
     container.createEl("h4", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C" });
     try {
