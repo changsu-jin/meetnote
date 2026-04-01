@@ -995,22 +995,37 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     }
   }
   async processRecording(rec, btn) {
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
-      new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
-      return;
+    let vaultFilePath = "";
+    if (rec.document_path) {
+      const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+      if (file) {
+        const adapter = this.app.vault.adapter;
+        vaultFilePath = adapter.getBasePath() + "/" + rec.document_path;
+      }
+    }
+    if (!vaultFilePath) {
+      const activeFile = this.app.workspace.getActiveFile();
+      if (!activeFile || activeFile.extension !== "md") {
+        new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+        return;
+      }
+      const adapter = this.app.vault.adapter;
+      vaultFilePath = adapter.getBasePath() + "/" + activeFile.path;
     }
     btn.setText("\uCC98\uB9AC \uC911...");
     btn.setAttribute("disabled", "true");
     this.processing = true;
-    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${rec.filename}`);
+    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${rec.document_name || rec.filename}`);
     try {
       const baseUrl = this.getHttpBaseUrl();
       const resp = await (0, import_obsidian3.requestUrl)({
         url: `${baseUrl}/process-file`,
         method: "POST",
         contentType: "application/json",
-        body: JSON.stringify({ file_path: rec.path })
+        body: JSON.stringify({
+          file_path: rec.path,
+          vault_file_path: vaultFilePath
+        })
       });
       if (resp.json.ok) {
         new import_obsidian3.Notice(`\uCC98\uB9AC \uC644\uB8CC: ${resp.json.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`);

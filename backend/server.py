@@ -70,6 +70,116 @@ def load_config() -> dict[str, Any]:
 _config: dict[str, Any] = load_config()
 
 
+def _write_result_to_vault(
+    vault_file_path: str,
+    segments: list[dict],
+    speaker_map: dict[str, str],
+    summary: str,
+    speaking_stats: list[dict],
+) -> None:
+    """Write meeting result directly to a vault markdown file."""
+    from datetime import datetime
+
+    # Collect speakers
+    speakers = []
+    seen = set()
+    for seg in segments:
+        if seg["speaker"] not in seen:
+            speakers.append(seg["speaker"])
+            seen.add(seg["speaker"])
+
+    # Build content
+    lines = []
+
+    # Header
+    now = datetime.now()
+    lines.append("## 회의 녹취록")
+    lines.append("")
+    lines.append(f"> 참석자: {', '.join(speakers)} (자동 감지 {len(speakers)}명)")
+    lines.append("")
+
+    # Speaking stats
+    if speaking_stats:
+        lines.append("### 발언 비율")
+        lines.append("")
+        for stat in speaking_stats:
+            pct = round(stat.get("ratio", 0) * 100)
+            secs = stat.get("total_seconds", 0)
+            mins = int(secs) // 60
+            sec = int(secs) % 60
+            bar_w = 20
+            filled = round(stat.get("ratio", 0) * bar_w)
+            bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
+            lines.append(f"> {stat['speaker']} {pct}% {bar} ({mins}분 {sec}초)")
+        lines.append("")
+
+    # Summary
+    if summary:
+        lines.append(summary.strip())
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # Transcript — group consecutive same speaker
+    lines.append("## 녹취록")
+    lines.append("")
+
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+        speaker = seg["speaker"]
+        texts = [seg["text"].strip()]
+        start_ts = seg["timestamp"]
+        last_ts = start_ts
+
+        while i + 1 < len(segments) and segments[i + 1]["speaker"] == speaker:
+            i += 1
+            texts.append(segments[i]["text"].strip())
+            last_ts = segments[i]["timestamp"]
+
+        # Format timestamps as HH:MM:SS
+        def fmt(ts):
+            h = int(ts // 3600)
+            m = int((ts % 3600) // 60)
+            s = int(ts % 60)
+            return f"{h:02d}:{m:02d}:{s:02d}"
+
+        if len(texts) > 1:
+            lines.append(f"### {fmt(start_ts)} ~ {fmt(last_ts)}")
+        else:
+            lines.append(f"### {fmt(start_ts)}")
+        lines.append(f"**{speaker}**: {' '.join(texts)}")
+        lines.append("")
+        i += 1
+
+    content = "\n".join(lines)
+
+    # Read existing file and insert/replace
+    vault_path = Path(vault_file_path)
+    if vault_path.exists():
+        existing = vault_path.read_text(encoding="utf-8")
+
+        # Replace meetnote section if markers exist
+        start_marker = "<!-- meetnote-start -->"
+        end_marker = "<!-- meetnote-end -->"
+        start_idx = existing.find(start_marker)
+        end_idx = existing.find(end_marker)
+
+        if start_idx != -1 and end_idx != -1:
+            new_content = (
+                existing[:start_idx] +
+                start_marker + "\n\n" +
+                content + "\n" +
+                existing[end_idx:]
+            )
+        else:
+            new_content = existing + "\n\n" + content
+    else:
+        new_content = content
+
+    vault_path.write_text(new_content, encoding="utf-8")
+
+
 def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) -> None:
     """Save speaker embeddings to the .meta.json alongside the WAV file."""
     import json as _json
@@ -381,6 +491,7 @@ async def get_all_recordings():
 class ProcessFileRequest(BaseModel):
     """Process an existing WAV file through the full pipeline."""
     file_path: str
+    vault_file_path: str = ""  # Absolute path to vault .md file — write result directly
 
 
 @app.post("/process-file")
@@ -501,6 +612,17 @@ async def process_file(req: ProcessFileRequest):
             "speaking_stats": speaking_stats,
         })
         logger.info("Process-file complete: %d segments.", len(final_segments))
+
+        # Write result directly to vault file if path provided
+        if req.vault_file_path:
+            try:
+                _write_result_to_vault(
+                    req.vault_file_path, final_segments,
+                    speaker_map, summary_text, speaking_stats,
+                )
+                logger.info("Result written directly to vault: %s", req.vault_file_path)
+            except Exception as write_exc:
+                logger.warning("Failed to write to vault: %s", write_exc)
 
         # Mark as processed
         done_marker = Path(req.file_path).with_suffix(".done")

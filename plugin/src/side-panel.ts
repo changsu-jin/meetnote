@@ -262,18 +262,30 @@ export class MeetNoteSidePanel extends ItemView {
 	}
 
 	private async processRecording(rec: PendingRecording, btn: HTMLElement): Promise<void> {
-		// Ensure there's an active markdown file to write to
-		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile || activeFile.extension !== "md") {
-			new Notice("회의록을 작성할 마크다운 문서를 먼저 열어주세요.");
-			return;
+		// Resolve vault file path — from meta or active file
+		let vaultFilePath = "";
+		if (rec.document_path) {
+			const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+			if (file) {
+				const adapter = this.app.vault.adapter as any;
+				vaultFilePath = adapter.getBasePath() + "/" + rec.document_path;
+			}
+		}
+		if (!vaultFilePath) {
+			const activeFile = this.app.workspace.getActiveFile();
+			if (!activeFile || activeFile.extension !== "md") {
+				new Notice("회의록을 작성할 마크다운 문서를 먼저 열어주세요.");
+				return;
+			}
+			const adapter = this.app.vault.adapter as any;
+			vaultFilePath = adapter.getBasePath() + "/" + activeFile.path;
 		}
 
 		btn.setText("처리 중...");
 		btn.setAttribute("disabled", "true");
 		this.processing = true;
 
-		new Notice(`처리 시작: ${rec.filename}`);
+		new Notice(`처리 시작: ${rec.document_name || rec.filename}`);
 
 		try {
 			const baseUrl = this.getHttpBaseUrl();
@@ -281,7 +293,10 @@ export class MeetNoteSidePanel extends ItemView {
 				url: `${baseUrl}/process-file`,
 				method: "POST",
 				contentType: "application/json",
-				body: JSON.stringify({ file_path: rec.path }),
+				body: JSON.stringify({
+					file_path: rec.path,
+					vault_file_path: vaultFilePath,
+				}),
 			});
 
 			if (resp.json.ok) {
