@@ -204,9 +204,13 @@ export class MeetNoteSidePanel extends ItemView {
 			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
 			const lastMeeting: LastMeetingSpeaker = lastResp;
 
-			const hasUnregistered = lastMeeting.available_labels.some(
-				(l) => (lastMeeting.speaker_map[l] || l).startsWith("화자")
-			);
+			// Check against registered speaker DB, not just meta speaker_map
+			const speakersResp2 = await this.api("/speakers");
+			const registeredNames = new Set((speakersResp2 || []).map((s: any) => s.name));
+			const hasUnregistered = lastMeeting.available_labels.some((l) => {
+				const name = lastMeeting.speaker_map[l] || l;
+				return name.startsWith("화자") || !registeredNames.has(name);
+			});
 
 			if (hasUnregistered && lastMeeting.available_labels.length > 0) {
 				// Show which recording this mapping is for

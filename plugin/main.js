@@ -940,9 +940,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
         const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
         const lastMeeting = lastResp;
-        const hasUnregistered = lastMeeting.available_labels.some(
-          (l) => (lastMeeting.speaker_map[l] || l).startsWith("\uD654\uC790")
-        );
+        const speakersResp2 = await this.api("/speakers");
+        const registeredNames = new Set((speakersResp2 || []).map((s) => s.name));
+        const hasUnregistered = lastMeeting.available_labels.some((l) => {
+          const name = lastMeeting.speaker_map[l] || l;
+          return name.startsWith("\uD654\uC790") || !registeredNames.has(name);
+        });
         if (hasUnregistered && lastMeeting.available_labels.length > 0) {
           if (this.selectedDocName) {
             container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });

@@ -470,14 +470,17 @@ async def get_all_recordings():
             except Exception:
                 pass
 
-        # Check for unregistered speakers
+        # Check for unregistered speakers (compare against Speaker DB)
         unregistered_speakers = 0
+        registered_names = set()
+        if state.speaker_db:
+            registered_names = {p.name for p in state.speaker_db.list_speakers()}
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 sp_map = meta.get("speaker_map", {})
                 for display in sp_map.values():
-                    if display.startswith("화자"):
+                    if display.startswith("화자") or display not in registered_names:
                         unregistered_speakers += 1
             except Exception:
                 pass
