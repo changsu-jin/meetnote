@@ -932,90 +932,94 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       this.cachedNames = await this.loadSuggestNames();
     }
     try {
-      const wavParam = this.selectedWavPath ? `?wav_path=${encodeURIComponent(this.selectedWavPath)}` : "";
-      const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
-      const lastMeeting = lastResp;
-      if (lastMeeting.available_labels.length > 0) {
-        if (this.selectedDocName) {
-          container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
-        } else if (lastMeeting.wav_path) {
-          const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
-          if (metaDocName) {
-            container.createEl("div", { text: `\u{1F4CB} ${metaDocName}`, cls: "meetnote-speaker-context" });
+      if (this.selectedWavPath) {
+        const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+        const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+        const lastMeeting = lastResp;
+        if (lastMeeting.available_labels.length > 0) {
+          if (this.selectedDocName) {
+            container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+          } else if (lastMeeting.wav_path) {
+            const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
+            if (metaDocName) {
+              container.createEl("div", { text: `\u{1F4CB} ${metaDocName}`, cls: "meetnote-speaker-context" });
+            }
           }
-        }
-        container.createEl("div", { text: "\uAC10\uC9C0\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
-        for (const label of lastMeeting.available_labels) {
-          const displayName = lastMeeting.speaker_map[label] || label;
-          const row = container.createDiv({ cls: "meetnote-speaker-row" });
-          row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
-          if (displayName.startsWith("\uD654\uC790")) {
-            const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
-            const input = inputWrapper.createEl("input", {
-              type: "text",
-              placeholder: "\uC774\uB984",
-              cls: "meetnote-speaker-input"
-            });
-            const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
-            suggestList.style.display = "none";
-            input.addEventListener("input", () => {
-              const val = input.value.trim().toLowerCase();
-              suggestList.empty();
-              if (val.length === 0) {
-                suggestList.style.display = "none";
-                return;
-              }
-              const matches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
-              if (matches.length === 0) {
-                suggestList.style.display = "none";
-                return;
-              }
-              suggestList.style.display = "block";
-              for (const name of matches) {
-                const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
-                opt.addEventListener("click", () => {
-                  input.value = name;
+          container.createEl("div", { text: "\uAC10\uC9C0\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
+          for (const label of lastMeeting.available_labels) {
+            const displayName = lastMeeting.speaker_map[label] || label;
+            const row = container.createDiv({ cls: "meetnote-speaker-row" });
+            row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
+            if (displayName.startsWith("\uD654\uC790")) {
+              const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
+              const input = inputWrapper.createEl("input", {
+                type: "text",
+                placeholder: "\uC774\uB984",
+                cls: "meetnote-speaker-input"
+              });
+              const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
+              suggestList.style.display = "none";
+              input.addEventListener("input", () => {
+                const val = input.value.trim().toLowerCase();
+                suggestList.empty();
+                if (val.length === 0) {
                   suggestList.style.display = "none";
-                });
-              }
-            });
-            input.addEventListener("blur", () => {
-              setTimeout(() => {
-                suggestList.style.display = "none";
-              }, 200);
-            });
-            const emailInput = row.createEl("input", {
-              type: "text",
-              placeholder: "\uC774\uBA54\uC77C",
-              cls: "meetnote-speaker-input"
-            });
-            const regBtn = row.createEl("button", { text: "\uB4F1\uB85D", cls: "meetnote-register-btn" });
-            regBtn.addEventListener("click", async () => {
-              const name = input.value.trim();
-              if (!name) {
-                new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
-                return;
-              }
-              try {
-                await this.api("/speakers/register", {
-                  method: "POST",
-                  body: {
-                    speaker_label: label,
-                    name,
-                    email: emailInput.value.trim(),
-                    wav_path: lastMeeting.wav_path || this.selectedWavPath || ""
-                  }
-                });
-                new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
-                await this.render();
-              } catch {
-                new import_obsidian3.Notice("\uB4F1\uB85D \uC2E4\uD328");
-              }
-            });
-          } else {
-            row.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
+                  return;
+                }
+                const matches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+                if (matches.length === 0) {
+                  suggestList.style.display = "none";
+                  return;
+                }
+                suggestList.style.display = "block";
+                for (const name of matches) {
+                  const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
+                  opt.addEventListener("click", () => {
+                    input.value = name;
+                    suggestList.style.display = "none";
+                  });
+                }
+              });
+              input.addEventListener("blur", () => {
+                setTimeout(() => {
+                  suggestList.style.display = "none";
+                }, 200);
+              });
+              const emailInput = row.createEl("input", {
+                type: "text",
+                placeholder: "\uC774\uBA54\uC77C",
+                cls: "meetnote-speaker-input"
+              });
+              const regBtn = row.createEl("button", { text: "\uB4F1\uB85D", cls: "meetnote-register-btn" });
+              regBtn.addEventListener("click", async () => {
+                const name = input.value.trim();
+                if (!name) {
+                  new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+                  return;
+                }
+                try {
+                  await this.api("/speakers/register", {
+                    method: "POST",
+                    body: {
+                      speaker_label: label,
+                      name,
+                      email: emailInput.value.trim(),
+                      wav_path: lastMeeting.wav_path || this.selectedWavPath || ""
+                    }
+                  });
+                  new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
+                  await this.render();
+                } catch {
+                  new import_obsidian3.Notice("\uB4F1\uB85D \uC2E4\uD328");
+                }
+              });
+            } else {
+              row.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
+            }
           }
         }
+      } else {
+        container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uD654\uC790\uB97C \uB4F1\uB85D\uD558\uC138\uC694.", cls: "meetnote-empty" });
       }
       const speakersResp = await this.api("/speakers");
       const speakers = speakersResp || [];

@@ -192,8 +192,9 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 
 		try {
-			// Use selected WAV or latest
-			const wavParam = this.selectedWavPath ? `?wav_path=${encodeURIComponent(this.selectedWavPath)}` : "";
+			// Only show mapping UI when a specific recording is selected
+			if (this.selectedWavPath) {
+			const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
 			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
 			const lastMeeting: LastMeetingSpeaker = lastResp;
 
@@ -277,6 +278,9 @@ export class MeetNoteSidePanel extends ItemView {
 						row.createEl("span", { text: " ✓", cls: "meetnote-matched" });
 					}
 				}
+			}
+			} else {
+				container.createEl("p", { text: "완료된 녹음에서 '관리' 버튼을 눌러 화자를 등록하세요.", cls: "meetnote-empty" });
 			}
 
 			// Registered speakers
