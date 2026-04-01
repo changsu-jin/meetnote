@@ -272,7 +272,7 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 
 		// ── Speaker Mapping Section (document-specific) ──
-		container.createEl("h4", { text: "참석자" });
+		container.createEl("h4", { text: "회의 참석자" });
 
 		if (this.cachedNames.length === 0) {
 			this.cachedNames = await this.loadSuggestNames();

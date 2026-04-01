@@ -1057,7 +1057,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const progressBar = container.createDiv({ cls: "meetnote-progress" });
       progressBar.createDiv({ cls: "meetnote-progress-bar" });
     }
-    container.createEl("h4", { text: "\uCC38\uC11D\uC790" });
+    container.createEl("h4", { text: "\uD68C\uC758 \uCC38\uC11D\uC790" });
     if (this.cachedNames.length === 0) {
       this.cachedNames = await this.loadSuggestNames();
     }
