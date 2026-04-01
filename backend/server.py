@@ -470,6 +470,18 @@ async def get_all_recordings():
             except Exception:
                 pass
 
+        # Check for unregistered speakers
+        unregistered_speakers = 0
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text())
+                sp_map = meta.get("speaker_map", {})
+                for display in sp_map.values():
+                    if display.startswith("화자"):
+                        unregistered_speakers += 1
+            except Exception:
+                pass
+
         all_recs.append({
             "filename": f.name,
             "path": str(f.resolve()),
@@ -479,6 +491,7 @@ async def get_all_recordings():
             "processed": done_marker.exists(),
             "document_name": document_name,
             "document_path": document_path,
+            "unregistered_speakers": unregistered_speakers,
         })
 
     return {"recordings": all_recs}

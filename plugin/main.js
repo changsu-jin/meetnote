@@ -904,7 +904,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           }
           const date = new Date(rec.created * 1e3);
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`, cls: "meetnote-recording-meta" });
+          const statusIcon = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? "\u26A0" : "\u2713";
+          const statusText = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 ${statusIcon} \uBBF8\uB4F1\uB85D ${rec.unregistered_speakers}\uBA85` : `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`;
+          info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
           const mapBtn = item.createEl("button", { text: "\uAD00\uB9AC", cls: "meetnote-process-btn" });
           mapBtn.addEventListener("click", async () => {
             this.selectedWavPath = rec.path;

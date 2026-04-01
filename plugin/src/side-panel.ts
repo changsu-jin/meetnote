@@ -21,6 +21,7 @@ interface PendingRecording {
 	processed?: boolean;
 	document_name?: string;
 	document_path?: string;
+	unregistered_speakers?: number;
 }
 
 interface SpeakerInfo {
@@ -154,7 +155,11 @@ export class MeetNoteSidePanel extends ItemView {
 
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 ✓`, cls: "meetnote-recording-meta" });
+					const statusIcon = (rec.unregistered_speakers && rec.unregistered_speakers > 0) ? "⚠" : "✓";
+					const statusText = (rec.unregistered_speakers && rec.unregistered_speakers > 0)
+						? `${dateStr} · ${rec.duration_minutes}분 ${statusIcon} 미등록 ${rec.unregistered_speakers}명`
+						: `${dateStr} · ${rec.duration_minutes}분 ✓`;
+					info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
 
 					const mapBtn = item.createEl("button", { text: "관리", cls: "meetnote-process-btn" });
 					mapBtn.addEventListener("click", async () => {
