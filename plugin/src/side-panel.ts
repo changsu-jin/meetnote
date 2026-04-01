@@ -78,14 +78,34 @@ export class MeetNoteSidePanel extends ItemView {
 		container.empty();
 		container.addClass("meetnote-side-panel");
 
-		// ── Header with refresh ──
-		const headerRow = container.createDiv({ cls: "meetnote-panel-header" });
+		// ── Header: title + server status + actions ──
+		const headerSection = container.createDiv({ cls: "meetnote-header-section" });
+		const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
 		headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
-		const refreshBtn = headerRow.createEl("button", { text: "↻", cls: "meetnote-refresh-btn" });
-		refreshBtn.addEventListener("click", () => this.render());
 
-		// ── Server Status Section ──
-		await this.renderServerSection(container);
+		const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
+
+		const serverOnline = await this.checkServerHealth();
+		headerActions.createEl("span", {
+			text: serverOnline ? "●" : "●",
+			cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline",
+		});
+
+		if (serverOnline) {
+			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn" });
+			stopBtn.addEventListener("click", async () => { await this.stopServer(); await this.render(); });
+		} else {
+			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn" });
+			startBtn.addEventListener("click", async () => { await this.startServer(); setTimeout(() => this.render(), 12000); });
+		}
+
+		const dashBtn = headerActions.createEl("button", { text: "📊", cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
+		dashBtn.addEventListener("click", () => {
+			(this.app as any).commands.executeCommandById("meetnote:meeting-dashboard");
+		});
+
+		const refreshBtn = headerActions.createEl("button", { text: "↻", cls: "meetnote-header-btn" });
+		refreshBtn.addEventListener("click", () => this.render());
 
 		// ── Recording Queue Section ──
 		container.createEl("h4", { text: "대기 중" });
@@ -132,7 +152,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const baseUrl = this.getHttpBaseUrl();
 			const allResp = await this.api("/recordings/all");
 			const allRecs: PendingRecording[] = allResp.recordings || [];
-			const completed = allRecs.filter((r) => r.processed).slice(0, 5);
+			const completed = allRecs.filter((r) => r.processed).slice(0, 3);
 
 			if (completed.length > 0) {
 				container.createEl("h4", { text: "최근 회의" });

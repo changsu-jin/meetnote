@@ -1,8 +1,13 @@
+.meetnote-header-section {
+	margin-bottom: 12px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
 .meetnote-panel-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	margin-bottom: 8px;
 }
 
 .meetnote-panel-title {
@@ -10,8 +15,14 @@
 	font-size: 1.1em;
 }
 
-.meetnote-refresh-btn {
-	font-size: 1.1em;
+.meetnote-header-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.meetnote-header-btn {
+	font-size: 0.8em;
 	padding: 2px 8px;
 	cursor: pointer;
 	background: none;
@@ -19,8 +30,18 @@
 	border-radius: 4px;
 }
 
-.meetnote-refresh-btn:hover {
+.meetnote-header-btn:hover {
 	background: var(--background-modifier-hover);
+}
+
+.meetnote-status-dot-online {
+	color: var(--text-success);
+	font-size: 0.7em;
+}
+
+.meetnote-status-dot-offline {
+	color: var(--text-error);
+	font-size: 0.7em;
 }
 
 .meetnote-server-header {

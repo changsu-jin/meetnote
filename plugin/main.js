@@ -842,11 +842,34 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("meetnote-side-panel");
-    const headerRow = container.createDiv({ cls: "meetnote-panel-header" });
+    const headerSection = container.createDiv({ cls: "meetnote-header-section" });
+    const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
     headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
-    const refreshBtn = headerRow.createEl("button", { text: "\u21BB", cls: "meetnote-refresh-btn" });
+    const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
+    const serverOnline = await this.checkServerHealth();
+    headerActions.createEl("span", {
+      text: serverOnline ? "\u25CF" : "\u25CF",
+      cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline"
+    });
+    if (serverOnline) {
+      const stopBtn = headerActions.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-header-btn" });
+      stopBtn.addEventListener("click", async () => {
+        await this.stopServer();
+        await this.render();
+      });
+    } else {
+      const startBtn = headerActions.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-header-btn" });
+      startBtn.addEventListener("click", async () => {
+        await this.startServer();
+        setTimeout(() => this.render(), 12e3);
+      });
+    }
+    const dashBtn = headerActions.createEl("button", { text: "\u{1F4CA}", cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
+    dashBtn.addEventListener("click", () => {
+      this.app.commands.executeCommandById("meetnote:meeting-dashboard");
+    });
+    const refreshBtn = headerActions.createEl("button", { text: "\u21BB", cls: "meetnote-header-btn" });
     refreshBtn.addEventListener("click", () => this.render());
-    await this.renderServerSection(container);
     container.createEl("h4", { text: "\uB300\uAE30 \uC911" });
     try {
       const baseUrl = this.getHttpBaseUrl();
@@ -885,7 +908,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const baseUrl = this.getHttpBaseUrl();
       const allResp = await this.api("/recordings/all");
       const allRecs = allResp.recordings || [];
-      const completed = allRecs.filter((r) => r.processed).slice(0, 5);
+      const completed = allRecs.filter((r) => r.processed).slice(0, 3);
       if (completed.length > 0) {
         container.createEl("h4", { text: "\uCD5C\uADFC \uD68C\uC758" });
         for (const rec of completed) {
