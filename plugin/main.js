@@ -912,8 +912,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       if (recordings.length === 0) {
         container.createEl("p", { text: "\uB300\uAE30 \uC911\uC778 \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
       } else {
+        const listContainer = container.createDiv({ cls: "meetnote-recording-list" });
         for (const rec of recordings) {
-          const item = container.createDiv({ cls: "meetnote-recording-item" });
+          const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
           if (rec.document_name) {
             const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
@@ -973,11 +974,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const baseUrl = this.getHttpBaseUrl();
       const allResp = await this.api("/recordings/all");
       const allRecs = allResp.recordings || [];
-      const completed = allRecs.filter((r) => r.processed).slice(0, 3);
+      const completed = allRecs.filter((r) => r.processed).slice(0, 10);
       if (completed.length > 0) {
         container.createEl("h4", { text: "\uCD5C\uADFC \uD68C\uC758" });
+        const completedList = container.createDiv({ cls: "meetnote-recording-list" });
         for (const rec of completed) {
-          const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
+          const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
           if (rec.document_name) {
             const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });

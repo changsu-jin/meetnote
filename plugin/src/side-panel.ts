@@ -132,8 +132,9 @@ export class MeetNoteSidePanel extends ItemView {
 			if (recordings.length === 0) {
 				container.createEl("p", { text: "대기 중인 녹음이 없습니다.", cls: "meetnote-empty" });
 			} else {
+				const listContainer = container.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of recordings) {
-					const item = container.createDiv({ cls: "meetnote-recording-item" });
+					const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
 
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
 					if (rec.document_name) {
@@ -195,12 +196,13 @@ export class MeetNoteSidePanel extends ItemView {
 			const baseUrl = this.getHttpBaseUrl();
 			const allResp = await this.api("/recordings/all");
 			const allRecs: PendingRecording[] = allResp.recordings || [];
-			const completed = allRecs.filter((r) => r.processed).slice(0, 3);
+			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
 
 			if (completed.length > 0) {
 				container.createEl("h4", { text: "최근 회의" });
+				const completedList = container.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of completed) {
-					const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
+					const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
 
 					if (rec.document_name) {
