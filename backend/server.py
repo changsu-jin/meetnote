@@ -1051,16 +1051,26 @@ def _get_gitlab_url(file_path: str) -> str:
         )
         branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
 
-        # Convert SSH/HTTPS remote to web URL
+        # Convert SSH/HTTPS remote to web URL (strip port, force https)
+        # ssh://git@gitlab.com:2201/group/repo.git → https://gitlab.com/group/repo
         # git@gitlab.com:group/repo.git → https://gitlab.com/group/repo
-        # https://gitlab.com/group/repo.git → https://gitlab.com/group/repo
+        # https://gitlab.com:8443/group/repo.git → https://gitlab.com/group/repo
         import re
         web_url = remote_url
-        ssh_match = re.match(r"git@([^:]+):(.+?)(?:\.git)?$", remote_url)
-        if ssh_match:
-            web_url = f"https://{ssh_match.group(1)}/{ssh_match.group(2)}"
+
+        # ssh://git@host:port/path.git
+        ssh_url_match = re.match(r"ssh://git@([^:/]+)(?::\d+)?/(.+?)(?:\.git)?$", remote_url)
+        if ssh_url_match:
+            web_url = f"https://{ssh_url_match.group(1)}/{ssh_url_match.group(2)}"
         else:
-            web_url = re.sub(r"\.git$", "", web_url)
+            # git@host:path.git
+            ssh_match = re.match(r"git@([^:]+):(.+?)(?:\.git)?$", remote_url)
+            if ssh_match:
+                web_url = f"https://{ssh_match.group(1)}/{ssh_match.group(2)}"
+            else:
+                # https://host:port/path.git → https://host/path
+                web_url = re.sub(r":\d+/", "/", web_url)
+                web_url = re.sub(r"\.git$", "", web_url)
 
         # Relative path from git root to file
         rel_path = Path(file_path).relative_to(current)
