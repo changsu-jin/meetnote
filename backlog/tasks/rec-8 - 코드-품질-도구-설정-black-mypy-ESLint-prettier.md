@@ -4,10 +4,11 @@ title: '코드 품질 도구 설정 (black, mypy, ESLint, prettier)'
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:40'
+updated_date: '2026-04-01 16:56'
 labels: []
 milestone: m-2
 dependencies: []
-priority: high
+priority: low
 ---
 
 ## Description

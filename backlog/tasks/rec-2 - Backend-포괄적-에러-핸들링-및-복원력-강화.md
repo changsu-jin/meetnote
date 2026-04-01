@@ -4,10 +4,11 @@ title: Backend 포괄적 에러 핸들링 및 복원력 강화
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:38'
+updated_date: '2026-04-01 16:56'
 labels: []
 milestone: m-1
 dependencies: []
-priority: high
+priority: medium
 ---
 
 ## Description

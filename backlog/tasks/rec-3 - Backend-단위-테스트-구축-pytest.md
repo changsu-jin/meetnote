@@ -4,10 +4,11 @@ title: Backend 단위 테스트 구축 (pytest)
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:39'
+updated_date: '2026-04-01 16:56'
 labels: []
 milestone: m-1
 dependencies: []
-priority: high
+priority: medium
 ---
 
 ## Description

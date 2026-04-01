@@ -4,10 +4,11 @@ title: 구조화된 로깅 및 관찰가능성 구축
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:39'
+updated_date: '2026-04-01 16:56'
 labels: []
 milestone: m-2
 dependencies: []
-priority: high
+priority: low
 ---
 
 ## Description
