@@ -876,6 +876,36 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     } catch (err) {
       container.createEl("p", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-error" });
     }
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const allResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/recordings/all`, method: "GET" });
+      const allRecs = allResp.json.recordings || [];
+      const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+      if (completed.length > 0) {
+        container.createEl("h4", { text: "\uC644\uB8CC\uB41C \uB179\uC74C" });
+        for (const rec of completed) {
+          const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
+          const info = item.createDiv({ cls: "meetnote-recording-info" });
+          if (rec.document_name) {
+            const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+            titleEl.addEventListener("click", async (e) => {
+              e.preventDefault();
+              const docPath = rec.document_path || "";
+              if (docPath) {
+                const file = this.app.vault.getAbstractFileByPath(docPath);
+                if (file) {
+                  await this.app.workspace.getLeaf().openFile(file);
+                }
+              }
+            });
+          }
+          const date = new Date(rec.created * 1e3);
+          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`, cls: "meetnote-recording-meta" });
+        }
+      }
+    } catch {
+    }
     if (this.processing) {
       container.createEl("h4", { text: "\uCC98\uB9AC \uC911..." });
       const progressBar = container.createDiv({ cls: "meetnote-progress" });

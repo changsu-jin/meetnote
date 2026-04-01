@@ -321,11 +321,24 @@ async def get_all_recordings():
     if not recordings_dir.exists():
         return {"recordings": []}
 
+    import json as _json
     all_recs = []
     for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
         done_marker = f.with_suffix(".done")
         stat = f.stat()
         duration_est = stat.st_size / (16000 * 2)
+
+        meta_path = f.with_suffix(".meta.json")
+        document_name = ""
+        document_path = ""
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text())
+                document_name = meta.get("document_name", "")
+                document_path = meta.get("document_path", "")
+            except Exception:
+                pass
+
         all_recs.append({
             "filename": f.name,
             "path": str(f.resolve()),
@@ -333,6 +346,8 @@ async def get_all_recordings():
             "duration_minutes": round(duration_est / 60, 1),
             "created": stat.st_mtime,
             "processed": done_marker.exists(),
+            "document_name": document_name,
+            "document_path": document_path,
         })
 
     return {"recordings": all_recs}

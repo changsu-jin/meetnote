@@ -122,6 +122,42 @@ export class MeetNoteSidePanel extends ItemView {
 			container.createEl("p", { text: "서버에 연결할 수 없습니다.", cls: "meetnote-error" });
 		}
 
+		// ── Completed Recordings Section ──
+		try {
+			const baseUrl = this.getHttpBaseUrl();
+			const allResp = await requestUrl({ url: `${baseUrl}/recordings/all`, method: "GET" });
+			const allRecs: PendingRecording[] = allResp.json.recordings || [];
+			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+
+			if (completed.length > 0) {
+				container.createEl("h4", { text: "완료된 녹음" });
+				for (const rec of completed) {
+					const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
+					const info = item.createDiv({ cls: "meetnote-recording-info" });
+
+					if (rec.document_name) {
+						const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+						titleEl.addEventListener("click", async (e) => {
+							e.preventDefault();
+							const docPath = rec.document_path || "";
+							if (docPath) {
+								const file = this.app.vault.getAbstractFileByPath(docPath);
+								if (file) {
+									await this.app.workspace.getLeaf().openFile(file as any);
+								}
+							}
+						});
+					}
+
+					const date = new Date(rec.created * 1000);
+					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 ✓`, cls: "meetnote-recording-meta" });
+				}
+			}
+		} catch {
+			// ignore — server might be offline
+		}
+
 		// ── Progress Section ──
 		if (this.processing) {
 			container.createEl("h4", { text: "처리 중..." });
