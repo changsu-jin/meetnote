@@ -1010,35 +1010,37 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   async checkServerHealth() {
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian3.requestUrl)({
-        url: `${baseUrl}/health`,
-        method: "GET",
-        throw: false
-      });
-      return resp.status === 200;
+      const resp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/health`, method: "GET" });
+      return resp.json?.ok === true;
     } catch {
       return false;
     }
   }
   async startServer() {
     try {
-      const { exec } = require("child_process");
+      const { spawn } = require("child_process");
       const backendDir = this.plugin.settings.backendDir || "";
       if (!backendDir) {
         new import_obsidian3.Notice("\uC124\uC815\uC5D0\uC11C \uBC31\uC5D4\uB4DC \uACBD\uB85C\uB97C \uC9C0\uC815\uD574\uC8FC\uC138\uC694.");
         return;
       }
-      const cmd = `cd "${backendDir}" && source venv/bin/activate && python3 server.py > /tmp/meetnote_server.log 2>&1 &`;
-      exec(cmd, (err) => {
-        if (err) {
-          new import_obsidian3.Notice(`\uC11C\uBC84 \uC2DC\uC791 \uC2E4\uD328: ${err.message}`);
-          console.error("[MeetNote] Server start failed:", err);
-        } else {
-          new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4... (\uC57D 10\uCD08 \uC18C\uC694)");
-        }
+      const pythonPath = `${backendDir}/venv/bin/python3`;
+      const serverPath = `${backendDir}/server.py`;
+      const child = spawn(pythonPath, [serverPath], {
+        cwd: backendDir,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"]
       });
+      const fs = require("fs");
+      const logStream = fs.createWriteStream("/tmp/meetnote_server.log");
+      child.stdout?.pipe(logStream);
+      child.stderr?.pipe(logStream);
+      child.unref();
+      new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4... (\uC57D 10\uCD08 \uC18C\uC694)");
+      setTimeout(() => this.render(), 12e3);
     } catch (err) {
       new import_obsidian3.Notice(`\uC11C\uBC84 \uC2DC\uC791 \uC2E4\uD328: ${err}`);
+      console.error("[MeetNote] Server start failed:", err);
     }
   }
   async stopServer() {

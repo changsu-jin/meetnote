@@ -1,10 +1,10 @@
 ---
 id: REC-39
 title: Obsidian 사이드패널 — 녹음 큐 관리 + 지연 후처리
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-04-01 04:07'
-updated_date: '2026-04-01 05:21'
+updated_date: '2026-04-01 05:45'
 labels:
   - ux
   - stability
@@ -26,3 +26,9 @@ priority: high
 - [ ] #4 처리 중 진행률 표시
 - [ ] #5 즉시 처리/큐 모드 설정 가능
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+## REC-39: 사이드패널 — 녹음 큐 + 서버 관리\n\n### 구현\n- `side-panel.ts`: Obsidian ItemView 사이드패널\n  - 서버 상태 표시 (● 실행 중 / ● 중지됨) + 시작/중지 버튼\n  - 미처리 녹음 큐 목록 (날짜, 시간, 크기) + 처리 시작 버튼\n  - 처리 중 진행률 표시\n  - 10초 자동 리프레시\n- `server.py`: GET /health, POST /shutdown, GET /recordings/pending, .done 마커\n- `settings.ts`: processMode (queue/immediate), backendDir\n- `main.ts`: 큐 모드 stop (WAV만 저장), 사이드패널 명령어\n- `styles.css`: 사이드패널 스타일"
+<!-- SECTION:FINAL_SUMMARY:END -->

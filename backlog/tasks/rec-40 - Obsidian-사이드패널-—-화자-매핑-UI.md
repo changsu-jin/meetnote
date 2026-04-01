@@ -1,10 +1,10 @@
 ---
 id: REC-40
 title: Obsidian 사이드패널 — 화자 매핑 UI
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-04-01 04:07'
-updated_date: '2026-04-01 05:20'
+updated_date: '2026-04-01 05:45'
 labels:
   - ux
   - feature
@@ -25,3 +25,9 @@ priority: high
 - [ ] #3 등록된 화자 조회/수정/삭제 가능
 - [ ] #4 다음 회의에서 자동 매칭 결과 표시
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+## REC-40: 사이드패널 — 화자 매핑 UI\n\n### 구현 (side-panel.ts 내 통합)\n- 최근 회의 감지 화자 목록 표시\n- 미매칭 화자(화자N): 이름/이메일 입력 → 등록 버튼 → POST /speakers/register\n- 자동 매칭된 화자: ✓ 표시\n- 등록된 화자 목록: 이름(이메일) + 삭제 버튼 → DELETE /speakers/{id}\n- 10초 자동 리프레시"
+<!-- SECTION:FINAL_SUMMARY:END -->

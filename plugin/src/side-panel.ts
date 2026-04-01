@@ -282,12 +282,8 @@ export class MeetNoteSidePanel extends ItemView {
 	private async checkServerHealth(): Promise<boolean> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const resp = await requestUrl({
-				url: `${baseUrl}/health`,
-				method: "GET",
-				throw: false,
-			} as any);
-			return resp.status === 200;
+			const resp = await requestUrl({ url: `${baseUrl}/health`, method: "GET" });
+			return resp.json?.ok === true;
 		} catch {
 			return false;
 		}
@@ -295,25 +291,35 @@ export class MeetNoteSidePanel extends ItemView {
 
 	private async startServer(): Promise<void> {
 		try {
-			const { exec } = require("child_process");
-			// Find the backend directory relative to the vault
+			const { spawn } = require("child_process");
 			const backendDir = this.plugin.settings.backendDir || "";
 			if (!backendDir) {
 				new Notice("설정에서 백엔드 경로를 지정해주세요.");
 				return;
 			}
 
-			const cmd = `cd "${backendDir}" && source venv/bin/activate && python3 server.py > /tmp/meetnote_server.log 2>&1 &`;
-			exec(cmd, (err: any) => {
-				if (err) {
-					new Notice(`서버 시작 실패: ${err.message}`);
-					console.error("[MeetNote] Server start failed:", err);
-				} else {
-					new Notice("서버를 시작합니다... (약 10초 소요)");
-				}
+			const pythonPath = `${backendDir}/venv/bin/python3`;
+			const serverPath = `${backendDir}/server.py`;
+
+			const child = spawn(pythonPath, [serverPath], {
+				cwd: backendDir,
+				detached: true,
+				stdio: ["ignore", "pipe", "pipe"],
 			});
+
+			// Write logs
+			const fs = require("fs");
+			const logStream = fs.createWriteStream("/tmp/meetnote_server.log");
+			child.stdout?.pipe(logStream);
+			child.stderr?.pipe(logStream);
+			child.unref();
+
+			new Notice("서버를 시작합니다... (약 10초 소요)");
+			// Refresh after delay
+			setTimeout(() => this.render(), 12000);
 		} catch (err) {
 			new Notice(`서버 시작 실패: ${err}`);
+			console.error("[MeetNote] Server start failed:", err);
 		}
 	}
 
