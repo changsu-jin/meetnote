@@ -627,10 +627,20 @@ async def process_file(req: ProcessFileRequest):
                 if state.speaker_db and speaker_embeddings and not skip_matching:
                     match_results = state.speaker_db.match_speakers(speaker_embeddings)
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
+                elif speaker_embeddings and skip_matching:
+                    # Generate default 화자N mapping without DB matching
+                    for idx, label in enumerate(sorted(speaker_embeddings.keys()), 1):
+                        speaker_map[label] = f"화자{idx}"
 
             await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 85.0})
         except Exception as diar_exc:
             logger.warning("Diarization skipped: %s", diar_exc)
+
+        # Ensure speaker_map has at least default 화자N for all diarized speakers
+        if diarization_segments and not speaker_map:
+            unique_speakers = sorted(set(s.speaker for s in diarization_segments))
+            for idx, label in enumerate(unique_speakers, 1):
+                speaker_map[label] = f"화자{idx}"
 
         state.last_meeting_embeddings = speaker_embeddings
         state.last_meeting_speaker_map = speaker_map
@@ -871,19 +881,21 @@ async def last_meeting_speakers(wav_path: str = ""):
         except Exception:
             pass
 
-    # Re-match against Speaker DB using embeddings (fixes stale speaker_map)
+    # Re-match against Speaker DB using embeddings (skip if requeued)
     if state.speaker_db and wav_path:
         try:
             import json as _json, numpy as np
             meta_path = Path(wav_path).with_suffix(".meta.json")
             if meta_path.exists():
                 meta = _json.loads(meta_path.read_text())
-                embs = meta.get("embeddings", {})
-                for label, emb_data in embs.items():
-                    emb = np.array(emb_data, dtype=np.float32)
-                    matched, sim = state.speaker_db.find_match(emb)
-                    if matched is not None:
-                        speaker_map[label] = matched.name
+                skip = meta.get("skip_speaker_matching", False)
+                if not skip:
+                    embs = meta.get("embeddings", {})
+                    for label, emb_data in embs.items():
+                        emb = np.array(emb_data, dtype=np.float32)
+                        matched, sim = state.speaker_db.find_match(emb)
+                        if matched is not None:
+                            speaker_map[label] = matched.name
         except Exception:
             pass
 
