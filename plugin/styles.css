@@ -91,7 +91,7 @@
 }
 
 .meetnote-recording-list {
-	max-height: 240px;
+	max-height: 180px;
 	overflow-y: auto;
 }
 
