@@ -847,13 +847,13 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     const refreshBtn = headerRow.createEl("button", { text: "\u21BB", cls: "meetnote-refresh-btn" });
     refreshBtn.addEventListener("click", () => this.render());
     await this.renderServerSection(container);
-    container.createEl("h4", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C" });
+    container.createEl("h4", { text: "\uB300\uAE30 \uC911" });
     try {
       const baseUrl = this.getHttpBaseUrl();
       const resp = await this.api("/recordings/pending");
       const recordings = resp.recordings || [];
       if (recordings.length === 0) {
-        container.createEl("p", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
+        container.createEl("p", { text: "\uB300\uAE30 \uC911\uC778 \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
       } else {
         for (const rec of recordings) {
           const item = container.createDiv({ cls: "meetnote-recording-item" });
@@ -887,7 +887,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const allRecs = allResp.recordings || [];
       const completed = allRecs.filter((r) => r.processed).slice(0, 5);
       if (completed.length > 0) {
-        container.createEl("h4", { text: "\uC644\uB8CC\uB41C \uB179\uC74C" });
+        container.createEl("h4", { text: "\uCD5C\uADFC \uD68C\uC758" });
         for (const rec of completed) {
           const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
@@ -931,7 +931,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const progressBar = container.createDiv({ cls: "meetnote-progress" });
       progressBar.createDiv({ cls: "meetnote-progress-bar" });
     }
-    container.createEl("h4", { text: "\uD654\uC790 \uB9E4\uD551" });
+    container.createEl("h4", { text: "\uCC38\uC11D\uC790" });
     if (this.cachedNames.length === 0) {
       this.cachedNames = await this.loadSuggestNames();
     }
@@ -1030,7 +1030,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       } else {
         container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
-      container.createEl("h4", { text: "\uD654\uC790 \uAC80\uC0C9" });
+      container.createEl("h4", { text: "\uB4F1\uB85D\uB41C \uD654\uC790 \uAC80\uC0C9" });
       const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
       const searchInput = searchWrapper.createEl("input", {
         type: "text",

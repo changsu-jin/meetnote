@@ -88,7 +88,7 @@ export class MeetNoteSidePanel extends ItemView {
 		await this.renderServerSection(container);
 
 		// ── Recording Queue Section ──
-		container.createEl("h4", { text: "미처리 녹음" });
+		container.createEl("h4", { text: "대기 중" });
 
 		try {
 			const baseUrl = this.getHttpBaseUrl();
@@ -96,7 +96,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const recordings: PendingRecording[] = resp.recordings || [];
 
 			if (recordings.length === 0) {
-				container.createEl("p", { text: "미처리 녹음이 없습니다.", cls: "meetnote-empty" });
+				container.createEl("p", { text: "대기 중인 녹음이 없습니다.", cls: "meetnote-empty" });
 			} else {
 				for (const rec of recordings) {
 					const item = container.createDiv({ cls: "meetnote-recording-item" });
@@ -135,7 +135,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const completed = allRecs.filter((r) => r.processed).slice(0, 5);
 
 			if (completed.length > 0) {
-				container.createEl("h4", { text: "완료된 녹음" });
+				container.createEl("h4", { text: "최근 회의" });
 				for (const rec of completed) {
 					const item = container.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
@@ -190,7 +190,7 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 
 		// ── Speaker Mapping Section (document-specific) ──
-		container.createEl("h4", { text: "화자 매핑" });
+		container.createEl("h4", { text: "참석자" });
 
 		if (this.cachedNames.length === 0) {
 			this.cachedNames = await this.loadSuggestNames();
@@ -308,7 +308,7 @@ export class MeetNoteSidePanel extends ItemView {
 			}
 
 			// ── Speaker Search Section (global DB) ──
-			container.createEl("h4", { text: "화자 검색" });
+			container.createEl("h4", { text: "등록된 화자 검색" });
 
 			const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
 			const searchInput = searchWrapper.createEl("input", {
