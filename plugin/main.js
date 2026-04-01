@@ -874,13 +874,25 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline"
     });
     if (serverOnline) {
-      const stopBtn = headerActions.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-header-btn" });
+      const isRecording = this.plugin.isRecording;
+      const recBtn = headerActions.createEl("button", {
+        text: isRecording ? "\u23F9" : "\u{1F399}",
+        cls: "meetnote-header-btn",
+        attr: { title: isRecording ? "\uB179\uC74C \uC911\uC9C0" : "\uB179\uC74C \uC2DC\uC791" }
+      });
+      recBtn.addEventListener("click", () => {
+        this.app.commands.executeCommandById(
+          isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
+        );
+        setTimeout(() => this.render(), 1e3);
+      });
+      const stopBtn = headerActions.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-header-btn", attr: { title: "\uC11C\uBC84 \uC911\uC9C0" } });
       stopBtn.addEventListener("click", async () => {
         await this.stopServer();
         await this.render();
       });
     } else {
-      const startBtn = headerActions.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-header-btn" });
+      const startBtn = headerActions.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-header-btn", attr: { title: "\uC11C\uBC84 \uC2DC\uC791" } });
       startBtn.addEventListener("click", async () => {
         await this.startServer();
         setTimeout(() => this.render(), 12e3);

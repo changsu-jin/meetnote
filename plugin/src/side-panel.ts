@@ -92,10 +92,24 @@ export class MeetNoteSidePanel extends ItemView {
 		});
 
 		if (serverOnline) {
-			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn" });
+			// Record button
+			const isRecording = this.plugin.isRecording;
+			const recBtn = headerActions.createEl("button", {
+				text: isRecording ? "⏹" : "🎙",
+				cls: "meetnote-header-btn",
+				attr: { title: isRecording ? "녹음 중지" : "녹음 시작" },
+			});
+			recBtn.addEventListener("click", () => {
+				(this.app as any).commands.executeCommandById(
+					isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
+				);
+				setTimeout(() => this.render(), 1000);
+			});
+
+			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn", attr: { title: "서버 중지" } });
 			stopBtn.addEventListener("click", async () => { await this.stopServer(); await this.render(); });
 		} else {
-			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn" });
+			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn", attr: { title: "서버 시작" } });
 			startBtn.addEventListener("click", async () => { await this.startServer(); setTimeout(() => this.render(), 12000); });
 		}
 
