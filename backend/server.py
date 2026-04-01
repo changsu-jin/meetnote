@@ -605,37 +605,23 @@ async def process_file(req: ProcessFileRequest):
                 )
                 await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 82.0})
 
-                # Check if speaker matching should be skipped (requeue)
-                skip_matching = False
-                try:
-                    import json as _jm
-                    meta_path = Path(req.file_path).with_suffix(".meta.json")
-                    if meta_path.exists():
-                        meta_data = _jm.loads(meta_path.read_text())
-                        skip_matching = meta_data.get("skip_speaker_matching", False)
-                        if skip_matching:
-                            # Keep flag — cleared when speaker is registered
-                            logger.info("Speaker matching skipped (requeue mode).")
-                except Exception:
-                    pass
-
-                if state.speaker_db and speaker_embeddings and not skip_matching:
+                # Always match against Speaker DB
+                if state.speaker_db and speaker_embeddings:
                     match_results = state.speaker_db.match_speakers(speaker_embeddings)
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
-                elif speaker_embeddings and skip_matching:
-                    # Generate default 화자N mapping without DB matching
-                    for idx, label in enumerate(sorted(speaker_embeddings.keys()), 1):
-                        speaker_map[label] = f"화자{idx}"
 
             await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 85.0})
         except Exception as diar_exc:
             logger.warning("Diarization skipped: %s", diar_exc)
 
-        # Ensure speaker_map has at least default 화자N for all diarized speakers
-        if diarization_segments and not speaker_map:
-            unique_speakers = sorted(set(s.speaker for s in diarization_segments))
-            for idx, label in enumerate(unique_speakers, 1):
-                speaker_map[label] = f"화자{idx}"
+        # Ensure all speakers have a name (never SPEAKER_XX in output)
+        if diarization_segments:
+            all_labels = sorted(set(s.speaker for s in diarization_segments))
+            unknown_idx = sum(1 for v in speaker_map.values() if v.startswith("화자"))
+            for label in all_labels:
+                if label not in speaker_map:
+                    unknown_idx += 1
+                    speaker_map[label] = f"화자{unknown_idx}"
 
         state.last_meeting_embeddings = speaker_embeddings
         state.last_meeting_speaker_map = speaker_map
@@ -816,7 +802,6 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
                 if "speaker_map" not in meta:
                     meta["speaker_map"] = {}
                 meta["speaker_map"][req.speaker_label] = req.name
-                meta.pop("skip_speaker_matching", None)  # Clear skip flag on registration
                 meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
         except Exception as exc:
             logger.warning("Failed to update speaker_map in meta: %s", exc)
@@ -1212,7 +1197,7 @@ async def requeue_recording(req: RecordingRequeueRequest):
             meta.pop("speaker_map", None)
             meta.pop("embeddings", None)
             meta.pop("manual_participants", None)
-            meta["skip_speaker_matching"] = True
+            meta.pop("skip_speaker_matching", None)
             meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
         except Exception:
             pass
@@ -1624,6 +1609,15 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
                 "stage": "diarization_skipped",
                 "percent": 85.0,
             })
+
+        # Ensure all speakers have a name (never SPEAKER_XX in output)
+        if diarization_segments:
+            all_labels = sorted(set(s.speaker for s in diarization_segments))
+            unknown_idx = sum(1 for v in speaker_map.values() if v.startswith("화자"))
+            for label in all_labels:
+                if label not in speaker_map:
+                    unknown_idx += 1
+                    speaker_map[label] = f"화자{unknown_idx}"
 
         # Store for post-hoc speaker registration
         state.last_meeting_embeddings = speaker_embeddings

@@ -287,7 +287,7 @@ export class MeetNoteSidePanel extends ItemView {
 				const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
 				const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
 				const lastMeeting: LastMeetingSpeaker = lastResp;
-				const speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement; dirty: boolean }> = [];
+				const speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
 
 				// ── 음성 인식 참석자 ──
 				// Load registered speakers for email lookup
@@ -335,15 +335,12 @@ export class MeetNoteSidePanel extends ItemView {
 								nameInput.style.display = "";
 								emailInput.style.display = "";
 								editBtn.style.display = "none";
-								const entry = { label, currentName: displayName, nameInput, emailInput, dirty: true };
-								speakerInputs.push(entry);
-								this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => { entry.dirty = true; });
+								speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+								this.addAutoSuggest(inputWrapper, nameInput, emailInput);
 							});
 						} else {
-							const entry = { label, currentName: displayName, nameInput, emailInput, dirty: false };
-							speakerInputs.push(entry);
-							nameInput.addEventListener("input", () => { entry.dirty = true; });
-							this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => { entry.dirty = true; });
+							speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+							this.addAutoSuggest(inputWrapper, nameInput, emailInput);
 						}
 					}
 				}

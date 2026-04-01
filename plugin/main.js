@@ -1108,21 +1108,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 nameInput.style.display = "";
                 emailInput.style.display = "";
                 editBtn.style.display = "none";
-                const entry = { label, currentName: displayName, nameInput, emailInput, dirty: true };
-                speakerInputs.push(entry);
-                this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => {
-                  entry.dirty = true;
-                });
+                speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+                this.addAutoSuggest(inputWrapper, nameInput, emailInput);
               });
             } else {
-              const entry = { label, currentName: displayName, nameInput, emailInput, dirty: false };
-              speakerInputs.push(entry);
-              nameInput.addEventListener("input", () => {
-                entry.dirty = true;
-              });
-              this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => {
-                entry.dirty = true;
-              });
+              speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+              this.addAutoSuggest(inputWrapper, nameInput, emailInput);
             }
           }
         }
