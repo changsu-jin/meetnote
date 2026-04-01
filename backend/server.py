@@ -1083,6 +1083,25 @@ def _get_gitlab_url(file_path: str) -> str:
         return ""
 
 
+class RecordingDeleteRequest(BaseModel):
+    """Delete a recording and all associated files."""
+    wav_path: str
+
+
+@app.post("/recordings/delete")
+async def delete_recording(req: RecordingDeleteRequest):
+    """Delete WAV + meta + done marker files."""
+    deleted = []
+    for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
+        p = Path(req.wav_path).with_suffix(suffix)
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+
+    logger.info("Deleted recording files: %s", deleted)
+    return {"ok": True, "deleted": deleted}
+
+
 @app.get("/speakers/search")
 async def search_speakers(q: str = ""):
     """Search registered speakers by name."""

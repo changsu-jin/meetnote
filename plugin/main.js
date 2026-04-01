@@ -932,8 +932,38 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
           const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
           info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \uC608\uC0C1 \uCC98\uB9AC\uC2DC\uAC04 ~${estMinutes}\uBD84`, cls: "meetnote-recording-meta" });
-          const btn = item.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
+          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+          const btn = btnGroup.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
           btn.addEventListener("click", () => this.processRecording(rec, btn));
+          const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+          delBtn.addEventListener("click", async () => {
+            const docName = rec.document_name || rec.filename;
+            const confirmed = confirm(`"${docName}" \uB179\uC74C \uBC0F \uAD00\uB828 \uD30C\uC77C\uC744 \uBAA8\uB450 \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?
+
+\uC0AD\uC81C \uB300\uC0C1:
+- \uB179\uC74C \uD30C\uC77C (WAV)
+- \uBA54\uD0C0\uB370\uC774\uD130
+- \uC5F0\uACB0\uB41C \uBB38\uC11C\uC758 MeetNote \uC139\uC158`);
+            if (!confirmed) return;
+            try {
+              await this.api("/recordings/delete", {
+                method: "POST",
+                body: { wav_path: rec.path }
+              });
+              if (rec.document_path) {
+                const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+                if (file) {
+                  await this.app.vault.process(file, (content) => {
+                    return content.replace(/<!-- meetnote-start -->[\s\S]*?<!-- meetnote-end -->/, "").replace(/^---\n[\s\S]*?\n---\n*/, "");
+                  });
+                }
+              }
+              new import_obsidian3.Notice(`${docName} \uC0AD\uC81C \uC644\uB8CC`);
+              await this.render();
+            } catch {
+              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
+            }
+          });
         }
       }
     } catch (err) {

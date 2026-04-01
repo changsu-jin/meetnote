@@ -154,8 +154,36 @@ export class MeetNoteSidePanel extends ItemView {
 					const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
 					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 · 예상 처리시간 ~${estMinutes}분`, cls: "meetnote-recording-meta" });
 
-					const btn = item.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
+					const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+					const btn = btnGroup.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
 					btn.addEventListener("click", () => this.processRecording(rec, btn));
+					const delBtn = btnGroup.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
+					delBtn.addEventListener("click", async () => {
+						const docName = rec.document_name || rec.filename;
+						const confirmed = confirm(`"${docName}" 녹음 및 관련 파일을 모두 삭제하시겠습니까?\n\n삭제 대상:\n- 녹음 파일 (WAV)\n- 메타데이터\n- 연결된 문서의 MeetNote 섹션`);
+						if (!confirmed) return;
+						try {
+							await this.api("/recordings/delete", {
+								method: "POST",
+								body: { wav_path: rec.path },
+							});
+							// Delete meetnote section from vault document
+							if (rec.document_path) {
+								const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+								if (file) {
+									await this.app.vault.process(file as any, (content) => {
+										return content
+											.replace(/<!-- meetnote-start -->[\s\S]*?<!-- meetnote-end -->/, "")
+											.replace(/^---\n[\s\S]*?\n---\n*/, "");
+									});
+								}
+							}
+							new Notice(`${docName} 삭제 완료`);
+							await this.render();
+						} catch {
+							new Notice("삭제 실패");
+						}
+					});
 				}
 			}
 		} catch (err) {
