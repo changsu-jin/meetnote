@@ -893,6 +893,71 @@ async def reassign_speaker(req: SpeakerReassignRequest):
     }
 
 
+class ManualParticipantRequest(BaseModel):
+    """Add a participant who wasn't detected by diarization."""
+    wav_path: str
+    name: str
+    email: str = ""
+
+
+@app.post("/participants/add")
+async def add_manual_participant(req: ManualParticipantRequest):
+    """Add a manual participant to the recording's meta file."""
+    import json as _json
+    meta_path = Path(req.wav_path).with_suffix(".meta.json")
+    if not meta_path.exists():
+        return {"ok": False, "message": "Meta file not found"}
+
+    try:
+        meta = _json.loads(meta_path.read_text())
+        if "manual_participants" not in meta:
+            meta["manual_participants"] = []
+
+        # Avoid duplicates
+        existing = {p["name"] for p in meta["manual_participants"]}
+        if req.name in existing:
+            return {"ok": False, "message": f"'{req.name}' 이미 추가됨"}
+
+        meta["manual_participants"].append({"name": req.name, "email": req.email})
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        return {"ok": True, "name": req.name}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+@app.post("/participants/remove")
+async def remove_manual_participant(req: ManualParticipantRequest):
+    """Remove a manual participant from the recording's meta file."""
+    import json as _json
+    meta_path = Path(req.wav_path).with_suffix(".meta.json")
+    if not meta_path.exists():
+        return {"ok": False, "message": "Meta file not found"}
+
+    try:
+        meta = _json.loads(meta_path.read_text())
+        participants = meta.get("manual_participants", [])
+        meta["manual_participants"] = [p for p in participants if p["name"] != req.name]
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+@app.get("/participants/manual")
+async def get_manual_participants(wav_path: str):
+    """Get manual participants for a recording."""
+    import json as _json
+    meta_path = Path(wav_path).with_suffix(".meta.json")
+    if not meta_path.exists():
+        return {"participants": []}
+
+    try:
+        meta = _json.loads(meta_path.read_text())
+        return {"participants": meta.get("manual_participants", [])}
+    except Exception:
+        return {"participants": []}
+
+
 @app.get("/speakers/search")
 async def search_speakers(q: str = ""):
     """Search registered speakers by name."""

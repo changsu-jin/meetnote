@@ -304,7 +304,71 @@ export class MeetNoteSidePanel extends ItemView {
 					});
 				}
 			} else {
-				container.createEl("p", { text: "완료된 녹음에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
+				container.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
+			}
+
+			// ── Manual Participants ──
+			if (this.selectedWavPath) {
+				container.createEl("div", { text: "참석자 추가 (음성 미감지)", cls: "meetnote-subsection" });
+
+				// Show existing manual participants
+				try {
+					const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+					const manualList: Array<{ name: string; email: string }> = manualResp.participants || [];
+
+					for (const p of manualList) {
+						const row = container.createDiv({ cls: "meetnote-speaker-row" });
+						row.createEl("span", { text: `${p.name}${p.email ? ` (${p.email})` : ""} 👤`, cls: "meetnote-speaker-name" });
+						const removeBtn = row.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
+						removeBtn.addEventListener("click", async () => {
+							await this.api("/participants/remove", {
+								method: "POST",
+								body: { wav_path: this.selectedWavPath, name: p.name },
+							});
+							// Update document: remove from participants
+							await this.updateDocumentParticipants();
+							new Notice(`${p.name} 제거됨`);
+							await this.render();
+						});
+					}
+				} catch { /* ignore */ }
+
+				// Add form
+				const addRow = container.createDiv({ cls: "meetnote-speaker-row" });
+				const addWrapper = addRow.createDiv({ cls: "meetnote-input-wrapper" });
+				const addInput = addWrapper.createEl("input", {
+					type: "text",
+					placeholder: "이름",
+					cls: "meetnote-speaker-input",
+				});
+				const addEmailInput = addRow.createEl("input", {
+					type: "text",
+					placeholder: "이메일",
+					cls: "meetnote-speaker-input",
+				});
+				this.addAutoSuggest(addWrapper, addInput, addEmailInput);
+
+				const addBtn = addRow.createEl("button", { text: "추가", cls: "meetnote-register-btn" });
+				addBtn.addEventListener("click", async () => {
+					const name = addInput.value.trim();
+					if (!name) { new Notice("이름을 입력하세요."); return; }
+					try {
+						const resp = await this.api("/participants/add", {
+							method: "POST",
+							body: { wav_path: this.selectedWavPath, name, email: addEmailInput.value.trim() },
+						});
+						if (resp.ok) {
+							// Update document frontmatter
+							await this.updateDocumentParticipants();
+							new Notice(`${name} 추가됨`);
+							await this.render();
+						} else {
+							new Notice(resp.message || "추가 실패");
+						}
+					} catch {
+						new Notice("추가 실패");
+					}
+				});
 			}
 
 			// ── Speaker Search Section (global DB) ──
@@ -484,6 +548,51 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/** Update document's participants list from meta (auto + manual) */
+	private async updateDocumentParticipants(): Promise<void> {
+		const docPath = await this.getSelectedDocPath();
+		if (!docPath) return;
+
+		const file = this.app.vault.getAbstractFileByPath(docPath);
+		if (!file) return;
+
+		try {
+			// Get all participants (auto-detected + manual)
+			const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+			const autoNames = Object.values(lastResp.speaker_map || {}) as string[];
+
+			const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+			const manualNames = (manualResp.participants || []).map((p: any) => p.name);
+
+			const allParticipants = [...new Set([...autoNames, ...manualNames])];
+
+			await this.app.vault.process(file as any, (content) => {
+				// Update frontmatter participants
+				const fmMatch = content.match(/^(---\n[\s\S]*?\n---)/);
+				if (!fmMatch) return content;
+
+				let fm = fmMatch[1];
+				// Replace participants section
+				const partLines = allParticipants.map((n) => `  - ${n}`).join("\n");
+				if (fm.includes("participants:")) {
+					fm = fm.replace(/participants:\n(?:\s+-\s+.+\n?)*/,
+						`participants:\n${partLines}\n`);
+				}
+
+				// Update > 참석자: line in body
+				const participantStr = allParticipants.join(", ");
+				const updated = content.replace(fmMatch[1], fm)
+					.replace(/> 참석자: .+/,
+						`> 참석자: ${participantStr} (자동 감지 ${autoNames.length}명, 수동 ${manualNames.length}명)`);
+
+				return updated;
+			});
+		} catch (err) {
+			console.error("[MeetNote] Failed to update participants:", err);
+		}
 	}
 
 	/** Add auto-suggest dropdown to a name input */

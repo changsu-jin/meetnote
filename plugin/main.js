@@ -1028,7 +1028,65 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           });
         }
       } else {
-        container.createEl("p", { text: "\uC644\uB8CC\uB41C \uB179\uC74C\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
+        container.createEl("p", { text: "\uCD5C\uADFC \uD68C\uC758\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
+      }
+      if (this.selectedWavPath) {
+        container.createEl("div", { text: "\uCC38\uC11D\uC790 \uCD94\uAC00 (\uC74C\uC131 \uBBF8\uAC10\uC9C0)", cls: "meetnote-subsection" });
+        try {
+          const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+          const manualList = manualResp.participants || [];
+          for (const p of manualList) {
+            const row = container.createDiv({ cls: "meetnote-speaker-row" });
+            row.createEl("span", { text: `${p.name}${p.email ? ` (${p.email})` : ""} \u{1F464}`, cls: "meetnote-speaker-name" });
+            const removeBtn = row.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+            removeBtn.addEventListener("click", async () => {
+              await this.api("/participants/remove", {
+                method: "POST",
+                body: { wav_path: this.selectedWavPath, name: p.name }
+              });
+              await this.updateDocumentParticipants();
+              new import_obsidian3.Notice(`${p.name} \uC81C\uAC70\uB428`);
+              await this.render();
+            });
+          }
+        } catch {
+        }
+        const addRow = container.createDiv({ cls: "meetnote-speaker-row" });
+        const addWrapper = addRow.createDiv({ cls: "meetnote-input-wrapper" });
+        const addInput = addWrapper.createEl("input", {
+          type: "text",
+          placeholder: "\uC774\uB984",
+          cls: "meetnote-speaker-input"
+        });
+        const addEmailInput = addRow.createEl("input", {
+          type: "text",
+          placeholder: "\uC774\uBA54\uC77C",
+          cls: "meetnote-speaker-input"
+        });
+        this.addAutoSuggest(addWrapper, addInput, addEmailInput);
+        const addBtn = addRow.createEl("button", { text: "\uCD94\uAC00", cls: "meetnote-register-btn" });
+        addBtn.addEventListener("click", async () => {
+          const name = addInput.value.trim();
+          if (!name) {
+            new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+            return;
+          }
+          try {
+            const resp = await this.api("/participants/add", {
+              method: "POST",
+              body: { wav_path: this.selectedWavPath, name, email: addEmailInput.value.trim() }
+            });
+            if (resp.ok) {
+              await this.updateDocumentParticipants();
+              new import_obsidian3.Notice(`${name} \uCD94\uAC00\uB428`);
+              await this.render();
+            } else {
+              new import_obsidian3.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
+            }
+          } catch {
+            new import_obsidian3.Notice("\uCD94\uAC00 \uC2E4\uD328");
+          }
+        });
       }
       container.createEl("h4", { text: "\uB4F1\uB85D\uB41C \uCC38\uC11D\uC790" });
       container.createEl("p", { text: "\uC774\uC804 \uD68C\uC758\uC5D0\uC11C \uC74C\uC131\uC774 \uB4F1\uB85D\uB41C \uCC38\uC11D\uC790\uC785\uB2C8\uB2E4. \uB2E4\uC74C \uD68C\uC758 \uC2DC \uC790\uB3D9\uC73C\uB85C \uC778\uC2DD\uB429\uB2C8\uB2E4.", cls: "meetnote-section-desc" });
@@ -1176,6 +1234,43 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /** Update document's participants list from meta (auto + manual) */
+  async updateDocumentParticipants() {
+    const docPath = await this.getSelectedDocPath();
+    if (!docPath) return;
+    const file = this.app.vault.getAbstractFileByPath(docPath);
+    if (!file) return;
+    try {
+      const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+      const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+      const autoNames = Object.values(lastResp.speaker_map || {});
+      const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+      const manualNames = (manualResp.participants || []).map((p) => p.name);
+      const allParticipants = [.../* @__PURE__ */ new Set([...autoNames, ...manualNames])];
+      await this.app.vault.process(file, (content) => {
+        const fmMatch = content.match(/^(---\n[\s\S]*?\n---)/);
+        if (!fmMatch) return content;
+        let fm = fmMatch[1];
+        const partLines = allParticipants.map((n) => `  - ${n}`).join("\n");
+        if (fm.includes("participants:")) {
+          fm = fm.replace(
+            /participants:\n(?:\s+-\s+.+\n?)*/,
+            `participants:
+${partLines}
+`
+          );
+        }
+        const participantStr = allParticipants.join(", ");
+        const updated = content.replace(fmMatch[1], fm).replace(
+          /> 참석자: .+/,
+          `> \uCC38\uC11D\uC790: ${participantStr} (\uC790\uB3D9 \uAC10\uC9C0 ${autoNames.length}\uBA85, \uC218\uB3D9 ${manualNames.length}\uBA85)`
+        );
+        return updated;
+      });
+    } catch (err) {
+      console.error("[MeetNote] Failed to update participants:", err);
+    }
   }
   /** Add auto-suggest dropdown to a name input */
   addAutoSuggest(wrapper, nameInput, emailInput) {
