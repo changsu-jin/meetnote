@@ -617,9 +617,7 @@ async def process_file(req: ProcessFileRequest):
                         meta_data = _jm.loads(meta_path.read_text())
                         skip_matching = meta_data.get("skip_speaker_matching", False)
                         if skip_matching:
-                            # Clear the flag after reading
-                            meta_data.pop("skip_speaker_matching", None)
-                            meta_path.write_text(_jm.dumps(meta_data, ensure_ascii=False))
+                            # Keep flag — cleared when speaker is registered
                             logger.info("Speaker matching skipped (requeue mode).")
                 except Exception:
                     pass
@@ -821,6 +819,7 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
                 if "speaker_map" not in meta:
                     meta["speaker_map"] = {}
                 meta["speaker_map"][req.speaker_label] = req.name
+                meta.pop("skip_speaker_matching", None)  # Clear skip flag on registration
                 meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
         except Exception as exc:
             logger.warning("Failed to update speaker_map in meta: %s", exc)
