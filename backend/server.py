@@ -166,16 +166,23 @@ def _write_result_to_vault(
         end_idx = existing.find(end_marker)
 
         if start_idx != -1 and end_idx != -1:
+            # Include the end marker itself in the replacement
+            end_idx_full = end_idx + len(end_marker)
             new_content = (
                 existing[:start_idx] +
                 start_marker + "\n\n" +
                 content + "\n" +
-                existing[end_idx:]
+                end_marker + "\n" +
+                existing[end_idx_full:]
             )
         else:
-            new_content = existing + "\n\n" + content
+            new_content = existing + "\n\n" + start_marker + "\n\n" + content + "\n" + end_marker + "\n"
     else:
-        new_content = content
+        new_content = start_marker + "\n\n" + content + "\n" + end_marker + "\n"
+
+    # Clean up any leftover live markers
+    new_content = new_content.replace("<!-- meetnote-live-start -->", "")
+    new_content = new_content.replace("<!-- meetnote-live-end -->", "")
 
     vault_path.write_text(new_content, encoding="utf-8")
 
