@@ -15,6 +15,9 @@ export interface MeetNoteSettings {
 	autoLinkEnabled: boolean;
 	processMode: "immediate" | "queue";
 	backendDir: string;
+	participantSuggestPath: string;   // vault 내 참석자 자동완성 참조 폴더
+	emailFromAddress: string;         // 발신자 이메일
+	gitlabLinkEnabled: boolean;       // 이메일에 GitLab 링크 포함 여부
 }
 
 export const DEFAULT_SETTINGS: MeetNoteSettings = {
@@ -31,6 +34,9 @@ export const DEFAULT_SETTINGS: MeetNoteSettings = {
 	autoLinkEnabled: true,
 	processMode: "queue",
 	backendDir: "",
+	participantSuggestPath: "",
+	emailFromAddress: "",
+	gitlabLinkEnabled: true,
 };
 
 export class MeetNoteSettingTab extends PluginSettingTab {
@@ -163,6 +169,47 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.recordingPath)
 					.onChange(async (value) => {
 						this.plugin.settings.recordingPath = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// ── 참석자/이메일 설정 ─────────────────────────────────────────
+		containerEl.createEl("h2", { text: "참석자 / 이메일" });
+
+		new Setting(containerEl)
+			.setName("참석자 자동완성 경로")
+			.setDesc("vault 내 사용자 정보 폴더 (이름 + 이메일 자동완성에 사용)")
+			.addText((text) =>
+				text
+					.setPlaceholder("TEAM-TF/io-second-brain/내부 사용자")
+					.setValue(this.plugin.settings.participantSuggestPath)
+					.onChange(async (value) => {
+						this.plugin.settings.participantSuggestPath = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("발신자 이메일")
+			.setDesc("회의록 이메일 전송 시 From 주소")
+			.addText((text) =>
+				text
+					.setPlaceholder("your@company.com")
+					.setValue(this.plugin.settings.emailFromAddress)
+					.onChange(async (value) => {
+						this.plugin.settings.emailFromAddress = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("GitLab 링크 포함")
+			.setDesc("이메일에 회의록 문서의 GitLab URL을 자동 추출하여 포함")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.gitlabLinkEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.gitlabLinkEnabled = value;
 						await this.plugin.saveSettings();
 					})
 			);

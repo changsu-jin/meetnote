@@ -236,11 +236,22 @@ export class MeetNoteSidePanel extends ItemView {
 				if (lastMeeting.available_labels.length > 0) {
 					container.createEl("div", { text: "🎙 음성 인식", cls: "meetnote-subsection" });
 
+				const emailCheckboxes: Array<{ email: string; checkbox: HTMLInputElement }> = [];
+
 					for (const label of lastMeeting.available_labels) {
 						const displayName = lastMeeting.speaker_map[label] || label;
 						const isUnregistered = displayName.startsWith("화자");
 						const email = speakerEmailMap[displayName] || "";
 						const row = container.createDiv({ cls: "meetnote-participant-row" });
+
+						// Checkbox for email
+						const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" }) as HTMLInputElement;
+						if (email) {
+							cb.checked = true;
+							emailCheckboxes.push({ email, checkbox: cb });
+						} else {
+							cb.disabled = true;
+						}
 
 						const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
 						nameCol.createEl("span", { text: displayName });
@@ -308,6 +319,15 @@ export class MeetNoteSidePanel extends ItemView {
 
 					for (const p of manualList) {
 						const row = container.createDiv({ cls: "meetnote-participant-row" });
+
+						const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" }) as HTMLInputElement;
+						if (p.email) {
+							cb.checked = true;
+							emailCheckboxes.push({ email: p.email, checkbox: cb });
+						} else {
+							cb.disabled = true;
+						}
+
 						const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
 						nameCol.createEl("span", { text: p.name });
 						if (p.email) nameCol.createEl("span", { text: ` (${p.email})`, cls: "meetnote-speaker-email" });
@@ -337,6 +357,50 @@ export class MeetNoteSidePanel extends ItemView {
 					if (resp.ok) { await this.updateDocumentParticipants(); new Notice(`${name} 추가됨`); await this.render(); }
 					else { new Notice(resp.message || "추가 실패"); }
 				});
+
+				// ── Email send button ──
+				if (emailCheckboxes.length > 0) {
+					const emailBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const emailBtn = emailBtnRow.createEl("button", { text: "📧 선택한 참석자에게 회의록 전송", cls: "meetnote-register-btn meetnote-batch-btn" });
+					emailBtn.addEventListener("click", async () => {
+						const selected = emailCheckboxes.filter((c) => c.checkbox.checked).map((c) => c.email);
+						if (selected.length === 0) { new Notice("전송할 참석자를 선택하세요."); return; }
+
+						const fromAddress = this.plugin.settings.emailFromAddress;
+						if (!fromAddress) { new Notice("설정에서 발신자 이메일을 입력하세요."); return; }
+
+						const docPath = await this.getSelectedDocPath();
+						if (!docPath) { new Notice("문서 경로를 찾을 수 없습니다."); return; }
+
+						const adapter = this.app.vault.adapter as any;
+						const vaultFilePath = adapter.getBasePath() + "/" + docPath;
+
+						emailBtn.setText("전송 중...");
+						emailBtn.setAttribute("disabled", "true");
+
+						try {
+							const resp = await this.api("/email/send", {
+								method: "POST",
+								body: {
+									recipients: selected,
+									from_address: fromAddress,
+									vault_file_path: vaultFilePath,
+									include_gitlab_link: this.plugin.settings.gitlabLinkEnabled,
+								},
+							});
+							if (resp.ok) {
+								new Notice(`${resp.sent.length}명에게 전송 완료!`);
+							} else {
+								new Notice(`전송 실패: ${resp.failed?.length || 0}명`);
+							}
+						} catch {
+							new Notice("전송 실패: 서버 오류");
+						} finally {
+							emailBtn.setText("📧 선택한 참석자에게 회의록 전송");
+							emailBtn.removeAttribute("disabled");
+						}
+					});
+				}
 
 			} else {
 				container.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
@@ -655,7 +719,7 @@ export class MeetNoteSidePanel extends ItemView {
 
 	/** Load names and emails from vault folder for auto-suggest */
 	private async loadSuggestNames(): Promise<string[]> {
-		const folderPath = "TEAM-TF/io-second-brain/내부 사용자";
+		const folderPath = this.plugin.settings.participantSuggestPath || "TEAM-TF/io-second-brain/내부 사용자";
 		const folder = this.app.vault.getAbstractFileByPath(folderPath);
 		if (!folder) return [];
 

@@ -958,6 +958,119 @@ async def get_manual_participants(wav_path: str):
         return {"participants": []}
 
 
+class EmailSendRequest(BaseModel):
+    """Send meeting minutes via email."""
+    recipients: list[str]        # email addresses
+    from_address: str
+    vault_file_path: str         # absolute path to .md file
+    include_gitlab_link: bool = True
+
+
+@app.post("/email/send")
+async def send_email(req: EmailSendRequest):
+    """Send meeting minutes to selected participants via sendmail."""
+    import subprocess, re
+
+    vault_path = Path(req.vault_file_path)
+    if not vault_path.exists():
+        return {"ok": False, "message": "Document not found"}
+
+    content = vault_path.read_text(encoding="utf-8")
+
+    # Extract summary section (between meetnote-start and 녹취록)
+    summary_match = re.search(
+        r'<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|$)', content
+    )
+    body_text = summary_match.group(1).strip() if summary_match else content[:3000]
+
+    # Extract GitLab URL if enabled
+    gitlab_url = ""
+    if req.include_gitlab_link:
+        gitlab_url = await asyncio.to_thread(_get_gitlab_url, str(vault_path))
+
+    # Build email subject
+    doc_name = vault_path.stem
+    subject = f"[MeetNote] {doc_name}"
+
+    # Build email body
+    email_body = body_text
+    if gitlab_url:
+        email_body += f"\n\n---\n📎 문서 링크: {gitlab_url}\n"
+
+    # Send to each recipient
+    sent = []
+    failed = []
+    for recipient in req.recipients:
+        try:
+            email_msg = f"Subject: {subject}\nFrom: {req.from_address}\nTo: {recipient}\nContent-Type: text/plain; charset=utf-8\n\n{email_body}"
+            result = subprocess.run(
+                ["sendmail", "-f", req.from_address, recipient],
+                input=email_msg.encode("utf-8"),
+                capture_output=True, timeout=10,
+            )
+            if result.returncode == 0:
+                sent.append(recipient)
+            else:
+                failed.append(recipient)
+                logger.warning("sendmail failed for %s: %s", recipient, result.stderr.decode())
+        except Exception as exc:
+            failed.append(recipient)
+            logger.warning("Email send failed for %s: %s", recipient, exc)
+
+    logger.info("Email sent to %d/%d recipients.", len(sent), len(req.recipients))
+    return {"ok": len(failed) == 0, "sent": sent, "failed": failed}
+
+
+def _get_gitlab_url(file_path: str) -> str:
+    """Extract GitLab URL for a file by finding its git remote."""
+    import subprocess
+    current = Path(file_path).parent
+
+    # Walk up to find .git directory
+    while current != current.parent:
+        if (current / ".git").exists():
+            break
+        current = current.parent
+    else:
+        return ""
+
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(current), capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return ""
+
+        remote_url = result.stdout.strip()
+
+        # Get default branch
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(current), capture_output=True, text=True, timeout=5,
+        )
+        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
+
+        # Convert SSH/HTTPS remote to web URL
+        # git@gitlab.com:group/repo.git → https://gitlab.com/group/repo
+        # https://gitlab.com/group/repo.git → https://gitlab.com/group/repo
+        import re
+        web_url = remote_url
+        ssh_match = re.match(r"git@([^:]+):(.+?)(?:\.git)?$", remote_url)
+        if ssh_match:
+            web_url = f"https://{ssh_match.group(1)}/{ssh_match.group(2)}"
+        else:
+            web_url = re.sub(r"\.git$", "", web_url)
+
+        # Relative path from git root to file
+        rel_path = Path(file_path).relative_to(current)
+
+        return f"{web_url}/-/blob/{branch}/{rel_path}"
+
+    except Exception:
+        return ""
+
+
 @app.get("/speakers/search")
 async def search_speakers(q: str = ""):
     """Search registered speakers by name."""

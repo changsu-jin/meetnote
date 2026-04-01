@@ -39,7 +39,10 @@ var DEFAULT_SETTINGS = {
   autoDeleteDays: 0,
   autoLinkEnabled: true,
   processMode: "queue",
-  backendDir: ""
+  backendDir: "",
+  participantSuggestPath: "",
+  emailFromAddress: "",
+  gitlabLinkEnabled: true
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -99,6 +102,25 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("\uB179\uC74C \uC800\uC7A5 \uACBD\uB85C").setDesc("\uB179\uC74C \uD30C\uC77C\uC774 \uC800\uC7A5\uB420 \uACBD\uB85C").addText(
       (text) => text.setPlaceholder("./recordings").setValue(this.plugin.settings.recordingPath).onChange(async (value) => {
         this.plugin.settings.recordingPath = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    containerEl.createEl("h2", { text: "\uCC38\uC11D\uC790 / \uC774\uBA54\uC77C" });
+    new import_obsidian.Setting(containerEl).setName("\uCC38\uC11D\uC790 \uC790\uB3D9\uC644\uC131 \uACBD\uB85C").setDesc("vault \uB0B4 \uC0AC\uC6A9\uC790 \uC815\uBCF4 \uD3F4\uB354 (\uC774\uB984 + \uC774\uBA54\uC77C \uC790\uB3D9\uC644\uC131\uC5D0 \uC0AC\uC6A9)").addText(
+      (text) => text.setPlaceholder("TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790").setValue(this.plugin.settings.participantSuggestPath).onChange(async (value) => {
+        this.plugin.settings.participantSuggestPath = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C").setDesc("\uD68C\uC758\uB85D \uC774\uBA54\uC77C \uC804\uC1A1 \uC2DC From \uC8FC\uC18C").addText(
+      (text) => text.setPlaceholder("your@company.com").setValue(this.plugin.settings.emailFromAddress).onChange(async (value) => {
+        this.plugin.settings.emailFromAddress = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("GitLab \uB9C1\uD06C \uD3EC\uD568").setDesc("\uC774\uBA54\uC77C\uC5D0 \uD68C\uC758\uB85D \uBB38\uC11C\uC758 GitLab URL\uC744 \uC790\uB3D9 \uCD94\uCD9C\uD558\uC5EC \uD3EC\uD568").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.gitlabLinkEnabled).onChange(async (value) => {
+        this.plugin.settings.gitlabLinkEnabled = value;
         await this.plugin.saveSettings();
       })
     );
@@ -974,11 +996,19 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         }
         if (lastMeeting.available_labels.length > 0) {
           container.createEl("div", { text: "\u{1F399} \uC74C\uC131 \uC778\uC2DD", cls: "meetnote-subsection" });
+          const emailCheckboxes2 = [];
           for (const label of lastMeeting.available_labels) {
             const displayName = lastMeeting.speaker_map[label] || label;
             const isUnregistered = displayName.startsWith("\uD654\uC790");
             const email = speakerEmailMap[displayName] || "";
             const row = container.createDiv({ cls: "meetnote-participant-row" });
+            const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
+            if (email) {
+              cb.checked = true;
+              emailCheckboxes2.push({ email, checkbox: cb });
+            } else {
+              cb.disabled = true;
+            }
             const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
             nameCol.createEl("span", { text: displayName });
             if (!isUnregistered) {
@@ -1042,6 +1072,13 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const manualList = manualResp.participants || [];
           for (const p of manualList) {
             const row = container.createDiv({ cls: "meetnote-participant-row" });
+            const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
+            if (p.email) {
+              cb.checked = true;
+              emailCheckboxes.push({ email: p.email, checkbox: cb });
+            } else {
+              cb.disabled = true;
+            }
             const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
             nameCol.createEl("span", { text: p.name });
             if (p.email) nameCol.createEl("span", { text: ` (${p.email})`, cls: "meetnote-speaker-email" });
@@ -1077,6 +1114,52 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             new import_obsidian3.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
           }
         });
+        if (emailCheckboxes.length > 0) {
+          const emailBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
+          const emailBtn = emailBtnRow.createEl("button", { text: "\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1", cls: "meetnote-register-btn meetnote-batch-btn" });
+          emailBtn.addEventListener("click", async () => {
+            const selected = emailCheckboxes.filter((c) => c.checkbox.checked).map((c) => c.email);
+            if (selected.length === 0) {
+              new import_obsidian3.Notice("\uC804\uC1A1\uD560 \uCC38\uC11D\uC790\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
+              return;
+            }
+            const fromAddress = this.plugin.settings.emailFromAddress;
+            if (!fromAddress) {
+              new import_obsidian3.Notice("\uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD558\uC138\uC694.");
+              return;
+            }
+            const docPath = await this.getSelectedDocPath();
+            if (!docPath) {
+              new import_obsidian3.Notice("\uBB38\uC11C \uACBD\uB85C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+              return;
+            }
+            const adapter = this.app.vault.adapter;
+            const vaultFilePath = adapter.getBasePath() + "/" + docPath;
+            emailBtn.setText("\uC804\uC1A1 \uC911...");
+            emailBtn.setAttribute("disabled", "true");
+            try {
+              const resp = await this.api("/email/send", {
+                method: "POST",
+                body: {
+                  recipients: selected,
+                  from_address: fromAddress,
+                  vault_file_path: vaultFilePath,
+                  include_gitlab_link: this.plugin.settings.gitlabLinkEnabled
+                }
+              });
+              if (resp.ok) {
+                new import_obsidian3.Notice(`${resp.sent.length}\uBA85\uC5D0\uAC8C \uC804\uC1A1 \uC644\uB8CC!`);
+              } else {
+                new import_obsidian3.Notice(`\uC804\uC1A1 \uC2E4\uD328: ${resp.failed?.length || 0}\uBA85`);
+              }
+            } catch {
+              new import_obsidian3.Notice("\uC804\uC1A1 \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
+            } finally {
+              emailBtn.setText("\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1");
+              emailBtn.removeAttribute("disabled");
+            }
+          });
+        }
       } else {
         container.createEl("p", { text: "\uCD5C\uADFC \uD68C\uC758\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
@@ -1357,7 +1440,7 @@ ${partLines}
   }
   /** Load names and emails from vault folder for auto-suggest */
   async loadSuggestNames() {
-    const folderPath = "TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790";
+    const folderPath = this.plugin.settings.participantSuggestPath || "TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790";
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (!folder) return [];
     const names = [];
