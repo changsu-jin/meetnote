@@ -70,6 +70,27 @@ def load_config() -> dict[str, Any]:
 _config: dict[str, Any] = load_config()
 
 
+def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) -> None:
+    """Save speaker embeddings to the .meta.json alongside the WAV file."""
+    import json as _json
+    import numpy as np
+    meta_path = Path(wav_path).with_suffix(".meta.json")
+    try:
+        meta = {}
+        if meta_path.exists():
+            meta = _json.loads(meta_path.read_text())
+        # Store embeddings as lists (JSON-serializable)
+        meta["embeddings"] = {
+            label: emb.tolist() if hasattr(emb, "tolist") else list(emb)
+            for label, emb in embeddings.items()
+        }
+        meta["speaker_map"] = speaker_map
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        logger.info("Saved %d speaker embeddings to %s", len(embeddings), meta_path)
+    except Exception as exc:
+        logger.warning("Failed to save embeddings to meta: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Application state
 # ---------------------------------------------------------------------------
@@ -417,6 +438,10 @@ async def process_file(req: ProcessFileRequest):
         state.last_meeting_embeddings = speaker_embeddings
         state.last_meeting_speaker_map = speaker_map
 
+        # Persist embeddings to meta file
+        if speaker_embeddings:
+            _save_embeddings_to_meta(req.file_path, speaker_embeddings, speaker_map)
+
         # Speaking stats
         speaking_stats: list[dict] = []
         if diarization_segments:
@@ -523,13 +548,38 @@ async def list_speakers():
     ]
 
 
+class SpeakerRegisterFromFileRequest(BaseModel):
+    """Register a speaker using embedding from a specific recording's meta file."""
+    speaker_label: str
+    name: str
+    email: str = ""
+    wav_path: str = ""  # If provided, load embedding from .meta.json
+
+
 @app.post("/speakers/register")
-async def register_speaker(req: SpeakerRegisterRequest):
-    """Register a speaker using their embedding from the last meeting."""
+async def register_speaker(req: SpeakerRegisterFromFileRequest):
+    """Register a speaker using their embedding from a meeting."""
     if not state.speaker_db:
         return {"ok": False, "message": "Speaker DB not initialised"}
 
+    import numpy as np
+
+    # Try memory first, then meta file
     embedding = state.last_meeting_embeddings.get(req.speaker_label)
+
+    if embedding is None and req.wav_path:
+        # Load from meta file
+        try:
+            import json as _json
+            meta_path = Path(req.wav_path).with_suffix(".meta.json")
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text())
+                emb_data = meta.get("embeddings", {}).get(req.speaker_label)
+                if emb_data:
+                    embedding = np.array(emb_data, dtype=np.float32)
+        except Exception as exc:
+            logger.warning("Failed to load embedding from meta: %s", exc)
+
     if embedding is None:
         return {
             "ok": False,
@@ -571,11 +621,37 @@ async def delete_speaker_endpoint(speaker_id: str):
 
 
 @app.get("/speakers/last-meeting")
-async def last_meeting_speakers():
-    """Return speaker info from the last meeting (for post-hoc registration)."""
+async def last_meeting_speakers(wav_path: str = ""):
+    """Return speaker info from a meeting. If wav_path is given, load from meta file."""
+    speaker_map = dict(state.last_meeting_speaker_map)
+    available_labels = list(state.last_meeting_embeddings.keys())
+
+    # Load from meta file if wav_path provided or memory is empty
+    if wav_path or not available_labels:
+        try:
+            import json as _json
+            # Find the most recent meta file if wav_path not specified
+            if not wav_path:
+                recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+                meta_files = sorted(recordings_dir.glob("*.meta.json"), reverse=True)
+                if meta_files:
+                    wav_path = str(meta_files[0].with_suffix(".wav"))
+
+            if wav_path:
+                meta_path = Path(wav_path).with_suffix(".meta.json")
+                if meta_path.exists():
+                    meta = _json.loads(meta_path.read_text())
+                    if "embeddings" in meta:
+                        available_labels = list(meta["embeddings"].keys())
+                    if "speaker_map" in meta:
+                        speaker_map = meta["speaker_map"]
+        except Exception:
+            pass
+
     return {
-        "speaker_map": state.last_meeting_speaker_map,
-        "available_labels": list(state.last_meeting_embeddings.keys()),
+        "speaker_map": speaker_map,
+        "available_labels": available_labels,
+        "wav_path": wav_path,
     }
 
 
@@ -961,6 +1037,10 @@ async def handle_stop(ws: WebSocket):
         # Store for post-hoc speaker registration
         state.last_meeting_embeddings = speaker_embeddings
         state.last_meeting_speaker_map = speaker_map
+
+        # Persist embeddings to meta file for later registration
+        if speaker_embeddings and wav_path:
+            _save_embeddings_to_meta(wav_path, speaker_embeddings, speaker_map)
 
         # 2b-4. Compute speaking stats
         speaking_stats: list[dict] = []

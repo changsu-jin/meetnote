@@ -34,6 +34,7 @@ interface SpeakerInfo {
 interface LastMeetingSpeaker {
 	speaker_map: Record<string, string>;
 	available_labels: string[];
+	wav_path?: string;
 }
 
 export class MeetNoteSidePanel extends ItemView {
@@ -209,6 +210,7 @@ export class MeetNoteSidePanel extends ItemView {
 										speaker_label: label,
 										name,
 										email: emailInput.value.trim(),
+										wav_path: lastMeeting.wav_path || "",
 									}),
 								});
 								new Notice(`${name} 등록 완료!`);

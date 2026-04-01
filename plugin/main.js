@@ -948,7 +948,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                   body: JSON.stringify({
                     speaker_label: label,
                     name,
-                    email: emailInput.value.trim()
+                    email: emailInput.value.trim(),
+                    wav_path: lastMeeting.wav_path || ""
                   })
                 });
                 new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
