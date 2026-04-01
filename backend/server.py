@@ -1184,13 +1184,29 @@ async def update_recording_meta(req: RecordingUpdateMetaRequest):
 
 @app.post("/recordings/requeue")
 async def requeue_recording(req: RecordingRequeueRequest):
-    """Move a completed recording back to pending by removing .done marker."""
+    """Move a completed recording back to pending. Resets speaker/participant data."""
+    import json as _json
+
     done_marker = Path(req.wav_path).with_suffix(".done")
-    if done_marker.exists():
-        done_marker.unlink()
-        logger.info("Requeued recording: %s", req.wav_path)
-        return {"ok": True}
-    return {"ok": False, "message": "이미 대기 중입니다."}
+    if not done_marker.exists():
+        return {"ok": False, "message": "이미 대기 중입니다."}
+
+    done_marker.unlink()
+
+    # Reset speaker/participant data in meta
+    meta_path = Path(req.wav_path).with_suffix(".meta.json")
+    if meta_path.exists():
+        try:
+            meta = _json.loads(meta_path.read_text())
+            meta.pop("speaker_map", None)
+            meta.pop("embeddings", None)
+            meta.pop("manual_participants", None)
+            meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        except Exception:
+            pass
+
+    logger.info("Requeued recording (reset participants): %s", req.wav_path)
+    return {"ok": True}
 
 
 @app.get("/speakers/search")
