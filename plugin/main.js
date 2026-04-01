@@ -1070,10 +1070,11 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
         const lastMeeting = lastResp;
         const speakerInputs = [];
-        const allSpeakers = await this.api("/speakers") || [];
+        const rawEmailMap = lastMeeting.speaker_email_map || {};
         const speakerEmailMap = {};
-        for (const s of allSpeakers) {
-          speakerEmailMap[s.name] = s.email || "";
+        for (const label of lastMeeting.available_labels) {
+          const name = lastMeeting.speaker_map[label] || label;
+          speakerEmailMap[name] = rawEmailMap[label] || "";
         }
         const emailCheckboxes = [];
         if (lastMeeting.available_labels.length > 0) {

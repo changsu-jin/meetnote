@@ -290,10 +290,14 @@ export class MeetNoteSidePanel extends ItemView {
 				const speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
 
 				// ── 음성 인식 참석자 ──
-				// Load registered speakers for email lookup
-				const allSpeakers: SpeakerInfo[] = (await this.api("/speakers")) || [];
+				// Email map from meta (Speaker DB independent)
+				const rawEmailMap: Record<string, string> = lastMeeting.speaker_email_map || {};
 				const speakerEmailMap: Record<string, string> = {};
-				for (const s of allSpeakers) { speakerEmailMap[s.name] = s.email || ""; }
+				// Map label emails to display names
+				for (const label of lastMeeting.available_labels) {
+					const name = lastMeeting.speaker_map[label] || label;
+					speakerEmailMap[name] = rawEmailMap[label] || "";
+				}
 
 				const emailCheckboxes: Array<{ email: string; checkbox: HTMLInputElement }> = [];
 

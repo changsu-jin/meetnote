@@ -265,8 +265,25 @@ def _update_document_speaker(document_path: str, old_name: str, new_name: str) -
     logger.warning("Document not found: %s", document_path)
 
 
+def _parse_speaker_map(raw_map: dict) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse speaker_map from meta — supports both legacy (str) and rich ({name, email}) formats.
+
+    Returns (name_map, email_map).
+    """
+    name_map: dict[str, str] = {}
+    email_map: dict[str, str] = {}
+    for label, val in raw_map.items():
+        if isinstance(val, dict):
+            name_map[label] = val.get("name", "")
+            email_map[label] = val.get("email", "")
+        else:
+            name_map[label] = str(val)
+            email_map[label] = ""
+    return name_map, email_map
+
+
 def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) -> None:
-    """Save speaker embeddings to the .meta.json alongside the WAV file."""
+    """Save speaker embeddings + rich speaker_map to .meta.json."""
     import json as _json
     import numpy as np
     meta_path = Path(wav_path).with_suffix(".meta.json")
@@ -279,7 +296,17 @@ def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict)
             label: emb.tolist() if hasattr(emb, "tolist") else list(emb)
             for label, emb in embeddings.items()
         }
-        meta["speaker_map"] = speaker_map
+        # Build rich speaker_map with email from Speaker DB
+        rich_map = {}
+        for label, name in speaker_map.items():
+            email = ""
+            if state.speaker_db:
+                for p in state.speaker_db.list_speakers():
+                    if p.name == name:
+                        email = p.email or ""
+                        break
+            rich_map[label] = {"name": name, "email": email}
+        meta["speaker_map"] = rich_map
         meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
         logger.info("Saved %d speaker embeddings to %s", len(embeddings), meta_path)
     except Exception as exc:
@@ -564,7 +591,8 @@ async def get_all_recordings():
                 sp_map = meta.get("speaker_map", {})
                 embs = meta.get("embeddings", {})
                 if sp_map:
-                    for display in sp_map.values():
+                    name_map, _ = _parse_speaker_map(sp_map)
+                    for display in name_map.values():
                         if display.startswith("화자"):
                             unregistered_speakers += 1
                 elif embs:
@@ -859,10 +887,11 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
                 # Get old display name for document replacement
                 if "speaker_map" not in meta:
                     meta["speaker_map"] = {}
-                old_display_name = meta["speaker_map"].get(req.speaker_label, "")
+                old_val = meta["speaker_map"].get(req.speaker_label, "")
+                old_display_name = old_val.get("name", old_val) if isinstance(old_val, dict) else str(old_val)
 
-                # Update meta speaker_map
-                meta["speaker_map"][req.speaker_label] = req.name
+                # Update meta speaker_map (rich format)
+                meta["speaker_map"][req.speaker_label] = {"name": req.name, "email": req.email}
                 meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
                 # Update document (if old name exists and differs)
@@ -926,7 +955,10 @@ async def last_meeting_speakers(wav_path: str = ""):
                     if "embeddings" in meta:
                         available_labels = list(meta["embeddings"].keys())
                     if "speaker_map" in meta:
-                        speaker_map = meta["speaker_map"]
+                        raw = meta["speaker_map"]
+                        name_map, email_map = _parse_speaker_map(raw)
+                        speaker_map = name_map
+                        speaker_email_map = email_map
         except Exception:
             pass
 
@@ -937,6 +969,7 @@ async def last_meeting_speakers(wav_path: str = ""):
 
     return {
         "speaker_map": speaker_map,
+        "speaker_email_map": locals().get("speaker_email_map", {}),
         "available_labels": available_labels,
         "wav_path": wav_path,
     }
@@ -1008,7 +1041,7 @@ async def reassign_speaker(req: SpeakerReassignRequest):
     # Update meta speaker_map
     if "speaker_map" not in meta:
         meta["speaker_map"] = {}
-    meta["speaker_map"][req.speaker_label] = req.new_name
+    meta["speaker_map"][req.speaker_label] = {"name": req.new_name, "email": req.new_email}
     meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Update document

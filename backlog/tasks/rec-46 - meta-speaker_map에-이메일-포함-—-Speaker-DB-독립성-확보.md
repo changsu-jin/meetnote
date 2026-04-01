@@ -1,9 +1,10 @@
 ---
 id: REC-46
 title: meta speaker_map에 이메일 포함 — Speaker DB 독립성 확보
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-04-01 16:04'
+updated_date: '2026-04-01 16:25'
 labels:
   - refactor
   - data
