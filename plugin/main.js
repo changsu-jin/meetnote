@@ -1106,11 +1106,16 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 nameInput.style.display = "";
                 emailInput.style.display = "";
                 editBtn.style.display = "none";
-                speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+                const entry = { label, currentName: displayName, nameInput, emailInput, dirty: true };
+                speakerInputs.push(entry);
                 this.addAutoSuggest(inputWrapper, nameInput, emailInput);
               });
             } else {
-              speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+              const entry = { label, currentName: displayName, nameInput, emailInput, dirty: false };
+              speakerInputs.push(entry);
+              nameInput.addEventListener("input", () => {
+                entry.dirty = true;
+              });
               this.addAutoSuggest(inputWrapper, nameInput, emailInput);
             }
           }
@@ -1122,7 +1127,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
             let count = 0;
             const replacements = [];
-            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+            for (const { label, currentName, nameInput, emailInput, dirty } of speakerInputs) {
+              if (!dirty) continue;
               const newName = nameInput.value.trim();
               if (!newName) continue;
               try {
