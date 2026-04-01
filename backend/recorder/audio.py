@@ -204,6 +204,9 @@ class AudioRecorder:
         status: sd.CallbackFlags,
     ) -> None:
         """Called by sounddevice for each block of audio data."""
+        if not self._recording:
+            return  # Stop flag set — ignore further callbacks
+
         if status:
             logger.warning("Audio callback status: %s", status)
 
@@ -430,44 +433,52 @@ class AudioRecorder:
             logger.warning("No recording in progress")
             return None
 
-        # Stop mixed-mode mixer thread
+        # 1. Mark as not recording FIRST — callbacks will see this and stop writing
+        self._recording = False
+        elapsed = time.time() - self._start_time if self._start_time else 0
+
+        # 2. Close WAV file immediately (data is already on disk)
+        wav_path = None
+        if self._wav_file is not None:
+            try:
+                self._wav_file.close()
+                wav_path = self._wav_path
+            except Exception as exc:
+                logger.warning("Failed to close WAV file: %s", exc)
+            self._wav_file = None
+
+        logger.info("Recording stopped (duration=%.1fs), WAV closed.", elapsed)
+
+        # 3. Stop mixed-mode mixer thread
         if hasattr(self, "_mix_stop_event"):
             self._mix_stop_event.set()
             self._mix_thread.join(timeout=2.0)
             del self._mix_stop_event
             del self._mix_thread
 
-        # Stop and close all streams — abort to avoid blocking
-        for stream in self._streams:
-            try:
-                stream.abort()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
+        # 4. Clean up streams in background (don't block on abort)
+        streams_to_close = list(self._streams)
         self._streams.clear()
 
-        self._recording = False
-        elapsed = time.time() - self._start_time if self._start_time else 0
-        logger.info("Recording stopped (duration=%.1fs)", elapsed)
+        def _cleanup_streams():
+            for stream in streams_to_close:
+                try:
+                    stream.abort()
+                except Exception:
+                    pass
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
-        # Flush any remaining chunk data
+        cleanup_thread = threading.Thread(target=_cleanup_streams, daemon=True)
+        cleanup_thread.start()
+        # Don't wait for cleanup — it may hang, but WAV is already saved
+
+        # 5. Flush any remaining chunk data
         with self._lock:
             if self.chunk_callback is not None and self._chunk_buffer:
                 self._flush_chunk()
-
-        # Close the streaming WAV file
-        wav_path = None
-        if self._wav_file is not None:
-            try:
-                self._wav_file.close()
-                wav_path = self._wav_path
-                logger.info("WAV file closed: %s", wav_path)
-            except Exception as exc:
-                logger.warning("Failed to close WAV file: %s", exc)
-            self._wav_file = None
 
         if not save or wav_path is None:
             return None
