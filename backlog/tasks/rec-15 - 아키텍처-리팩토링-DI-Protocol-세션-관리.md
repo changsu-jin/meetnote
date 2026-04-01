@@ -4,6 +4,7 @@ title: '아키텍처 리팩토링 (DI, Protocol, 세션 관리)'
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:41'
+updated_date: '2026-04-01 16:49'
 labels: []
 milestone: m-4
 dependencies: []
@@ -13,16 +14,7 @@ priority: medium
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-FAANG 수준 아키텍처 패턴 적용.
-
-**구현 사항**:
-- 의존성 주입 (생성자 주입으로 테스트 용이성 확보)
-- typing.Protocol로 인터페이스 정의 (AudioSource, Transcriber, Diarizer)
-- 글로벌 state를 세션별 RecordingSession으로 대체 (멀티 클라이언트 지원)
-- ADR (Architectural Decision Records) 문서화
-  - ADR-001: WebSocket vs HTTP 스트리밍
-  - ADR-002: Python 백엔드 vs 올인원 플러그인
-  - ADR-003: 청크 전사 전략
+구체화: server.py 모듈화 (router 분리), process-file/handle_stop 파이프라인 통합, side-panel 컴포넌트 분리. vault 경로 하드코딩 제거.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

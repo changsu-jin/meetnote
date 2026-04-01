@@ -4,24 +4,17 @@ title: '보안 강화 (CORS, 시크릿 관리, 입력 제한)'
 status: To Do
 assignee: []
 created_date: '2026-03-27 08:40'
+updated_date: '2026-04-01 16:49'
 labels: []
 milestone: m-2
 dependencies: []
-priority: high
+priority: low
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-FAANG 수준 보안 적용.
-
-**구현 사항**:
-- CORS를 localhost만 허용으로 강화
-- HuggingFace 토큰을 환경변수로 관리 (.env, config에서 제거)
-- WebSocket 메시지 크기 제한
-- 속도 제한 (slowapi)
-- .env.example 템플릿 제공
-- 의존성 보안 감사 (pip audit, npm audit) CI 포함
+잔여 범위: CORS 제한 (현재 allow_origins=*), 입력 길이 제한. .env 시크릿 관리는 완료.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
