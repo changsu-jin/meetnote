@@ -809,7 +809,7 @@ var RecorderStatusBar = class {
 var import_obsidian3 = require("obsidian");
 var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
-  // Auto-suggest names from vault
+  // name → email mapping
   constructor(leaf, plugin) {
     super(leaf);
     this.refreshInterval = null;
@@ -820,6 +820,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     this.selectedDocName = "";
     // Document name for display
     this.cachedNames = [];
+    // Auto-suggest names from vault
+    this.nameEmailMap = {};
     this.plugin = plugin;
   }
   getViewType() {
@@ -979,6 +981,10 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                   opt.addEventListener("click", () => {
                     input.value = name;
                     suggestList.style.display = "none";
+                    const email = this.nameEmailMap[name];
+                    if (email && emailInput) {
+                      emailInput.value = email;
+                    }
                   });
                 }
               });
@@ -1164,7 +1170,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
   }
-  /** Load names from vault folder for auto-suggest */
+  /** Load names and emails from vault folder for auto-suggest */
   async loadSuggestNames() {
     const folderPath = "TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790";
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
@@ -1173,6 +1179,14 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folderPath));
     for (const file of files) {
       names.push(file.basename);
+      try {
+        const content = await this.app.vault.cachedRead(file);
+        const emailMatch = content.match(/^email:\s*(.+)$/m);
+        if (emailMatch) {
+          this.nameEmailMap[file.basename] = emailMatch[1].trim();
+        }
+      } catch {
+      }
     }
     return names;
   }

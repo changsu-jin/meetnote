@@ -46,6 +46,7 @@ export class MeetNoteSidePanel extends ItemView {
 	private selectedWavPath: string = "";  // WAV path for speaker mapping context
 	private selectedDocName: string = "";  // Document name for display
 	private cachedNames: string[] = [];    // Auto-suggest names from vault
+	private nameEmailMap: Record<string, string> = {};  // name → email mapping
 
 	constructor(leaf: WorkspaceLeaf, plugin: MeetNotePlugin) {
 		super(leaf);
@@ -246,6 +247,11 @@ export class MeetNoteSidePanel extends ItemView {
 								opt.addEventListener("click", () => {
 									input.value = name;
 									suggestList.style.display = "none";
+									// Auto-fill email
+									const email = this.nameEmailMap[name];
+									if (email && emailInput) {
+										emailInput.value = email;
+									}
 								});
 							}
 						});
@@ -461,7 +467,7 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/\/$/, "");
 	}
 
-	/** Load names from vault folder for auto-suggest */
+	/** Load names and emails from vault folder for auto-suggest */
 	private async loadSuggestNames(): Promise<string[]> {
 		const folderPath = "TEAM-TF/io-second-brain/내부 사용자";
 		const folder = this.app.vault.getAbstractFileByPath(folderPath);
@@ -471,6 +477,14 @@ export class MeetNoteSidePanel extends ItemView {
 		const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folderPath));
 		for (const file of files) {
 			names.push(file.basename);
+			// Extract email from frontmatter
+			try {
+				const content = await this.app.vault.cachedRead(file);
+				const emailMatch = content.match(/^email:\s*(.+)$/m);
+				if (emailMatch) {
+					this.nameEmailMap[file.basename] = emailMatch[1].trim();
+				}
+			} catch { /* ignore */ }
 		}
 		return names;
 	}
