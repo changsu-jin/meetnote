@@ -217,6 +217,8 @@ export class MeetNoteSidePanel extends ItemView {
 
 				container.createEl("div", { text: "감지된 화자:", cls: "meetnote-subsection" });
 
+				const speakerInputs: Array<{ label: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
+
 				for (const label of lastMeeting.available_labels) {
 					const displayName = lastMeeting.speaker_map[label] || label;
 					const row = container.createDiv({ cls: "meetnote-speaker-row" });
@@ -231,6 +233,14 @@ export class MeetNoteSidePanel extends ItemView {
 							cls: "meetnote-speaker-input",
 						});
 
+						const emailInput = row.createEl("input", {
+							type: "text",
+							placeholder: "이메일",
+							cls: "meetnote-speaker-input",
+						});
+
+						speakerInputs.push({ label, nameInput: input, emailInput });
+
 						// Auto-suggest dropdown
 						const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
 						suggestList.style.display = "none";
@@ -243,9 +253,7 @@ export class MeetNoteSidePanel extends ItemView {
 							suggestList.style.display = "none";
 							selectedIdx = -1;
 							const email = this.nameEmailMap[name];
-							if (email && emailInput) {
-								emailInput.value = email;
-							}
+							if (email) emailInput.value = email;
 						};
 
 						const updateHighlight = () => {
@@ -288,35 +296,36 @@ export class MeetNoteSidePanel extends ItemView {
 						input.addEventListener("blur", () => {
 							setTimeout(() => { suggestList.style.display = "none"; }, 200);
 						});
-
-						const emailInput = row.createEl("input", {
-							type: "text",
-							placeholder: "이메일",
-							cls: "meetnote-speaker-input",
-						});
-						const regBtn = row.createEl("button", { text: "등록", cls: "meetnote-register-btn" });
-						regBtn.addEventListener("click", async () => {
-							const name = input.value.trim();
-							if (!name) { new Notice("이름을 입력하세요."); return; }
-							try {
-								await this.api("/speakers/register", {
-									method: "POST",
-									body: {
-										speaker_label: label,
-										name,
-										email: emailInput.value.trim(),
-										wav_path: lastMeeting.wav_path || this.selectedWavPath || "",
-									},
-								});
-								new Notice(`${name} 등록 완료!`);
-								await this.render();
-							} catch {
-								new Notice("등록 실패");
-							}
-						});
 					} else {
 						row.createEl("span", { text: " ✓", cls: "meetnote-matched" });
 					}
+				}
+
+				// Batch register button
+				if (speakerInputs.length > 0) {
+					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const batchBtn = btnRow.createEl("button", { text: "일괄 등록", cls: "meetnote-register-btn meetnote-batch-btn" });
+					batchBtn.addEventListener("click", async () => {
+						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+						let registered = 0;
+						for (const { label, nameInput, emailInput } of speakerInputs) {
+							const name = nameInput.value.trim();
+							if (!name) continue;
+							try {
+								await this.api("/speakers/register", {
+									method: "POST",
+									body: { speaker_label: label, name, email: emailInput.value.trim(), wav_path: wavPath },
+								});
+								registered++;
+							} catch { /* skip failed */ }
+						}
+						if (registered > 0) {
+							new Notice(`${registered}명 등록 완료!`);
+							await this.render();
+						} else {
+							new Notice("등록할 이름을 입력하세요.");
+						}
+					});
 				}
 			}
 			} else {

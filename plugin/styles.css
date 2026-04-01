@@ -144,6 +144,16 @@
 	color: var(--text-success);
 }
 
+.meetnote-batch-register {
+	margin-top: 8px;
+	text-align: right;
+}
+
+.meetnote-batch-btn {
+	padding: 6px 16px;
+	font-weight: 600;
+}
+
 .meetnote-speaker-context {
 	font-size: 0.85em;
 	color: var(--text-accent);
