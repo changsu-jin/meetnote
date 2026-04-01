@@ -918,7 +918,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           }
           const date = new Date(rec.created * 1e3);
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84`, cls: "meetnote-recording-meta" });
+          const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
+          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \uC608\uC0C1 \uCC98\uB9AC\uC2DC\uAC04 ~${estMinutes}\uBD84`, cls: "meetnote-recording-meta" });
           const btn = item.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
           btn.addEventListener("click", () => this.processRecording(rec, btn));
         }

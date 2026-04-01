@@ -137,7 +137,8 @@ export class MeetNoteSidePanel extends ItemView {
 					}
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분`, cls: "meetnote-recording-meta" });
+					const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
+					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 · 예상 처리시간 ~${estMinutes}분`, cls: "meetnote-recording-meta" });
 
 					const btn = item.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
 					btn.addEventListener("click", () => this.processRecording(rec, btn));
