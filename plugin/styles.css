@@ -119,6 +119,40 @@
 	color: var(--text-success);
 }
 
+.meetnote-speaker-context {
+	font-size: 0.85em;
+	color: var(--text-accent);
+	padding: 4px 0;
+	margin-bottom: 4px;
+}
+
+.meetnote-input-wrapper {
+	position: relative;
+}
+
+.meetnote-suggest-list {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	z-index: 100;
+	max-height: 150px;
+	overflow-y: auto;
+}
+
+.meetnote-suggest-item {
+	padding: 4px 8px;
+	cursor: pointer;
+	font-size: 0.85em;
+}
+
+.meetnote-suggest-item:hover {
+	background: var(--background-modifier-hover);
+}
+
 .meetnote-delete-btn {
 	font-size: 0.75em;
 	padding: 2px 6px;

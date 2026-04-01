@@ -809,11 +809,17 @@ var RecorderStatusBar = class {
 var import_obsidian3 = require("obsidian");
 var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
+  // Auto-suggest names from vault
   constructor(leaf, plugin) {
     super(leaf);
     this.refreshInterval = null;
     this.processing = false;
     this.serverProcess = null;
+    this.selectedWavPath = "";
+    // WAV path for speaker mapping context
+    this.selectedDocName = "";
+    // Document name for display
+    this.cachedNames = [];
     this.plugin = plugin;
   }
   getViewType() {
@@ -828,7 +834,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   async onOpen() {
     await this.render();
     this.refreshInterval = setInterval(() => {
-      if (!this.processing) this.render();
+      const activeEl = document.activeElement;
+      const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
+      if (!this.processing && !isTyping) this.render();
     }, 1e4);
   }
   async onClose() {
@@ -902,6 +910,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const date = new Date(rec.created * 1e3);
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
           info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`, cls: "meetnote-recording-meta" });
+          const mapBtn = item.createEl("button", { text: "\uD654\uC790", cls: "meetnote-process-btn" });
+          mapBtn.addEventListener("click", () => {
+            this.selectedWavPath = rec.path;
+            this.selectedDocName = rec.document_name || rec.filename;
+            this.render();
+          });
         }
       }
     } catch {
@@ -912,21 +926,61 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       progressBar.createDiv({ cls: "meetnote-progress-bar" });
     }
     container.createEl("h4", { text: "\uD654\uC790 \uAD00\uB9AC" });
+    if (this.cachedNames.length === 0) {
+      this.cachedNames = await this.loadSuggestNames();
+    }
     try {
-      const baseUrl = this.getHttpBaseUrl();
-      const lastResp = await this.api("/speakers/last-meeting");
+      const wavParam = this.selectedWavPath ? `?wav_path=${encodeURIComponent(this.selectedWavPath)}` : "";
+      const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
       const lastMeeting = lastResp;
       if (lastMeeting.available_labels.length > 0) {
-        container.createEl("div", { text: "\uCD5C\uADFC \uD68C\uC758 \uD654\uC790:", cls: "meetnote-subsection" });
+        if (this.selectedDocName) {
+          container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+        } else if (lastMeeting.wav_path) {
+          const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
+          if (metaDocName) {
+            container.createEl("div", { text: `\u{1F4CB} ${metaDocName}`, cls: "meetnote-speaker-context" });
+          }
+        }
+        container.createEl("div", { text: "\uAC10\uC9C0\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
         for (const label of lastMeeting.available_labels) {
           const displayName = lastMeeting.speaker_map[label] || label;
           const row = container.createDiv({ cls: "meetnote-speaker-row" });
           row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
           if (displayName.startsWith("\uD654\uC790")) {
-            const input = row.createEl("input", {
+            const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
+            const input = inputWrapper.createEl("input", {
               type: "text",
               placeholder: "\uC774\uB984",
               cls: "meetnote-speaker-input"
+            });
+            const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
+            suggestList.style.display = "none";
+            input.addEventListener("input", () => {
+              const val = input.value.trim().toLowerCase();
+              suggestList.empty();
+              if (val.length === 0) {
+                suggestList.style.display = "none";
+                return;
+              }
+              const matches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+              if (matches.length === 0) {
+                suggestList.style.display = "none";
+                return;
+              }
+              suggestList.style.display = "block";
+              for (const name of matches) {
+                const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
+                opt.addEventListener("click", () => {
+                  input.value = name;
+                  suggestList.style.display = "none";
+                });
+              }
+            });
+            input.addEventListener("blur", () => {
+              setTimeout(() => {
+                suggestList.style.display = "none";
+              }, 200);
             });
             const emailInput = row.createEl("input", {
               type: "text",
@@ -947,7 +1001,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                     speaker_label: label,
                     name,
                     email: emailInput.value.trim(),
-                    wav_path: lastMeeting.wav_path || ""
+                    wav_path: lastMeeting.wav_path || this.selectedWavPath || ""
                   }
                 });
                 new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
@@ -1101,6 +1155,27 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /** Load names from vault folder for auto-suggest */
+  async loadSuggestNames() {
+    const folderPath = "TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790";
+    const folder = this.app.vault.getAbstractFileByPath(folderPath);
+    if (!folder) return [];
+    const names = [];
+    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folderPath));
+    for (const file of files) {
+      names.push(file.basename);
+    }
+    return names;
+  }
+  /** Get document name from WAV path's meta file */
+  async getDocNameFromWav(wavPath) {
+    try {
+      const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(wavPath)}`);
+      return "";
+    } catch {
+      return "";
+    }
   }
   /** Use native fetch instead of Obsidian requestUrl (works offline/no-internet) */
   async api(path, options) {

@@ -42,6 +42,9 @@ export class MeetNoteSidePanel extends ItemView {
 	private refreshInterval: ReturnType<typeof setInterval> | null = null;
 	private processing = false;
 	private serverProcess: any = null;
+	private selectedWavPath: string = "";  // WAV path for speaker mapping context
+	private selectedDocName: string = "";  // Document name for display
+	private cachedNames: string[] = [];    // Auto-suggest names from vault
 
 	constructor(leaf: WorkspaceLeaf, plugin: MeetNotePlugin) {
 		super(leaf);
@@ -62,9 +65,11 @@ export class MeetNoteSidePanel extends ItemView {
 
 	async onOpen(): Promise<void> {
 		await this.render();
-		// Auto-refresh every 10 seconds
+		// Auto-refresh every 10 seconds — skip if user is typing
 		this.refreshInterval = setInterval(() => {
-			if (!this.processing) this.render();
+			const activeEl = document.activeElement;
+			const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
+			if (!this.processing && !isTyping) this.render();
 		}, 10000);
 	}
 
@@ -153,6 +158,13 @@ export class MeetNoteSidePanel extends ItemView {
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 ✓`, cls: "meetnote-recording-meta" });
+
+					const mapBtn = item.createEl("button", { text: "화자", cls: "meetnote-process-btn" });
+					mapBtn.addEventListener("click", () => {
+						this.selectedWavPath = rec.path;
+						this.selectedDocName = rec.document_name || rec.filename;
+						this.render();
+					});
 				}
 			}
 		} catch {
@@ -169,15 +181,29 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Speaker Mapping Section ──
 		container.createEl("h4", { text: "화자 관리" });
 
-		try {
-			const baseUrl = this.getHttpBaseUrl();
+		// Load auto-suggest names from vault
+		if (this.cachedNames.length === 0) {
+			this.cachedNames = await this.loadSuggestNames();
+		}
 
-			// Last meeting speakers
-			const lastResp = await this.api("/speakers/last-meeting");
+		try {
+			// Use selected WAV or latest
+			const wavParam = this.selectedWavPath ? `?wav_path=${encodeURIComponent(this.selectedWavPath)}` : "";
+			const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
 			const lastMeeting: LastMeetingSpeaker = lastResp;
 
 			if (lastMeeting.available_labels.length > 0) {
-				container.createEl("div", { text: "최근 회의 화자:", cls: "meetnote-subsection" });
+				// Show which recording this mapping is for
+				if (this.selectedDocName) {
+					container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+				} else if (lastMeeting.wav_path) {
+					const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
+					if (metaDocName) {
+						container.createEl("div", { text: `📋 ${metaDocName}`, cls: "meetnote-speaker-context" });
+					}
+				}
+
+				container.createEl("div", { text: "감지된 화자:", cls: "meetnote-subsection" });
 
 				for (const label of lastMeeting.available_labels) {
 					const displayName = lastMeeting.speaker_map[label] || label;
@@ -185,13 +211,38 @@ export class MeetNoteSidePanel extends ItemView {
 
 					row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
 
-					// Check if already matched (not 화자N)
 					if (displayName.startsWith("화자")) {
-						const input = row.createEl("input", {
+						const inputWrapper = row.createDiv({ cls: "meetnote-input-wrapper" });
+						const input = inputWrapper.createEl("input", {
 							type: "text",
 							placeholder: "이름",
 							cls: "meetnote-speaker-input",
 						});
+
+						// Auto-suggest dropdown
+						const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
+						suggestList.style.display = "none";
+
+						input.addEventListener("input", () => {
+							const val = input.value.trim().toLowerCase();
+							suggestList.empty();
+							if (val.length === 0) { suggestList.style.display = "none"; return; }
+							const matches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+							if (matches.length === 0) { suggestList.style.display = "none"; return; }
+							suggestList.style.display = "block";
+							for (const name of matches) {
+								const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
+								opt.addEventListener("click", () => {
+									input.value = name;
+									suggestList.style.display = "none";
+								});
+							}
+						});
+
+						input.addEventListener("blur", () => {
+							setTimeout(() => { suggestList.style.display = "none"; }, 200);
+						});
+
 						const emailInput = row.createEl("input", {
 							type: "text",
 							placeholder: "이메일",
@@ -208,7 +259,7 @@ export class MeetNoteSidePanel extends ItemView {
 										speaker_label: label,
 										name,
 										email: emailInput.value.trim(),
-										wav_path: lastMeeting.wav_path || "",
+										wav_path: lastMeeting.wav_path || this.selectedWavPath || "",
 									},
 								});
 								new Notice(`${name} 등록 완료!`);
@@ -394,6 +445,31 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/** Load names from vault folder for auto-suggest */
+	private async loadSuggestNames(): Promise<string[]> {
+		const folderPath = "TEAM-TF/io-second-brain/내부 사용자";
+		const folder = this.app.vault.getAbstractFileByPath(folderPath);
+		if (!folder) return [];
+
+		const names: string[] = [];
+		const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(folderPath));
+		for (const file of files) {
+			names.push(file.basename);
+		}
+		return names;
+	}
+
+	/** Get document name from WAV path's meta file */
+	private async getDocNameFromWav(wavPath: string): Promise<string> {
+		try {
+			const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(wavPath)}`);
+			// Try to get doc name from meta
+			return "";  // API doesn't return doc name yet — use selectedDocName instead
+		} catch {
+			return "";
+		}
 	}
 
 	/** Use native fetch instead of Obsidian requestUrl (works offline/no-internet) */
