@@ -130,7 +130,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const baseUrl = this.getHttpBaseUrl();
 			const allResp = await this.api("/recordings/all");
 			const allRecs: PendingRecording[] = allResp.recordings || [];
-			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+			const completed = allRecs.filter((r) => r.processed).slice(0, 5);
 
 			if (completed.length > 0) {
 				container.createEl("h4", { text: "완료된 녹음" });

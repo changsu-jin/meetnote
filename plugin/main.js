@@ -883,7 +883,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       const baseUrl = this.getHttpBaseUrl();
       const allResp = await this.api("/recordings/all");
       const allRecs = allResp.recordings || [];
-      const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+      const completed = allRecs.filter((r) => r.processed).slice(0, 5);
       if (completed.length > 0) {
         container.createEl("h4", { text: "\uC644\uB8CC\uB41C \uB179\uC74C" });
         for (const rec of completed) {
