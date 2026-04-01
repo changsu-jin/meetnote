@@ -208,17 +208,24 @@ export class MeetNoteSidePanel extends ItemView {
 				const speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement; emailInput: HTMLInputElement }> = [];
 
 				// ── 음성 인식 참석자 ──
+				// Load registered speakers for email lookup
+				const allSpeakers: SpeakerInfo[] = (await this.api("/speakers")) || [];
+				const speakerEmailMap: Record<string, string> = {};
+				for (const s of allSpeakers) { speakerEmailMap[s.name] = s.email || ""; }
+
 				if (lastMeeting.available_labels.length > 0) {
 					container.createEl("div", { text: "🎙 음성 인식", cls: "meetnote-subsection" });
 
 					for (const label of lastMeeting.available_labels) {
 						const displayName = lastMeeting.speaker_map[label] || label;
 						const isUnregistered = displayName.startsWith("화자");
+						const email = speakerEmailMap[displayName] || "";
 						const row = container.createDiv({ cls: "meetnote-participant-row" });
 
 						const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
 						nameCol.createEl("span", { text: displayName });
 						if (!isUnregistered) {
+							if (email) nameCol.createEl("span", { text: ` (${email})`, cls: "meetnote-speaker-email" });
 							nameCol.createEl("span", { text: " ✓", cls: "meetnote-matched" });
 						}
 

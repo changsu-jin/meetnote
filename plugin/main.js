@@ -944,15 +944,22 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
         const lastMeeting = lastResp;
         const speakerInputs = [];
+        const allSpeakers = await this.api("/speakers") || [];
+        const speakerEmailMap = {};
+        for (const s of allSpeakers) {
+          speakerEmailMap[s.name] = s.email || "";
+        }
         if (lastMeeting.available_labels.length > 0) {
           container.createEl("div", { text: "\u{1F399} \uC74C\uC131 \uC778\uC2DD", cls: "meetnote-subsection" });
           for (const label of lastMeeting.available_labels) {
             const displayName = lastMeeting.speaker_map[label] || label;
             const isUnregistered = displayName.startsWith("\uD654\uC790");
+            const email = speakerEmailMap[displayName] || "";
             const row = container.createDiv({ cls: "meetnote-participant-row" });
             const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
             nameCol.createEl("span", { text: displayName });
             if (!isUnregistered) {
+              if (email) nameCol.createEl("span", { text: ` (${email})`, cls: "meetnote-speaker-email" });
               nameCol.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
             }
             const actionCol = row.createDiv({ cls: "meetnote-participant-action" });
