@@ -109,7 +109,7 @@ def _write_result_to_vault(
             sec = int(secs) % 60
             bar_w = 20
             filled = round(stat.get("ratio", 0) * bar_w)
-            bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
+            bar = "\u25A0" * filled + "\u25A1" * (bar_w - filled)
             lines.append(f"> {stat['speaker']} {pct}% {bar} ({mins}분 {sec}초)")
         lines.append("")
 

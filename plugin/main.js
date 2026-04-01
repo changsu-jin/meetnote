@@ -608,7 +608,7 @@ var MeetingWriter = class {
         const secs = Math.round(stat.total_seconds % 60);
         const barWidth = 20;
         const filled = Math.round(stat.ratio * barWidth);
-        const bar = "\u2588".repeat(filled) + "\u2591".repeat(barWidth - filled);
+        const bar = "\u25A0".repeat(filled) + "\u25A1".repeat(barWidth - filled);
         header.push(`> ${stat.speaker} ${pct}% ${bar} (${mins}\uBD84 ${secs}\uCD08)`);
       }
       header.push("");
