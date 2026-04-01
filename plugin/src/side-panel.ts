@@ -235,24 +235,53 @@ export class MeetNoteSidePanel extends ItemView {
 						const suggestList = inputWrapper.createDiv({ cls: "meetnote-suggest-list" });
 						suggestList.style.display = "none";
 
+						let selectedIdx = -1;
+						let currentMatches: string[] = [];
+
+						const selectName = (name: string) => {
+							input.value = name;
+							suggestList.style.display = "none";
+							selectedIdx = -1;
+							const email = this.nameEmailMap[name];
+							if (email && emailInput) {
+								emailInput.value = email;
+							}
+						};
+
+						const updateHighlight = () => {
+							const items = suggestList.querySelectorAll(".meetnote-suggest-item");
+							items.forEach((el, i) => {
+								(el as HTMLElement).classList.toggle("meetnote-suggest-active", i === selectedIdx);
+							});
+						};
+
 						input.addEventListener("input", () => {
 							const val = input.value.trim().toLowerCase();
 							suggestList.empty();
+							selectedIdx = -1;
 							if (val.length === 0) { suggestList.style.display = "none"; return; }
-							const matches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
-							if (matches.length === 0) { suggestList.style.display = "none"; return; }
+							currentMatches = this.cachedNames.filter((n) => n.toLowerCase().includes(val)).slice(0, 5);
+							if (currentMatches.length === 0) { suggestList.style.display = "none"; return; }
 							suggestList.style.display = "block";
-							for (const name of matches) {
+							for (const name of currentMatches) {
 								const opt = suggestList.createDiv({ text: name, cls: "meetnote-suggest-item" });
-								opt.addEventListener("click", () => {
-									input.value = name;
-									suggestList.style.display = "none";
-									// Auto-fill email
-									const email = this.nameEmailMap[name];
-									if (email && emailInput) {
-										emailInput.value = email;
-									}
-								});
+								opt.addEventListener("click", () => selectName(name));
+							}
+						});
+
+						input.addEventListener("keydown", (e: KeyboardEvent) => {
+							if (suggestList.style.display === "none" || currentMatches.length === 0) return;
+							if (e.key === "ArrowDown") {
+								e.preventDefault();
+								selectedIdx = Math.min(selectedIdx + 1, currentMatches.length - 1);
+								updateHighlight();
+							} else if (e.key === "ArrowUp") {
+								e.preventDefault();
+								selectedIdx = Math.max(selectedIdx - 1, 0);
+								updateHighlight();
+							} else if (e.key === "Enter" && selectedIdx >= 0) {
+								e.preventDefault();
+								selectName(currentMatches[selectedIdx]);
 							}
 						});
 

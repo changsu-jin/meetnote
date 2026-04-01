@@ -174,7 +174,8 @@
 	font-size: 0.85em;
 }
 
-.meetnote-suggest-item:hover {
+.meetnote-suggest-item:hover,
+.meetnote-suggest-active {
 	background: var(--background-modifier-hover);
 }
 
