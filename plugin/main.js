@@ -1132,7 +1132,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             }
             const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
             let count = 0;
-            const replacements = [];
             for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
               const newName = nameInput.value.trim();
               if (!newName || newName === currentName) continue;
@@ -1142,12 +1141,10 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 } else {
                   await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
                 }
-                replacements.push({ from: currentName, to: newName });
                 count++;
               } catch {
               }
             }
-            if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
             if (count > 0) {
               new import_obsidian3.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
               await this.render();

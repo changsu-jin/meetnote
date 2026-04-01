@@ -363,7 +363,6 @@ export class MeetNoteSidePanel extends ItemView {
 
 						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
 						let count = 0;
-						const replacements: Array<{ from: string; to: string }> = [];
 						for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
 							const newName = nameInput.value.trim();
 							if (!newName || newName === currentName) continue;
@@ -373,11 +372,10 @@ export class MeetNoteSidePanel extends ItemView {
 								} else {
 									await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
 								}
-								replacements.push({ from: currentName, to: newName });
 								count++;
 							} catch { /* skip */ }
 						}
-						if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
+						// Server handles meta + document + DB update atomically
 						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.render(); }
 						else { new Notice("변경할 이름을 입력하세요."); }
 					});

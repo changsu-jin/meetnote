@@ -228,6 +228,43 @@ def _write_result_to_vault(
     vault_path.write_text(new_content, encoding="utf-8")
 
 
+def _update_document_speaker(document_path: str, old_name: str, new_name: str) -> None:
+    """Replace a speaker name in the vault document (text + frontmatter)."""
+    import re as _re
+
+    # Resolve absolute path — document_path is relative to vault
+    # Try common vault locations
+    for base in [
+        Path.home() / "Works" / "management",
+        Path.cwd().parent,
+    ]:
+        full_path = base / document_path
+        if full_path.exists():
+            try:
+                content = full_path.read_text(encoding="utf-8")
+                updated = content
+                # Replace **old** → **new** (speaker in transcript)
+                updated = updated.replace(f"**{old_name}**", f"**{new_name}**")
+                # Replace in speaking stats: > old 45% → > new 45%
+                updated = _re.sub(rf"> {_re.escape(old_name)} ", f"> {new_name} ", updated)
+                # Replace in participants frontmatter
+                updated = updated.replace(f"  - {old_name}", f"  - {new_name}")
+                # Replace in header participants line
+                updated = _re.sub(
+                    rf"({_re.escape(old_name)})(,|\s|\()",
+                    rf"{new_name}\2",
+                    updated,
+                )
+                if updated != content:
+                    full_path.write_text(updated, encoding="utf-8")
+                    logger.info("Document updated: %s → %s in %s", old_name, new_name, document_path)
+            except Exception as exc:
+                logger.warning("Failed to update document %s: %s", document_path, exc)
+            return
+
+    logger.warning("Document not found: %s", document_path)
+
+
 def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) -> None:
     """Save speaker embeddings to the .meta.json alongside the WAV file."""
     import json as _json
@@ -792,19 +829,32 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
         embedding=embedding,
     )
 
-    # Update speaker_map in meta file
+    # Update meta + document atomically
+    old_display_name = ""
     if req.wav_path:
         try:
-            import json as _json
+            import json as _json, re as _re
             meta_path = Path(req.wav_path).with_suffix(".meta.json")
             if meta_path.exists():
                 meta = _json.loads(meta_path.read_text())
+
+                # Get old display name for document replacement
                 if "speaker_map" not in meta:
                     meta["speaker_map"] = {}
+                old_display_name = meta["speaker_map"].get(req.speaker_label, "")
+
+                # Update meta speaker_map
                 meta["speaker_map"][req.speaker_label] = req.name
                 meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+                # Update document (if old name exists and differs)
+                if old_display_name and old_display_name != req.name:
+                    doc_path = meta.get("document_path", "")
+                    if doc_path:
+                        _update_document_speaker(doc_path, old_display_name, req.name)
+
         except Exception as exc:
-            logger.warning("Failed to update speaker_map in meta: %s", exc)
+            logger.warning("Failed to update meta/document: %s", exc)
 
     return {"ok": True, "speaker": {"id": profile.id, "name": profile.name, "email": profile.email}}
 
@@ -926,6 +976,11 @@ async def reassign_speaker(req: SpeakerReassignRequest):
         meta["speaker_map"] = {}
     meta["speaker_map"][req.speaker_label] = req.new_name
     meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+    # Update document
+    doc_path = meta.get("document_path", "")
+    if doc_path and req.old_name != req.new_name:
+        _update_document_speaker(doc_path, req.old_name, req.new_name)
 
     logger.info("Speaker reassigned: %s -> %s (label=%s)", req.old_name, req.new_name, req.speaker_label)
 
