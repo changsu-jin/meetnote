@@ -212,16 +212,22 @@ export class MeetNoteSidePanel extends ItemView {
 				return name.startsWith("화자") || !registeredNames.has(name);
 			});
 
-			if (hasUnregistered && lastMeeting.available_labels.length > 0) {
-				// Show which recording this mapping is for
-				if (this.selectedDocName) {
-					container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
-				} else if (lastMeeting.wav_path) {
-					const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
-					if (metaDocName) {
-						container.createEl("div", { text: `📋 ${metaDocName}`, cls: "meetnote-speaker-context" });
-					}
+			// Always show document name when a recording is selected
+			if (this.selectedDocName) {
+				container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+			}
+
+			// Show matched speakers for this recording
+			if (lastMeeting.available_labels.length > 0 && !hasUnregistered) {
+				container.createEl("div", { text: "매칭된 화자:", cls: "meetnote-subsection" });
+				for (const label of lastMeeting.available_labels) {
+					const name = lastMeeting.speaker_map[label] || label;
+					const row = container.createDiv({ cls: "meetnote-speaker-row" });
+					row.createEl("span", { text: `${name} ✓`, cls: "meetnote-matched" });
 				}
+			}
+
+			if (hasUnregistered && lastMeeting.available_labels.length > 0) {
 
 				container.createEl("div", { text: "감지된 화자:", cls: "meetnote-subsection" });
 
@@ -380,12 +386,18 @@ export class MeetNoteSidePanel extends ItemView {
 						btnGroup.empty();
 						const saveBtn = btnGroup.createEl("button", { text: "저장", cls: "meetnote-register-btn" });
 						saveBtn.addEventListener("click", async () => {
+							const newName = nameInput.value.trim();
+							const oldName = speaker.name;
 							try {
 								await this.api(`/speakers/${speaker.id}`, {
 									method: "PUT",
-									body: { name: nameInput.value.trim(), email: emailInput.value.trim() },
+									body: { name: newName, email: emailInput.value.trim() },
 								});
-								new Notice(`${nameInput.value.trim()} 수정 완료`);
+								// Update document if name changed and a recording is selected
+								if (oldName !== newName && this.selectedWavPath) {
+									await this.updateDocumentSpeakers([{ from: oldName, to: newName }]);
+								}
+								new Notice(`${newName} 수정 완료`);
 								await this.render();
 							} catch {
 								new Notice("수정 실패");

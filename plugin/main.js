@@ -946,15 +946,18 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const name = lastMeeting.speaker_map[l] || l;
           return name.startsWith("\uD654\uC790") || !registeredNames.has(name);
         });
-        if (hasUnregistered && lastMeeting.available_labels.length > 0) {
-          if (this.selectedDocName) {
-            container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
-          } else if (lastMeeting.wav_path) {
-            const metaDocName = await this.getDocNameFromWav(lastMeeting.wav_path);
-            if (metaDocName) {
-              container.createEl("div", { text: `\u{1F4CB} ${metaDocName}`, cls: "meetnote-speaker-context" });
-            }
+        if (this.selectedDocName) {
+          container.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+        }
+        if (lastMeeting.available_labels.length > 0 && !hasUnregistered) {
+          container.createEl("div", { text: "\uB9E4\uCE6D\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
+          for (const label of lastMeeting.available_labels) {
+            const name = lastMeeting.speaker_map[label] || label;
+            const row = container.createDiv({ cls: "meetnote-speaker-row" });
+            row.createEl("span", { text: `${name} \u2713`, cls: "meetnote-matched" });
           }
+        }
+        if (hasUnregistered && lastMeeting.available_labels.length > 0) {
           container.createEl("div", { text: "\uAC10\uC9C0\uB41C \uD654\uC790:", cls: "meetnote-subsection" });
           const speakerInputs = [];
           for (const label of lastMeeting.available_labels) {
@@ -1092,12 +1095,17 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             btnGroup.empty();
             const saveBtn = btnGroup.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn" });
             saveBtn.addEventListener("click", async () => {
+              const newName = nameInput.value.trim();
+              const oldName = speaker.name;
               try {
                 await this.api(`/speakers/${speaker.id}`, {
                   method: "PUT",
-                  body: { name: nameInput.value.trim(), email: emailInput.value.trim() }
+                  body: { name: newName, email: emailInput.value.trim() }
                 });
-                new import_obsidian3.Notice(`${nameInput.value.trim()} \uC218\uC815 \uC644\uB8CC`);
+                if (oldName !== newName && this.selectedWavPath) {
+                  await this.updateDocumentSpeakers([{ from: oldName, to: newName }]);
+                }
+                new import_obsidian3.Notice(`${newName} \uC218\uC815 \uC644\uB8CC`);
                 await this.render();
               } catch {
                 new import_obsidian3.Notice("\uC218\uC815 \uC2E4\uD328");
