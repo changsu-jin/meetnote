@@ -154,6 +154,31 @@ def _write_result_to_vault(
 
     content = "\n".join(lines)
 
+    # Extract tags from summary
+    import re as _re_tags
+    tags = ["회의"]
+    tag_match = _re_tags.search(r'###\s*태그\s*\n([\s\S]*?)(?=\n###|\n##|$)', summary)
+    if tag_match:
+        found = _re_tags.findall(r'#([\w가-힣]+)', tag_match.group(1))
+        tags = list(dict.fromkeys(["회의"] + found))  # dedupe, keep order
+
+    # Build/update frontmatter
+    from datetime import date as _date
+    fm_lines = ["---"]
+    fm_lines.append("type: meeting")
+    if tags:
+        fm_lines.append("tags:")
+        for t in tags:
+            fm_lines.append(f"  - {t}")
+    fm_lines.append(f"date: {_date.today().isoformat()}")
+    if speakers:
+        fm_lines.append("participants:")
+        for s in speakers:
+            fm_lines.append(f"  - {s}")
+    fm_lines.append("---")
+    fm_lines.append("")
+    frontmatter = "\n".join(fm_lines)
+
     # Read existing file and insert/replace
     vault_path = Path(vault_file_path)
     if vault_path.exists():
@@ -193,6 +218,12 @@ def _write_result_to_vault(
     )
     # Remove duplicate blank lines
     new_content = _re.sub(r'\n{4,}', '\n\n\n', new_content)
+
+    # Update frontmatter
+    if new_content.startswith("---\n"):
+        # Replace existing frontmatter
+        new_content = _re.sub(r'^---\n[\s\S]*?\n---\n*', '', new_content)
+    new_content = frontmatter + new_content
 
     vault_path.write_text(new_content, encoding="utf-8")
 
