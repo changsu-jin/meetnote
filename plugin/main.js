@@ -1571,6 +1571,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         }
       }
     }).onProgress((stage, percent) => {
+      if (this.settings.processMode === "queue" && !this.isRecording) return;
       this.statusBar.setProgress(stage, percent);
     }).onError((message) => {
       new import_obsidian4.Notice(`MeetNote \uC624\uB958: ${message}`);

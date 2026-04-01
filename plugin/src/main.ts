@@ -74,6 +74,7 @@ export default class MeetNotePlugin extends Plugin {
 				}
 			})
 			.onProgress((stage, percent) => {
+				if (this.settings.processMode === "queue" && !this.isRecording) return;
 				this.statusBar.setProgress(stage, percent);
 			})
 			.onError((message) => {
