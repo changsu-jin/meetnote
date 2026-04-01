@@ -1376,8 +1376,8 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
         logger.info("Diarizer reused.")
 
 
-async def handle_stop(ws: WebSocket):
-    """Stop recording and run post-processing (diarization + merge)."""
+async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
+    """Stop recording. If process_mode='queue', only save WAV (skip post-processing)."""
     if not state.recording or state.recorder is None:
         await ws_send(ws, {"type": "error", "message": "No recording in progress"})
         return
@@ -1409,6 +1409,13 @@ async def handle_stop(ws: WebSocket):
         return
 
     logger.info("Recording saved to %s", wav_path)
+
+    # Queue mode: save WAV only, skip post-processing
+    if process_mode == "queue":
+        logger.info("Queue mode — skipping post-processing. WAV saved for later.")
+        await ws_send(ws, {"type": "status", "recording": False, "processing": False})
+        state.reset()
+        return
 
     # 2. Post-processing ------------------------------------------------
     state.processing = True
@@ -1606,14 +1613,14 @@ async def handle_stop(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 @app.post("/stop")
-async def http_stop():
+async def http_stop(process_mode: str = "immediate"):
     """HTTP fallback to stop recording when WebSocket is unavailable."""
     if not state.recording or state.recorder is None:
         return {"ok": False, "message": "No recording in progress"}
 
     ws = state.active_ws
     if ws:
-        await handle_stop(ws)
+        await handle_stop(ws, process_mode=process_mode)
     else:
         # No WebSocket — just stop recording and discard
         await asyncio.to_thread(state.recorder.stop, False)
@@ -1650,7 +1657,8 @@ async def websocket_endpoint(ws: WebSocket):
                 await handle_start(ws, config_overrides)
 
             elif msg_type == "stop":
-                await handle_stop(ws)
+                process_mode = data.get("process_mode", "immediate")
+                await handle_stop(ws, process_mode=process_mode)
 
             elif msg_type == "pong":
                 pass  # keep-alive response, ignore

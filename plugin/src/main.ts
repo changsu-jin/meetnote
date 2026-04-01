@@ -212,8 +212,8 @@ export default class MeetNotePlugin extends Plugin {
 			return;
 		}
 
-		// Send stop command
-		this.backendClient.sendStop();
+		// Send stop command with process mode
+		this.backendClient.sendStop(this.settings.processMode);
 		this.statusBar.stopRecording();
 		this.isRecording = false;
 		this.updateRibbonIcon();

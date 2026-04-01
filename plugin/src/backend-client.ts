@@ -228,22 +228,22 @@ export class BackendClient {
 		this.send({ type: "start", config });
 	}
 
-	sendStop(): void {
+	sendStop(processMode: string = "immediate"): void {
 		// Try WebSocket first (works even when HTTP is blocked by chunk transcription)
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-			console.log("[BackendClient] Sending stop via WebSocket");
-			this.ws.send(JSON.stringify({ type: "stop" }));
+			console.log("[BackendClient] Sending stop via WebSocket, mode:", processMode);
+			this.ws.send(JSON.stringify({ type: "stop", process_mode: processMode }));
 		} else {
 			// Fallback to HTTP
 			console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
-			this.httpStop();
+			this.httpStop(processMode);
 		}
 	}
 
-	private async httpStop(): Promise<void> {
+	private async httpStop(processMode: string = "immediate"): Promise<void> {
 		try {
 			const response = await requestUrl({
-				url: `${this.httpBaseUrl}/stop`,
+				url: `${this.httpBaseUrl}/stop?process_mode=${processMode}`,
 				method: "POST",
 			});
 			console.log("[BackendClient] HTTP stop response:", response.json);

@@ -304,19 +304,19 @@ var BackendClient = class {
   sendStart(config) {
     this.send({ type: "start", config });
   }
-  sendStop() {
+  sendStop(processMode = "immediate") {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log("[BackendClient] Sending stop via WebSocket");
-      this.ws.send(JSON.stringify({ type: "stop" }));
+      console.log("[BackendClient] Sending stop via WebSocket, mode:", processMode);
+      this.ws.send(JSON.stringify({ type: "stop", process_mode: processMode }));
     } else {
       console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
-      this.httpStop();
+      this.httpStop(processMode);
     }
   }
-  async httpStop() {
+  async httpStop(processMode = "immediate") {
     try {
       const response = await (0, import_obsidian2.requestUrl)({
-        url: `${this.httpBaseUrl}/stop`,
+        url: `${this.httpBaseUrl}/stop?process_mode=${processMode}`,
         method: "POST"
       });
       console.log("[BackendClient] HTTP stop response:", response.json);
@@ -1646,7 +1646,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
       return;
     }
-    this.backendClient.sendStop();
+    this.backendClient.sendStop(this.settings.processMode);
     this.statusBar.stopRecording();
     this.isRecording = false;
     this.updateRibbonIcon();
