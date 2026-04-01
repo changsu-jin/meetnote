@@ -1269,7 +1269,17 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     btn.setText("\uCC98\uB9AC \uC911...");
     btn.setAttribute("disabled", "true");
     this.processing = true;
-    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${rec.document_name || rec.filename}`);
+    const docName = rec.document_name || rec.filename;
+    const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
+    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${docName} (\uC608\uC0C1 ~${estMinutes}\uBD84)`);
+    this.plugin.statusBar.setProgress("\uC804\uC0AC \uC911", 10);
+    const progressTimer = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1e3;
+      const estTotal = estMinutes * 60;
+      const pct = Math.min(95, Math.round(elapsed / estTotal * 100));
+      this.plugin.statusBar.setProgress("\uCC98\uB9AC \uC911", pct);
+    }, 3e3);
+    const startTime = Date.now();
     try {
       const resp = await this.api("/process-file", {
         method: "POST",
@@ -1286,6 +1296,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     } catch (err) {
       new import_obsidian3.Notice("\uCC98\uB9AC \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
     } finally {
+      clearInterval(progressTimer);
+      this.plugin.statusBar.setIdle();
       this.processing = false;
       await this.render();
     }

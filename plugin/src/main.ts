@@ -16,7 +16,7 @@ export default class MeetNotePlugin extends Plugin {
 
 	private backendClient: BackendClient;
 	private writer: MeetingWriter;
-	private statusBar: RecorderStatusBar;
+	statusBar: RecorderStatusBar;
 	private recordingStartTime: Date | null = null;
 
 	async onload() {

@@ -520,7 +520,20 @@ export class MeetNoteSidePanel extends ItemView {
 		btn.setAttribute("disabled", "true");
 		this.processing = true;
 
-		new Notice(`처리 시작: ${rec.document_name || rec.filename}`);
+		const docName = rec.document_name || rec.filename;
+		const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
+		new Notice(`처리 시작: ${docName} (예상 ~${estMinutes}분)`);
+
+		// Show progress in status bar
+		this.plugin.statusBar.setProgress("전사 중", 10);
+		const progressTimer = setInterval(() => {
+			// Simulate progress based on estimated time
+			const elapsed = (Date.now() - startTime) / 1000;
+			const estTotal = estMinutes * 60;
+			const pct = Math.min(95, Math.round((elapsed / estTotal) * 100));
+			this.plugin.statusBar.setProgress("처리 중", pct);
+		}, 3000);
+		const startTime = Date.now();
 
 		try {
 			const resp = await this.api("/process-file", {
@@ -539,6 +552,8 @@ export class MeetNoteSidePanel extends ItemView {
 		} catch (err) {
 			new Notice("처리 실패: 서버 오류");
 		} finally {
+			clearInterval(progressTimer);
+			this.plugin.statusBar.setIdle();
 			this.processing = false;
 			await this.render();
 		}
