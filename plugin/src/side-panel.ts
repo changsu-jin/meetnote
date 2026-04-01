@@ -477,38 +477,95 @@ export class MeetNoteSidePanel extends ItemView {
 				container.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
 			}
 
-			// ── Speaker Search Section (global DB) ──
-			container.createEl("h4", { text: "등록된 참석자" });
-			container.createEl("p", { text: "이전 회의에서 음성이 등록된 참석자입니다. 다음 회의 시 자동으로 인식됩니다.", cls: "meetnote-section-desc" });
+			// ── Speaker DB Management Section ──
+			const allSpeakersResp = await this.api("/speakers");
+			const allDbSpeakers: SpeakerInfo[] = allSpeakersResp || [];
+
+			container.createEl("h4", { text: `음성 등록 사용자 (${allDbSpeakers.length}명)` });
+			container.createEl("p", { text: "음성이 등록되어 다음 회의 시 자동으로 인식됩니다.", cls: "meetnote-section-desc" });
 
 			const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
 			const searchInput = searchWrapper.createEl("input", {
 				type: "text",
-				placeholder: "🔍 이름 검색...",
+				placeholder: "🔍 검색...",
 				cls: "meetnote-search-input",
 			});
-			const searchResults = container.createDiv({ cls: "meetnote-search-results" });
+			const speakerListEl = container.createDiv({ cls: "meetnote-recording-list" });
 
-			searchInput.addEventListener("input", async () => {
-				const q = searchInput.value.trim();
-				searchResults.empty();
-				if (q.length === 0) return;
-
-				try {
-					const resp = await this.api(`/speakers/search?q=${encodeURIComponent(q)}`);
-					const results: SpeakerInfo[] = resp.speakers || [];
-					if (results.length === 0) {
-						searchResults.createEl("p", { text: "결과 없음", cls: "meetnote-empty" });
+			const renderSpeakerList = (speakers: SpeakerInfo[]) => {
+				speakerListEl.empty();
+				if (speakers.length === 0) {
+					speakerListEl.createEl("p", { text: "등록된 사용자가 없습니다.", cls: "meetnote-empty" });
+					return;
+				}
+				for (const s of speakers) {
+					const row = speakerListEl.createDiv({ cls: "meetnote-db-speaker-row" });
+					const infoCol = row.createDiv({ cls: "meetnote-db-speaker-info" });
+					infoCol.createEl("div", { text: s.name, cls: "meetnote-db-speaker-name" });
+					const detailParts: string[] = [];
+					if (s.email) detailParts.push(s.email);
+					if (s.last_matched_at) {
+						const d = s.last_matched_at.slice(0, 10);
+						detailParts.push(`최근 매칭 ${d}`);
 					} else {
-						for (const s of results) {
-							const row = searchResults.createDiv({ cls: "meetnote-speaker-row meetnote-search-result" });
-							row.createEl("span", { text: s.name, cls: "meetnote-speaker-name" });
-							if (s.email) {
-								row.createEl("span", { text: ` (${s.email})`, cls: "meetnote-speaker-email" });
-							}
-						}
+						detailParts.push("매칭 이력 없음");
 					}
-				} catch { /* ignore */ }
+					infoCol.createEl("div", { text: detailParts.join(" · "), cls: "meetnote-db-speaker-detail" });
+
+					const btnCol = row.createDiv({ cls: "meetnote-btn-group" });
+
+					const editBtn = btnCol.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
+					editBtn.addEventListener("click", () => {
+						infoCol.empty();
+						const nameInput = infoCol.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
+						const emailInput = infoCol.createEl("input", { type: "text", value: s.email || "", placeholder: "이메일", cls: "meetnote-speaker-input" });
+
+						btnCol.empty();
+						const saveBtn = btnCol.createEl("button", { text: "저장", cls: "meetnote-register-btn" });
+						saveBtn.addEventListener("click", async () => {
+							const newName = nameInput.value.trim();
+							if (!newName) { new Notice("이름을 입력하세요."); return; }
+							try {
+								await this.api(`/speakers/${s.id}`, {
+									method: "PUT",
+									body: { name: newName, email: emailInput.value.trim() },
+								});
+								new Notice(`${newName} 수정 완료`);
+								await this.render();
+							} catch {
+								new Notice("수정 실패");
+							}
+						});
+						const cancelBtn = btnCol.createEl("button", { text: "취소", cls: "meetnote-delete-btn" });
+						cancelBtn.addEventListener("click", () => renderSpeakerList(speakers));
+					});
+
+					const delBtn = btnCol.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
+					delBtn.addEventListener("click", async () => {
+						const confirmed = confirm(`"${s.name}"을(를) 음성 등록에서 삭제하시겠습니까?\n\n삭제 후 해당 사용자는 다음 회의에서 자동 인식되지 않습니다.`);
+						if (!confirmed) return;
+						try {
+							await this.api(`/speakers/${s.id}`, { method: "DELETE" });
+							new Notice(`${s.name} 삭제됨`);
+							await this.render();
+						} catch {
+							new Notice("삭제 실패");
+						}
+					});
+				}
+			};
+
+			renderSpeakerList(allDbSpeakers);
+
+			searchInput.addEventListener("input", () => {
+				const q = searchInput.value.trim().toLowerCase();
+				if (!q) {
+					renderSpeakerList(allDbSpeakers);
+				} else {
+					renderSpeakerList(allDbSpeakers.filter((s) =>
+						s.name.toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q)
+					));
+				}
 			});
 
 		} catch (err) {

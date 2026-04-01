@@ -296,6 +296,29 @@
 	opacity: 0.85;
 }
 
+.meetnote-db-speaker-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.meetnote-db-speaker-info {
+	flex: 1;
+	min-width: 0;
+}
+
+.meetnote-db-speaker-name {
+	font-weight: 600;
+	font-size: 0.9em;
+}
+
+.meetnote-db-speaker-detail {
+	font-size: 0.78em;
+	color: var(--text-muted);
+}
+
 .meetnote-suggest-item:hover,
 .meetnote-suggest-active {
 	background: var(--background-modifier-hover);

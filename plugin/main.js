@@ -1250,34 +1250,89 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       } else {
         container.createEl("p", { text: "\uCD5C\uADFC \uD68C\uC758\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
-      container.createEl("h4", { text: "\uB4F1\uB85D\uB41C \uCC38\uC11D\uC790" });
-      container.createEl("p", { text: "\uC774\uC804 \uD68C\uC758\uC5D0\uC11C \uC74C\uC131\uC774 \uB4F1\uB85D\uB41C \uCC38\uC11D\uC790\uC785\uB2C8\uB2E4. \uB2E4\uC74C \uD68C\uC758 \uC2DC \uC790\uB3D9\uC73C\uB85C \uC778\uC2DD\uB429\uB2C8\uB2E4.", cls: "meetnote-section-desc" });
+      const allSpeakersResp = await this.api("/speakers");
+      const allDbSpeakers = allSpeakersResp || [];
+      container.createEl("h4", { text: `\uC74C\uC131 \uB4F1\uB85D \uC0AC\uC6A9\uC790 (${allDbSpeakers.length}\uBA85)` });
+      container.createEl("p", { text: "\uC74C\uC131\uC774 \uB4F1\uB85D\uB418\uC5B4 \uB2E4\uC74C \uD68C\uC758 \uC2DC \uC790\uB3D9\uC73C\uB85C \uC778\uC2DD\uB429\uB2C8\uB2E4.", cls: "meetnote-section-desc" });
       const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
       const searchInput = searchWrapper.createEl("input", {
         type: "text",
-        placeholder: "\u{1F50D} \uC774\uB984 \uAC80\uC0C9...",
+        placeholder: "\u{1F50D} \uAC80\uC0C9...",
         cls: "meetnote-search-input"
       });
-      const searchResults = container.createDiv({ cls: "meetnote-search-results" });
-      searchInput.addEventListener("input", async () => {
-        const q = searchInput.value.trim();
-        searchResults.empty();
-        if (q.length === 0) return;
-        try {
-          const resp = await this.api(`/speakers/search?q=${encodeURIComponent(q)}`);
-          const results = resp.speakers || [];
-          if (results.length === 0) {
-            searchResults.createEl("p", { text: "\uACB0\uACFC \uC5C6\uC74C", cls: "meetnote-empty" });
+      const speakerListEl = container.createDiv({ cls: "meetnote-recording-list" });
+      const renderSpeakerList = (speakers) => {
+        speakerListEl.empty();
+        if (speakers.length === 0) {
+          speakerListEl.createEl("p", { text: "\uB4F1\uB85D\uB41C \uC0AC\uC6A9\uC790\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
+          return;
+        }
+        for (const s of speakers) {
+          const row = speakerListEl.createDiv({ cls: "meetnote-db-speaker-row" });
+          const infoCol = row.createDiv({ cls: "meetnote-db-speaker-info" });
+          infoCol.createEl("div", { text: s.name, cls: "meetnote-db-speaker-name" });
+          const detailParts = [];
+          if (s.email) detailParts.push(s.email);
+          if (s.last_matched_at) {
+            const d = s.last_matched_at.slice(0, 10);
+            detailParts.push(`\uCD5C\uADFC \uB9E4\uCE6D ${d}`);
           } else {
-            for (const s of results) {
-              const row = searchResults.createDiv({ cls: "meetnote-speaker-row meetnote-search-result" });
-              row.createEl("span", { text: s.name, cls: "meetnote-speaker-name" });
-              if (s.email) {
-                row.createEl("span", { text: ` (${s.email})`, cls: "meetnote-speaker-email" });
-              }
-            }
+            detailParts.push("\uB9E4\uCE6D \uC774\uB825 \uC5C6\uC74C");
           }
-        } catch {
+          infoCol.createEl("div", { text: detailParts.join(" \xB7 "), cls: "meetnote-db-speaker-detail" });
+          const btnCol = row.createDiv({ cls: "meetnote-btn-group" });
+          const editBtn = btnCol.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
+          editBtn.addEventListener("click", () => {
+            infoCol.empty();
+            const nameInput = infoCol.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
+            const emailInput = infoCol.createEl("input", { type: "text", value: s.email || "", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
+            btnCol.empty();
+            const saveBtn = btnCol.createEl("button", { text: "\uC800\uC7A5", cls: "meetnote-register-btn" });
+            saveBtn.addEventListener("click", async () => {
+              const newName = nameInput.value.trim();
+              if (!newName) {
+                new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+                return;
+              }
+              try {
+                await this.api(`/speakers/${s.id}`, {
+                  method: "PUT",
+                  body: { name: newName, email: emailInput.value.trim() }
+                });
+                new import_obsidian3.Notice(`${newName} \uC218\uC815 \uC644\uB8CC`);
+                await this.render();
+              } catch {
+                new import_obsidian3.Notice("\uC218\uC815 \uC2E4\uD328");
+              }
+            });
+            const cancelBtn = btnCol.createEl("button", { text: "\uCDE8\uC18C", cls: "meetnote-delete-btn" });
+            cancelBtn.addEventListener("click", () => renderSpeakerList(speakers));
+          });
+          const delBtn = btnCol.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+          delBtn.addEventListener("click", async () => {
+            const confirmed = confirm(`"${s.name}"\uC744(\uB97C) \uC74C\uC131 \uB4F1\uB85D\uC5D0\uC11C \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?
+
+\uC0AD\uC81C \uD6C4 \uD574\uB2F9 \uC0AC\uC6A9\uC790\uB294 \uB2E4\uC74C \uD68C\uC758\uC5D0\uC11C \uC790\uB3D9 \uC778\uC2DD\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
+            if (!confirmed) return;
+            try {
+              await this.api(`/speakers/${s.id}`, { method: "DELETE" });
+              new import_obsidian3.Notice(`${s.name} \uC0AD\uC81C\uB428`);
+              await this.render();
+            } catch {
+              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
+            }
+          });
+        }
+      };
+      renderSpeakerList(allDbSpeakers);
+      searchInput.addEventListener("input", () => {
+        const q = searchInput.value.trim().toLowerCase();
+        if (!q) {
+          renderSpeakerList(allDbSpeakers);
+        } else {
+          renderSpeakerList(allDbSpeakers.filter(
+            (s) => s.name.toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q)
+          ));
         }
       });
     } catch (err) {
