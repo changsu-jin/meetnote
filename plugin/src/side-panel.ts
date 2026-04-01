@@ -337,13 +337,13 @@ export class MeetNoteSidePanel extends ItemView {
 								editBtn.style.display = "none";
 								const entry = { label, currentName: displayName, nameInput, emailInput, dirty: true };
 								speakerInputs.push(entry);
-								this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+								this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => { entry.dirty = true; });
 							});
 						} else {
 							const entry = { label, currentName: displayName, nameInput, emailInput, dirty: false };
 							speakerInputs.push(entry);
 							nameInput.addEventListener("input", () => { entry.dirty = true; });
-							this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+							this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => { entry.dirty = true; });
 						}
 					}
 				}
@@ -359,7 +359,7 @@ export class MeetNoteSidePanel extends ItemView {
 						for (const { label, currentName, nameInput, emailInput, dirty } of speakerInputs) {
 							if (!dirty) continue;
 							const newName = nameInput.value.trim();
-							if (!newName) continue;
+							if (!newName || newName === currentName) continue;
 							try {
 								if (currentName.startsWith("화자")) {
 									await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
@@ -742,7 +742,7 @@ export class MeetNoteSidePanel extends ItemView {
 	}
 
 	/** Add auto-suggest dropdown to a name input */
-	private addAutoSuggest(wrapper: HTMLElement, nameInput: HTMLInputElement, emailInput: HTMLInputElement): void {
+	private addAutoSuggest(wrapper: HTMLElement, nameInput: HTMLInputElement, emailInput: HTMLInputElement, onSelect?: () => void): void {
 		const suggestList = wrapper.createDiv({ cls: "meetnote-suggest-list" });
 		suggestList.style.display = "none";
 		let selectedIdx = -1;
@@ -755,6 +755,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const email = this.nameEmailMap[name];
 			if (email) emailInput.value = email;
 			emailInput.style.display = "";
+			onSelect?.();
 		};
 
 		const updateHighlight = () => {

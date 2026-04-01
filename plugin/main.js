@@ -1110,7 +1110,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 editBtn.style.display = "none";
                 const entry = { label, currentName: displayName, nameInput, emailInput, dirty: true };
                 speakerInputs.push(entry);
-                this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+                this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => {
+                  entry.dirty = true;
+                });
               });
             } else {
               const entry = { label, currentName: displayName, nameInput, emailInput, dirty: false };
@@ -1118,7 +1120,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
               nameInput.addEventListener("input", () => {
                 entry.dirty = true;
               });
-              this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+              this.addAutoSuggest(inputWrapper, nameInput, emailInput, () => {
+                entry.dirty = true;
+              });
             }
           }
         }
@@ -1132,7 +1136,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             for (const { label, currentName, nameInput, emailInput, dirty } of speakerInputs) {
               if (!dirty) continue;
               const newName = nameInput.value.trim();
-              if (!newName) continue;
+              if (!newName || newName === currentName) continue;
               try {
                 if (currentName.startsWith("\uD654\uC790")) {
                   await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
@@ -1474,7 +1478,7 @@ ${partLines}
     }
   }
   /** Add auto-suggest dropdown to a name input */
-  addAutoSuggest(wrapper, nameInput, emailInput) {
+  addAutoSuggest(wrapper, nameInput, emailInput, onSelect) {
     const suggestList = wrapper.createDiv({ cls: "meetnote-suggest-list" });
     suggestList.style.display = "none";
     let selectedIdx = -1;
@@ -1486,6 +1490,7 @@ ${partLines}
       const email = this.nameEmailMap[name];
       if (email) emailInput.value = email;
       emailInput.style.display = "";
+      onSelect?.();
     };
     const updateHighlight = () => {
       suggestList.querySelectorAll(".meetnote-suggest-item").forEach((el, i) => {
