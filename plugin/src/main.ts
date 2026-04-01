@@ -7,6 +7,7 @@ import {
 import { BackendClient, type SlackStatus, type SpeakingStatEntry } from "./backend-client";
 import { MeetingWriter } from "./writer";
 import { RecorderStatusBar } from "./recorder-view";
+import { MeetNoteSidePanel, SIDE_PANEL_VIEW_TYPE } from "./side-panel";
 
 export default class MeetNotePlugin extends Plugin {
 	settings: MeetNoteSettings;
@@ -131,6 +132,18 @@ export default class MeetNotePlugin extends Plugin {
 			callback: () => this.generateDashboard(),
 		});
 
+		this.addCommand({
+			id: "open-side-panel",
+			name: "사이드 패널 열기",
+			callback: () => this.activateSidePanel(),
+		});
+
+		// Register side panel view
+		this.registerView(
+			SIDE_PANEL_VIEW_TYPE,
+			(leaf) => new MeetNoteSidePanel(leaf, this),
+		);
+
 		this.addSettingTab(new MeetNoteSettingTab(this.app, this));
 
 		console.log("MeetNote plugin loaded");
@@ -142,6 +155,7 @@ export default class MeetNotePlugin extends Plugin {
 		}
 		this.backendClient.disconnect();
 		this.statusBar.destroy();
+		this.app.workspace.detachLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 		console.log("MeetNote plugin unloaded");
 	}
 
@@ -196,12 +210,34 @@ export default class MeetNotePlugin extends Plugin {
 			return;
 		}
 
-		// Send stop command — backend will process and send final result
+		// Send stop command
 		this.backendClient.sendStop();
 		this.statusBar.stopRecording();
-		this.statusBar.setProgress("화자 구분", 0);
+		this.isRecording = false;
+		this.updateRibbonIcon();
 
-		new Notice("녹음을 중지합니다. 화자 구분 처리 중...");
+		if (this.settings.processMode === "queue") {
+			// Queue mode: just save WAV, don't wait for processing
+			this.statusBar.setIdle();
+			new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
+		} else {
+			// Immediate mode: wait for processing
+			this.statusBar.setProgress("화자 구분", 0);
+			new Notice("녹음을 중지합니다. 처리 중...");
+		}
+	}
+
+	private async activateSidePanel(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+		if (existing.length > 0) {
+			this.app.workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (leaf) {
+			await leaf.setViewState({ type: SIDE_PANEL_VIEW_TYPE, active: true });
+			this.app.workspace.revealLeaf(leaf);
+		}
 	}
 
 	private updateRibbonIcon() {

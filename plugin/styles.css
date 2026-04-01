@@ -1,0 +1,106 @@
+.meetnote-side-panel h4 {
+	margin: 16px 0 8px 0;
+	padding-bottom: 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.meetnote-empty,
+.meetnote-error {
+	color: var(--text-muted);
+	font-size: 0.85em;
+	padding: 4px 0;
+}
+
+.meetnote-error {
+	color: var(--text-error);
+}
+
+.meetnote-recording-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.meetnote-recording-date {
+	font-weight: 500;
+	font-size: 0.9em;
+}
+
+.meetnote-recording-meta {
+	color: var(--text-muted);
+	font-size: 0.8em;
+}
+
+.meetnote-process-btn,
+.meetnote-register-btn {
+	font-size: 0.8em;
+	padding: 4px 10px;
+	cursor: pointer;
+}
+
+.meetnote-subsection {
+	font-weight: 500;
+	font-size: 0.85em;
+	margin: 8px 0 4px 0;
+	color: var(--text-muted);
+}
+
+.meetnote-speaker-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 0;
+	flex-wrap: wrap;
+}
+
+.meetnote-speaker-label {
+	font-weight: 500;
+	min-width: 50px;
+}
+
+.meetnote-speaker-input {
+	font-size: 0.85em;
+	padding: 2px 6px;
+	width: 80px;
+}
+
+.meetnote-speaker-name {
+	font-weight: 500;
+}
+
+.meetnote-speaker-email {
+	color: var(--text-muted);
+	font-size: 0.85em;
+}
+
+.meetnote-matched {
+	color: var(--text-success);
+}
+
+.meetnote-delete-btn {
+	font-size: 0.75em;
+	padding: 2px 6px;
+	color: var(--text-error);
+	cursor: pointer;
+}
+
+.meetnote-progress {
+	height: 4px;
+	background: var(--background-modifier-border);
+	border-radius: 2px;
+	overflow: hidden;
+}
+
+.meetnote-progress-bar {
+	height: 100%;
+	width: 50%;
+	background: var(--interactive-accent);
+	animation: meetnote-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes meetnote-pulse {
+	0%, 100% { opacity: 0.4; }
+	50% { opacity: 1; }
+}

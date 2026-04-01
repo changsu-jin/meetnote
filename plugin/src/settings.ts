@@ -13,6 +13,7 @@ export interface MeetNoteSettings {
 	encryptionEnabled: boolean;
 	autoDeleteDays: number;
 	autoLinkEnabled: boolean;
+	processMode: "immediate" | "queue";
 }
 
 export const DEFAULT_SETTINGS: MeetNoteSettings = {
@@ -27,6 +28,7 @@ export const DEFAULT_SETTINGS: MeetNoteSettings = {
 	encryptionEnabled: false,
 	autoDeleteDays: 0,
 	autoLinkEnabled: true,
+	processMode: "queue",
 };
 
 export class MeetNoteSettingTab extends PluginSettingTab {

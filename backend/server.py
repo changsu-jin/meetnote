@@ -237,6 +237,65 @@ async def update_config(update: ConfigUpdate):
 
 
 # ---------------------------------------------------------------------------
+# Recording queue endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/recordings/pending")
+async def get_pending_recordings():
+    """List WAV recordings that haven't been processed yet.
+
+    A recording is 'pending' if it has a .wav file but no corresponding
+    .done marker file in the recordings directory.
+    """
+    import os
+    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+    if not recordings_dir.exists():
+        return {"recordings": []}
+
+    pending = []
+    for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
+        done_marker = f.with_suffix(".done")
+        if done_marker.exists():
+            continue
+        stat = f.stat()
+        duration_est = stat.st_size / (16000 * 2)  # 16kHz, 16-bit mono
+        pending.append({
+            "filename": f.name,
+            "path": str(f.resolve()),
+            "size_mb": round(stat.st_size / 1024 / 1024, 1),
+            "duration_minutes": round(duration_est / 60, 1),
+            "created": stat.st_mtime,
+        })
+
+    return {"recordings": pending}
+
+
+@app.get("/recordings/all")
+async def get_all_recordings():
+    """List all recordings with their processing status."""
+    import os
+    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+    if not recordings_dir.exists():
+        return {"recordings": []}
+
+    all_recs = []
+    for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
+        done_marker = f.with_suffix(".done")
+        stat = f.stat()
+        duration_est = stat.st_size / (16000 * 2)
+        all_recs.append({
+            "filename": f.name,
+            "path": str(f.resolve()),
+            "size_mb": round(stat.st_size / 1024 / 1024, 1),
+            "duration_minutes": round(duration_est / 60, 1),
+            "created": stat.st_mtime,
+            "processed": done_marker.exists(),
+        })
+
+    return {"recordings": all_recs}
+
+
+# ---------------------------------------------------------------------------
 # Speaker management endpoints
 # ---------------------------------------------------------------------------
 
@@ -359,6 +418,11 @@ async def process_file(req: ProcessFileRequest):
             "speaking_stats": speaking_stats,
         })
         logger.info("Process-file complete: %d segments.", len(final_segments))
+
+        # Mark as processed
+        done_marker = Path(req.file_path).with_suffix(".done")
+        done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
+
         return {"ok": True, "segments": len(final_segments)}
 
     except Exception as exc:
@@ -911,6 +975,11 @@ async def handle_stop(ws: WebSocket):
             "slack_status": slack_status,
         })
         logger.info("Final result sent: %d segments, summary=%d chars.", len(final_segments), len(summary_text))
+
+        # Mark as processed
+        if wav_path:
+            done_marker = Path(wav_path).with_suffix(".done")
+            done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
 
         # 6. Encrypt recording file (after all processing is done) --------
         if state.crypto and state.crypto.enabled and wav_path and not wav_path.endswith(".enc"):

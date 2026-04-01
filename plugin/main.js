@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => MeetNotePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -37,7 +37,8 @@ var DEFAULT_SETTINGS = {
   slackWebhookUrl: "",
   encryptionEnabled: false,
   autoDeleteDays: 0,
-  autoLinkEnabled: true
+  autoLinkEnabled: true,
+  processMode: "queue"
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -791,8 +792,190 @@ var RecorderStatusBar = class {
   }
 };
 
+// src/side-panel.ts
+var import_obsidian3 = require("obsidian");
+var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
+var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.refreshInterval = null;
+    this.processing = false;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return SIDE_PANEL_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "MeetNote";
+  }
+  getIcon() {
+    return "mic";
+  }
+  async onOpen() {
+    await this.render();
+    this.refreshInterval = setInterval(() => {
+      if (!this.processing) this.render();
+    }, 1e4);
+  }
+  async onClose() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+  }
+  async render() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    container.addClass("meetnote-side-panel");
+    container.createEl("h4", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C" });
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const resp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/recordings/pending`, method: "GET" });
+      const recordings = resp.json.recordings || [];
+      if (recordings.length === 0) {
+        container.createEl("p", { text: "\uBBF8\uCC98\uB9AC \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
+      } else {
+        for (const rec of recordings) {
+          const item = container.createDiv({ cls: "meetnote-recording-item" });
+          const info = item.createDiv({ cls: "meetnote-recording-info" });
+          const date = new Date(rec.created * 1e3);
+          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+          info.createEl("div", { text: dateStr, cls: "meetnote-recording-date" });
+          info.createEl("div", {
+            text: `${rec.duration_minutes}\uBD84 \xB7 ${rec.size_mb}MB`,
+            cls: "meetnote-recording-meta"
+          });
+          const btn = item.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
+          btn.addEventListener("click", () => this.processRecording(rec, btn));
+        }
+      }
+    } catch (err) {
+      container.createEl("p", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-error" });
+    }
+    if (this.processing) {
+      container.createEl("h4", { text: "\uCC98\uB9AC \uC911..." });
+      const progressBar = container.createDiv({ cls: "meetnote-progress" });
+      progressBar.createDiv({ cls: "meetnote-progress-bar" });
+    }
+    container.createEl("h4", { text: "\uD654\uC790 \uAD00\uB9AC" });
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const lastResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/speakers/last-meeting`, method: "GET" });
+      const lastMeeting = lastResp.json;
+      if (lastMeeting.available_labels.length > 0) {
+        container.createEl("div", { text: "\uCD5C\uADFC \uD68C\uC758 \uD654\uC790:", cls: "meetnote-subsection" });
+        for (const label of lastMeeting.available_labels) {
+          const displayName = lastMeeting.speaker_map[label] || label;
+          const row = container.createDiv({ cls: "meetnote-speaker-row" });
+          row.createEl("span", { text: displayName, cls: "meetnote-speaker-label" });
+          if (displayName.startsWith("\uD654\uC790")) {
+            const input = row.createEl("input", {
+              type: "text",
+              placeholder: "\uC774\uB984",
+              cls: "meetnote-speaker-input"
+            });
+            const emailInput = row.createEl("input", {
+              type: "text",
+              placeholder: "\uC774\uBA54\uC77C",
+              cls: "meetnote-speaker-input"
+            });
+            const regBtn = row.createEl("button", { text: "\uB4F1\uB85D", cls: "meetnote-register-btn" });
+            regBtn.addEventListener("click", async () => {
+              const name = input.value.trim();
+              if (!name) {
+                new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+                return;
+              }
+              try {
+                await (0, import_obsidian3.requestUrl)({
+                  url: `${baseUrl}/speakers/register`,
+                  method: "POST",
+                  contentType: "application/json",
+                  body: JSON.stringify({
+                    speaker_label: label,
+                    name,
+                    email: emailInput.value.trim()
+                  })
+                });
+                new import_obsidian3.Notice(`${name} \uB4F1\uB85D \uC644\uB8CC!`);
+                await this.render();
+              } catch {
+                new import_obsidian3.Notice("\uB4F1\uB85D \uC2E4\uD328");
+              }
+            });
+          } else {
+            row.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
+          }
+        }
+      }
+      const speakersResp = await (0, import_obsidian3.requestUrl)({ url: `${baseUrl}/speakers`, method: "GET" });
+      const speakers = speakersResp.json || [];
+      if (speakers.length > 0) {
+        container.createEl("div", { text: `\uB4F1\uB85D\uB41C \uD654\uC790 (${speakers.length}\uBA85):`, cls: "meetnote-subsection" });
+        for (const speaker of speakers) {
+          const row = container.createDiv({ cls: "meetnote-speaker-row" });
+          row.createEl("span", { text: `${speaker.name}`, cls: "meetnote-speaker-name" });
+          if (speaker.email) {
+            row.createEl("span", { text: ` (${speaker.email})`, cls: "meetnote-speaker-email" });
+          }
+          const delBtn = row.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+          delBtn.addEventListener("click", async () => {
+            try {
+              await (0, import_obsidian3.requestUrl)({
+                url: `${baseUrl}/speakers/${speaker.id}`,
+                method: "DELETE"
+              });
+              new import_obsidian3.Notice(`${speaker.name} \uC0AD\uC81C\uB428`);
+              await this.render();
+            } catch {
+              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
+            }
+          });
+        }
+      } else {
+        container.createEl("p", { text: "\uB4F1\uB85D\uB41C \uD654\uC790\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
+      }
+    } catch (err) {
+      container.createEl("p", { text: "\uC11C\uBC84 \uC5F0\uACB0 \uD544\uC694", cls: "meetnote-error" });
+    }
+  }
+  async processRecording(rec, btn) {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile || activeFile.extension !== "md") {
+      new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+      return;
+    }
+    btn.setText("\uCC98\uB9AC \uC911...");
+    btn.setAttribute("disabled", "true");
+    this.processing = true;
+    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${rec.filename}`);
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const resp = await (0, import_obsidian3.requestUrl)({
+        url: `${baseUrl}/process-file`,
+        method: "POST",
+        contentType: "application/json",
+        body: JSON.stringify({ file_path: rec.path })
+      });
+      if (resp.json.ok) {
+        new import_obsidian3.Notice(`\uCC98\uB9AC \uC644\uB8CC: ${resp.json.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`);
+      } else {
+        new import_obsidian3.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.json.message}`);
+      }
+    } catch (err) {
+      new import_obsidian3.Notice("\uCC98\uB9AC \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
+    } finally {
+      this.processing = false;
+      await this.render();
+    }
+  }
+  getHttpBaseUrl() {
+    return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+};
+
 // src/main.ts
-var MeetNotePlugin = class extends import_obsidian3.Plugin {
+var MeetNotePlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.isRecording = false;
@@ -820,7 +1003,7 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
         try {
           const linked = await this.writer.linkRelatedMeetings();
           if (linked > 0) {
-            new import_obsidian3.Notice(`${linked}\uAC1C \uC5F0\uAD00 \uD68C\uC758\uB97C \uB9C1\uD06C\uD588\uC2B5\uB2C8\uB2E4.`);
+            new import_obsidian4.Notice(`${linked}\uAC1C \uC5F0\uAD00 \uD68C\uC758\uB97C \uB9C1\uD06C\uD588\uC2B5\uB2C8\uB2E4.`);
           }
         } catch (err) {
           console.error("[MeetNote] \uC5F0\uAD00 \uD68C\uC758 \uB9C1\uD06C \uC2E4\uD328:", err);
@@ -831,18 +1014,18 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
       this.updateRibbonIcon();
       this.writer.reset();
       this.recordingStartTime = null;
-      new import_obsidian3.Notice("\uD68C\uC758\uB85D \uC791\uC131\uC774 \uC644\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uD68C\uC758\uB85D \uC791\uC131\uC774 \uC644\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       if (slackStatus) {
         if (slackStatus.success) {
-          new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC774 Slack\uC5D0 \uC804\uC1A1\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+          new import_obsidian4.Notice("\uD68C\uC758\uB85D\uC774 Slack\uC5D0 \uC804\uC1A1\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
         } else if (slackStatus.error) {
-          new import_obsidian3.Notice(`Slack \uC804\uC1A1 \uC2E4\uD328: ${slackStatus.error}`);
+          new import_obsidian4.Notice(`Slack \uC804\uC1A1 \uC2E4\uD328: ${slackStatus.error}`);
         }
       }
     }).onProgress((stage, percent) => {
       this.statusBar.setProgress(stage, percent);
     }).onError((message) => {
-      new import_obsidian3.Notice(`MeetNote \uC624\uB958: ${message}`);
+      new import_obsidian4.Notice(`MeetNote \uC624\uB958: ${message}`);
       console.error("[MeetNote]", message);
     }).onConnectionChange((connected) => {
       this.statusBar.setConnectionStatus(connected);
@@ -886,6 +1069,15 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
       name: "\uD68C\uC758 \uD2B8\uB80C\uB4DC \uB300\uC2DC\uBCF4\uB4DC",
       callback: () => this.generateDashboard()
     });
+    this.addCommand({
+      id: "open-side-panel",
+      name: "\uC0AC\uC774\uB4DC \uD328\uB110 \uC5F4\uAE30",
+      callback: () => this.activateSidePanel()
+    });
+    this.registerView(
+      SIDE_PANEL_VIEW_TYPE,
+      (leaf) => new MeetNoteSidePanel(leaf, this)
+    );
     this.addSettingTab(new MeetNoteSettingTab(this.app, this));
     console.log("MeetNote plugin loaded");
   }
@@ -895,20 +1087,21 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
     }
     this.backendClient.disconnect();
     this.statusBar.destroy();
+    this.app.workspace.detachLeavesOfType(SIDE_PANEL_VIEW_TYPE);
     console.log("MeetNote plugin unloaded");
   }
   async startRecording() {
     if (this.isRecording) {
-      new import_obsidian3.Notice("\uC774\uBBF8 \uB179\uC74C \uC911\uC785\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uC774\uBBF8 \uB179\uC74C \uC911\uC785\uB2C8\uB2E4.");
       return;
     }
     if (!this.backendClient.connected) {
-      new import_obsidian3.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile || activeFile.extension !== "md") {
-      new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+      new import_obsidian4.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
       return;
     }
     this.isRecording = true;
@@ -926,26 +1119,45 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
       },
       previous_context: previousContext || void 0
     });
-    new import_obsidian3.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
+    new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
   }
   stopRecording() {
     if (!this.isRecording) {
-      new import_obsidian3.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
       return;
     }
     this.backendClient.sendStop();
     this.statusBar.stopRecording();
-    this.statusBar.setProgress("\uD654\uC790 \uAD6C\uBD84", 0);
-    new import_obsidian3.Notice("\uB179\uC74C\uC744 \uC911\uC9C0\uD569\uB2C8\uB2E4. \uD654\uC790 \uAD6C\uBD84 \uCC98\uB9AC \uC911...");
+    this.isRecording = false;
+    this.updateRibbonIcon();
+    if (this.settings.processMode === "queue") {
+      this.statusBar.setIdle();
+      new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
+    } else {
+      this.statusBar.setProgress("\uD654\uC790 \uAD6C\uBD84", 0);
+      new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC911\uC9C0\uD569\uB2C8\uB2E4. \uCC98\uB9AC \uC911...");
+    }
+  }
+  async activateSidePanel() {
+    const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+    if (existing.length > 0) {
+      this.app.workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (leaf) {
+      await leaf.setViewState({ type: SIDE_PANEL_VIEW_TYPE, active: true });
+      this.app.workspace.revealLeaf(leaf);
+    }
   }
   updateRibbonIcon() {
     if (!this.ribbonIconEl) return;
     if (this.isRecording) {
       this.ribbonIconEl.ariaLabel = "\uB179\uC74C \uC911\uC9C0";
-      (0, import_obsidian3.setIcon)(this.ribbonIconEl, "square");
+      (0, import_obsidian4.setIcon)(this.ribbonIconEl, "square");
     } else {
       this.ribbonIconEl.ariaLabel = "MeetNote";
-      (0, import_obsidian3.setIcon)(this.ribbonIconEl, "mic");
+      (0, import_obsidian4.setIcon)(this.ribbonIconEl, "mic");
     }
   }
   /**
@@ -1000,7 +1212,7 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
       });
     }
     if (meetings.length === 0) {
-      new import_obsidian3.Notice("\uBD84\uC11D\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uBD84\uC11D\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     meetings.sort((a, b) => a.date.localeCompare(b.date));
@@ -1097,16 +1309,16 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
     const dashboardContent = lines.join("\n");
     const dashboardPath = "MeetNote Dashboard.md";
     const existingFile = this.app.vault.getAbstractFileByPath(dashboardPath);
-    if (existingFile instanceof import_obsidian3.TFile) {
+    if (existingFile instanceof import_obsidian4.TFile) {
       await this.app.vault.modify(existingFile, dashboardContent);
     } else {
       await this.app.vault.create(dashboardPath, dashboardContent);
     }
     const dashFile = this.app.vault.getAbstractFileByPath(dashboardPath);
-    if (dashFile instanceof import_obsidian3.TFile) {
+    if (dashFile instanceof import_obsidian4.TFile) {
       await this.app.workspace.getLeaf().openFile(dashFile);
     }
-    new import_obsidian3.Notice(`\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC\uAC00 \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4. (${totalMeetings}\uAC1C \uD68C\uC758 \uBD84\uC11D)`);
+    new import_obsidian4.Notice(`\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC\uAC00 \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4. (${totalMeetings}\uAC1C \uD68C\uC758 \uBD84\uC11D)`);
   }
   async searchMeetings() {
     const mdFiles = this.app.vault.getMarkdownFiles();
@@ -1118,27 +1330,27 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
       }
     }
     if (Object.keys(meetings).length === 0) {
-      new import_obsidian3.Notice("\uAC80\uC0C9\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uAC80\uC0C9\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     try {
       const baseUrl = this.getHttpBaseUrl();
-      await (0, import_obsidian3.requestUrl)({
+      await (0, import_obsidian4.requestUrl)({
         url: `${baseUrl}/search/index`,
         method: "POST",
         contentType: "application/json",
         body: JSON.stringify({ meetings })
       });
     } catch {
-      new import_obsidian3.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const question = await this.promptUser("\uACFC\uAC70 \uD68C\uC758 \uAC80\uC0C9", "\uC9C8\uBB38\uC744 \uC785\uB825\uD558\uC138\uC694 (\uC608: \uC9C0\uB09C \uB2EC API \uC131\uB2A5 \uC774\uC288 \uAD00\uB828 \uB17C\uC758)");
     if (!question) return;
-    new import_obsidian3.Notice("\uAC80\uC0C9 \uC911...");
+    new import_obsidian4.Notice("\uAC80\uC0C9 \uC911...");
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian3.requestUrl)({
+      const resp = await (0, import_obsidian4.requestUrl)({
         url: `${baseUrl}/search/query`,
         method: "POST",
         contentType: "application/json",
@@ -1165,12 +1377,12 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
             return content + "\n\n" + answerContent;
           });
         }
-        new import_obsidian3.Notice("\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uBB38\uC11C\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        new import_obsidian4.Notice("\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uBB38\uC11C\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       } else {
-        new import_obsidian3.Notice(result.error || "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        new import_obsidian4.Notice(result.error || "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
       }
     } catch (err) {
-      new import_obsidian3.Notice("\uAC80\uC0C9 \uC2E4\uD328: \uBC31\uC5D4\uB4DC \uC11C\uBC84 \uC624\uB958");
+      new import_obsidian4.Notice("\uAC80\uC0C9 \uC2E4\uD328: \uBC31\uC5D4\uB4DC \uC11C\uBC84 \uC624\uB958");
     }
   }
   promptUser(title, placeholder) {
@@ -1248,7 +1460,7 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
   }
   async syncSlackConfig() {
     try {
-      await (0, import_obsidian3.requestUrl)({
+      await (0, import_obsidian4.requestUrl)({
         url: `${this.getHttpBaseUrl()}/slack/config`,
         method: "POST",
         contentType: "application/json",
@@ -1262,7 +1474,7 @@ var MeetNotePlugin = class extends import_obsidian3.Plugin {
   }
   async syncSecurityConfig() {
     try {
-      await (0, import_obsidian3.requestUrl)({
+      await (0, import_obsidian4.requestUrl)({
         url: `${this.getHttpBaseUrl()}/security/config`,
         method: "POST",
         contentType: "application/json",
