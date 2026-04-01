@@ -994,9 +994,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         for (const s of allSpeakers) {
           speakerEmailMap[s.name] = s.email || "";
         }
+        const emailCheckboxes = [];
         if (lastMeeting.available_labels.length > 0) {
           container.createEl("div", { text: "\u{1F399} \uC74C\uC131 \uC778\uC2DD", cls: "meetnote-subsection" });
-          const emailCheckboxes2 = [];
           for (const label of lastMeeting.available_labels) {
             const displayName = lastMeeting.speaker_map[label] || label;
             const isUnregistered = displayName.startsWith("\uD654\uC790");
@@ -1005,7 +1005,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
             if (email) {
               cb.checked = true;
-              emailCheckboxes2.push({ email, checkbox: cb });
+              emailCheckboxes.push({ email, checkbox: cb });
             } else {
               cb.disabled = true;
             }

@@ -233,10 +233,10 @@ export class MeetNoteSidePanel extends ItemView {
 				const speakerEmailMap: Record<string, string> = {};
 				for (const s of allSpeakers) { speakerEmailMap[s.name] = s.email || ""; }
 
+				const emailCheckboxes: Array<{ email: string; checkbox: HTMLInputElement }> = [];
+
 				if (lastMeeting.available_labels.length > 0) {
 					container.createEl("div", { text: "🎙 음성 인식", cls: "meetnote-subsection" });
-
-				const emailCheckboxes: Array<{ email: string; checkbox: HTMLInputElement }> = [];
 
 					for (const label of lastMeeting.available_labels) {
 						const displayName = lastMeeting.speaker_map[label] || label;
