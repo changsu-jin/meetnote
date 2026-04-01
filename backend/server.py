@@ -470,20 +470,26 @@ async def get_all_recordings():
             except Exception:
                 pass
 
-        # Check for unregistered speakers (compare against Speaker DB)
+        # Check for unregistered speakers by matching embeddings against DB
         unregistered_speakers = 0
-        registered_names = set()
-        if state.speaker_db:
-            registered_names = {p.name for p in state.speaker_db.list_speakers()}
-        if meta_path.exists():
+        total_speakers = 0
+        if meta_path.exists() and state.speaker_db:
             try:
+                import numpy as np
                 meta = _json.loads(meta_path.read_text())
-                sp_map = meta.get("speaker_map", {})
-                for display in sp_map.values():
-                    if display.startswith("화자") or display not in registered_names:
+                embs = meta.get("embeddings", {})
+                total_speakers = len(embs)
+                for label, emb_data in embs.items():
+                    emb = np.array(emb_data, dtype=np.float32)
+                    matched, sim = state.speaker_db.find_match(emb)
+                    if matched is None:
                         unregistered_speakers += 1
             except Exception:
-                pass
+                # Fallback to speaker_map check
+                sp_map = meta.get("speaker_map", {}) if meta_path.exists() else {}
+                for display in sp_map.values():
+                    if display.startswith("화자"):
+                        unregistered_speakers += 1
 
         all_recs.append({
             "filename": f.name,
@@ -798,6 +804,22 @@ async def last_meeting_speakers(wav_path: str = ""):
                         available_labels = list(meta["embeddings"].keys())
                     if "speaker_map" in meta:
                         speaker_map = meta["speaker_map"]
+        except Exception:
+            pass
+
+    # Re-match against Speaker DB using embeddings (fixes stale speaker_map)
+    if state.speaker_db and wav_path:
+        try:
+            import json as _json, numpy as np
+            meta_path = Path(wav_path).with_suffix(".meta.json")
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text())
+                embs = meta.get("embeddings", {})
+                for label, emb_data in embs.items():
+                    emb = np.array(emb_data, dtype=np.float32)
+                    matched, sim = state.speaker_db.find_match(emb)
+                    if matched is not None:
+                        speaker_map[label] = matched.name
         except Exception:
             pass
 
