@@ -823,21 +823,23 @@ async def register_speaker(req: SpeakerRegisterFromFileRequest):
                        f"Available: {list(state.last_meeting_embeddings.keys())}",
         }
 
-    # Check if speaker with same name already exists → update embedding instead of duplicate
+    # Check if same person already exists (name + embedding similarity)
     existing = None
     for p in state.speaker_db.list_speakers():
         if p.name == req.name:
-            existing = p
-            break
+            sim = state.speaker_db._cosine_similarity(embedding, p.embedding_array())
+            if sim > 0.5:  # Same person, different recording
+                existing = p
+                break
 
     if existing:
-        # Update existing speaker's embedding + email
         profile = state.speaker_db.update_speaker(
             existing.id,
             email=req.email or existing.email,
             embedding=embedding,
         )
-        logger.info("Updated existing speaker '%s' with new embedding.", req.name)
+        logger.info("Updated existing speaker '%s' (sim=%.2f) with new embedding.",
+                    req.name, state.speaker_db._cosine_similarity(embedding, existing.embedding_array()))
     else:
         profile = state.speaker_db.add_speaker(
             name=req.name,
@@ -980,12 +982,14 @@ async def reassign_speaker(req: SpeakerReassignRequest):
                 state.speaker_db.delete_speaker(profile.id)
                 break
 
-    # Register or update speaker with the embedding
+    # Register or update speaker (name + embedding similarity check)
     existing = None
     for p in state.speaker_db.list_speakers():
         if p.name == req.new_name:
-            existing = p
-            break
+            sim = state.speaker_db._cosine_similarity(embedding, p.embedding_array())
+            if sim > 0.5:
+                existing = p
+                break
 
     if existing:
         new_profile = state.speaker_db.update_speaker(
