@@ -252,6 +252,33 @@ export class MeetNoteSidePanel extends ItemView {
 					}
 				}
 
+				// ── Save button for voice-detected speaker changes ──
+				if (lastMeeting.available_labels.length > 0) {
+					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const batchBtn = btnRow.createEl("button", { text: "음성 참석자 저장", cls: "meetnote-register-btn meetnote-batch-btn" });
+					batchBtn.addEventListener("click", async () => {
+						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+						let count = 0;
+						const replacements: Array<{ from: string; to: string }> = [];
+						for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+							const newName = nameInput.value.trim();
+							if (!newName) continue;
+							try {
+								if (currentName.startsWith("화자")) {
+									await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
+								} else {
+									await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
+								}
+								replacements.push({ from: currentName, to: newName });
+								count++;
+							} catch { /* skip */ }
+						}
+						if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
+						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.render(); }
+						else { new Notice("변경할 이름을 입력하세요."); }
+					});
+				}
+
 				// ── 수동 추가 참석자 ──
 				container.createEl("div", { text: "👤 수동 추가", cls: "meetnote-subsection" });
 
@@ -291,32 +318,6 @@ export class MeetNoteSidePanel extends ItemView {
 					else { new Notice(resp.message || "추가 실패"); }
 				});
 
-				// ── Save button for voice-detected speaker changes ──
-				if (lastMeeting.available_labels.length > 0) {
-					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
-					const batchBtn = btnRow.createEl("button", { text: "음성 참석자 저장", cls: "meetnote-register-btn meetnote-batch-btn" });
-					batchBtn.addEventListener("click", async () => {
-						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
-						let count = 0;
-						const replacements: Array<{ from: string; to: string }> = [];
-						for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
-							const newName = nameInput.value.trim();
-							if (!newName) continue;
-							try {
-								if (currentName.startsWith("화자")) {
-									await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
-								} else {
-									await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
-								}
-								replacements.push({ from: currentName, to: newName });
-								count++;
-							} catch { /* skip */ }
-						}
-						if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
-						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.render(); }
-						else { new Notice("변경할 이름을 입력하세요."); }
-					});
-				}
 			} else {
 				container.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
 			}

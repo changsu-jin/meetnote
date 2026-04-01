@@ -983,6 +983,36 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             }
           }
         }
+        if (lastMeeting.available_labels.length > 0) {
+          const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+          const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
+          batchBtn.addEventListener("click", async () => {
+            const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+            let count = 0;
+            const replacements = [];
+            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+              const newName = nameInput.value.trim();
+              if (!newName) continue;
+              try {
+                if (currentName.startsWith("\uD654\uC790")) {
+                  await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
+                } else {
+                  await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
+                }
+                replacements.push({ from: currentName, to: newName });
+                count++;
+              } catch {
+              }
+            }
+            if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
+            if (count > 0) {
+              new import_obsidian3.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
+              await this.render();
+            } else {
+              new import_obsidian3.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+            }
+          });
+        }
         container.createEl("div", { text: "\u{1F464} \uC218\uB3D9 \uCD94\uAC00", cls: "meetnote-subsection" });
         try {
           const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
@@ -1024,36 +1054,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             new import_obsidian3.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
           }
         });
-        if (lastMeeting.available_labels.length > 0) {
-          const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
-          const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
-          batchBtn.addEventListener("click", async () => {
-            const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
-            let count = 0;
-            const replacements = [];
-            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
-              const newName = nameInput.value.trim();
-              if (!newName) continue;
-              try {
-                if (currentName.startsWith("\uD654\uC790")) {
-                  await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
-                } else {
-                  await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
-                }
-                replacements.push({ from: currentName, to: newName });
-                count++;
-              } catch {
-              }
-            }
-            if (replacements.length > 0) await this.updateDocumentSpeakers(replacements);
-            if (count > 0) {
-              new import_obsidian3.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
-              await this.render();
-            } else {
-              new import_obsidian3.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
-            }
-          });
-        }
       } else {
         container.createEl("p", { text: "\uCD5C\uADFC \uD68C\uC758\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
       }
