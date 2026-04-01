@@ -905,11 +905,18 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const date = new Date(rec.created * 1e3);
           const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
           info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`, cls: "meetnote-recording-meta" });
-          const mapBtn = item.createEl("button", { text: "\uD654\uC790", cls: "meetnote-process-btn" });
-          mapBtn.addEventListener("click", () => {
+          const mapBtn = item.createEl("button", { text: "\uAD00\uB9AC", cls: "meetnote-process-btn" });
+          mapBtn.addEventListener("click", async () => {
             this.selectedWavPath = rec.path;
             this.selectedDocName = rec.document_name || rec.filename;
-            this.render();
+            const docPath = rec.document_path || "";
+            if (docPath) {
+              const file = this.app.vault.getAbstractFileByPath(docPath);
+              if (file) {
+                await this.app.workspace.getLeaf().openFile(file);
+              }
+            }
+            await this.render();
           });
         }
       }
