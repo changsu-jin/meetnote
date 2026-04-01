@@ -1130,11 +1130,19 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
           const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
           batchBtn.addEventListener("click", async () => {
+            const emptyInputs = speakerInputs.filter(
+              (s) => s.currentName.startsWith("\uD654\uC790") && !s.nameInput.value.trim()
+            );
+            if (emptyInputs.length > 0) {
+              const names = emptyInputs.map((s) => s.currentName).join(", ");
+              new import_obsidian3.Notice(`${names}\uC758 \uC774\uB984\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.`);
+              emptyInputs[0].nameInput.focus();
+              return;
+            }
             const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
             let count = 0;
             const replacements = [];
-            for (const { label, currentName, nameInput, emailInput, dirty } of speakerInputs) {
-              if (!dirty) continue;
+            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
               const newName = nameInput.value.trim();
               if (!newName || newName === currentName) continue;
               try {

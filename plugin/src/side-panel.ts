@@ -353,11 +353,21 @@ export class MeetNoteSidePanel extends ItemView {
 					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
 					const batchBtn = btnRow.createEl("button", { text: "음성 참석자 저장", cls: "meetnote-register-btn meetnote-batch-btn" });
 					batchBtn.addEventListener("click", async () => {
+						// Check all unregistered speakers have names filled
+						const emptyInputs = speakerInputs.filter(
+							(s) => s.currentName.startsWith("화자") && !s.nameInput.value.trim()
+						);
+						if (emptyInputs.length > 0) {
+							const names = emptyInputs.map((s) => s.currentName).join(", ");
+							new Notice(`${names}의 이름을 입력해주세요.`);
+							emptyInputs[0].nameInput.focus();
+							return;
+						}
+
 						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
 						let count = 0;
 						const replacements: Array<{ from: string; to: string }> = [];
-						for (const { label, currentName, nameInput, emailInput, dirty } of speakerInputs) {
-							if (!dirty) continue;
+						for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
 							const newName = nameInput.value.trim();
 							if (!newName || newName === currentName) continue;
 							try {
