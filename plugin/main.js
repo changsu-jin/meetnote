@@ -1025,7 +1025,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 }, 200);
               });
             } else {
-              row.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
+              row.createEl("span", { text: ` ${displayName} \u2713`, cls: "meetnote-matched" });
             }
           }
           if (speakerInputs.length > 0) {
@@ -1034,20 +1034,28 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             batchBtn.addEventListener("click", async () => {
               const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
               let registered = 0;
+              const replacements = [];
               for (const { label, nameInput, emailInput } of speakerInputs) {
                 const name = nameInput.value.trim();
                 if (!name) continue;
+                const displayName = lastMeeting.speaker_map[label] || label;
                 try {
                   await this.api("/speakers/register", {
                     method: "POST",
                     body: { speaker_label: label, name, email: emailInput.value.trim(), wav_path: wavPath }
                   });
                   registered++;
+                  if (displayName.startsWith("\uD654\uC790")) {
+                    replacements.push({ from: displayName, to: name });
+                  }
                 } catch {
                 }
               }
+              if (replacements.length > 0) {
+                await this.updateDocumentSpeakers(replacements);
+              }
               if (registered > 0) {
-                new import_obsidian3.Notice(`${registered}\uBA85 \uB4F1\uB85D \uC644\uB8CC!`);
+                new import_obsidian3.Notice(`${registered}\uBA85 \uB4F1\uB85D \uC644\uB8CC! \uBB38\uC11C\uAC00 \uC5C5\uB370\uC774\uD2B8\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`);
                 await this.render();
               } else {
                 new import_obsidian3.Notice("\uB4F1\uB85D\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
@@ -1198,6 +1206,38 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /** Replace speaker names in the linked document */
+  async updateDocumentSpeakers(replacements) {
+    const docPath = await this.getSelectedDocPath();
+    if (!docPath) return;
+    const file = this.app.vault.getAbstractFileByPath(docPath);
+    if (!file) return;
+    try {
+      await this.app.vault.process(file, (content) => {
+        let updated = content;
+        for (const { from, to } of replacements) {
+          updated = updated.replace(new RegExp(`\\*\\*${from}\\*\\*`, "g"), `**${to}**`);
+          updated = updated.replace(new RegExp(`> ${from} `, "g"), `> ${to} `);
+          updated = updated.replace(new RegExp(`${from}(,|\\s|\\()`, "g"), `${to}$1`);
+        }
+        return updated;
+      });
+    } catch (err) {
+      console.error("[MeetNote] Failed to update document speakers:", err);
+    }
+  }
+  /** Get document path for the selected recording */
+  async getSelectedDocPath() {
+    if (!this.selectedWavPath) return "";
+    try {
+      const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+      const allResp = await this.api("/recordings/all");
+      const rec = (allResp.recordings || []).find((r) => r.path === this.selectedWavPath);
+      return rec?.document_path || "";
+    } catch {
+      return "";
+    }
   }
   /** Load names and emails from vault folder for auto-suggest */
   async loadSuggestNames() {

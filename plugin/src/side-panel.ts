@@ -297,7 +297,8 @@ export class MeetNoteSidePanel extends ItemView {
 							setTimeout(() => { suggestList.style.display = "none"; }, 200);
 						});
 					} else {
-						row.createEl("span", { text: " ✓", cls: "meetnote-matched" });
+						// Already matched — show name with edit ability
+						row.createEl("span", { text: ` ${displayName} ✓`, cls: "meetnote-matched" });
 					}
 				}
 
@@ -308,19 +309,31 @@ export class MeetNoteSidePanel extends ItemView {
 					batchBtn.addEventListener("click", async () => {
 						const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
 						let registered = 0;
+						const replacements: Array<{ from: string; to: string }> = [];
+
 						for (const { label, nameInput, emailInput } of speakerInputs) {
 							const name = nameInput.value.trim();
 							if (!name) continue;
+							const displayName = lastMeeting.speaker_map[label] || label;
 							try {
 								await this.api("/speakers/register", {
 									method: "POST",
 									body: { speaker_label: label, name, email: emailInput.value.trim(), wav_path: wavPath },
 								});
 								registered++;
+								if (displayName.startsWith("화자")) {
+									replacements.push({ from: displayName, to: name });
+								}
 							} catch { /* skip failed */ }
 						}
+
+						// Update document: replace 화자N → real name
+						if (replacements.length > 0) {
+							await this.updateDocumentSpeakers(replacements);
+						}
+
 						if (registered > 0) {
-							new Notice(`${registered}명 등록 완료!`);
+							new Notice(`${registered}명 등록 완료! 문서가 업데이트되었습니다.`);
 							await this.render();
 						} else {
 							new Notice("등록할 이름을 입력하세요.");
@@ -503,6 +516,47 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/** Replace speaker names in the linked document */
+	private async updateDocumentSpeakers(replacements: Array<{ from: string; to: string }>): Promise<void> {
+		// Find the document path from selected recording
+		const docPath = await this.getSelectedDocPath();
+		if (!docPath) return;
+
+		const file = this.app.vault.getAbstractFileByPath(docPath);
+		if (!file) return;
+
+		try {
+			await this.app.vault.process(file as any, (content) => {
+				let updated = content;
+				for (const { from, to } of replacements) {
+					// Replace **화자N**: → **실명**:
+					updated = updated.replace(new RegExp(`\\*\\*${from}\\*\\*`, "g"), `**${to}**`);
+					// Replace in speaking stats: 화자N 45% → 실명 45%
+					updated = updated.replace(new RegExp(`> ${from} `, "g"), `> ${to} `);
+					// Replace in participants
+					updated = updated.replace(new RegExp(`${from}(,|\\s|\\()`, "g"), `${to}$1`);
+				}
+				return updated;
+			});
+		} catch (err) {
+			console.error("[MeetNote] Failed to update document speakers:", err);
+		}
+	}
+
+	/** Get document path for the selected recording */
+	private async getSelectedDocPath(): Promise<string> {
+		if (!this.selectedWavPath) return "";
+		try {
+			const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+			// Get doc path from pending/all recordings
+			const allResp = await this.api("/recordings/all");
+			const rec = (allResp.recordings || []).find((r: any) => r.path === this.selectedWavPath);
+			return rec?.document_path || "";
+		} catch {
+			return "";
+		}
 	}
 
 	/** Load names and emails from vault folder for auto-suggest */
