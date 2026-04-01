@@ -1696,6 +1696,26 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       name: "\uD68C\uC758 \uD2B8\uB80C\uB4DC \uB300\uC2DC\uBCF4\uB4DC",
       callback: () => this.generateDashboard()
     });
+    this.registerEvent(
+      this.app.vault.on("rename", async (file, oldPath) => {
+        if (!file.path.endsWith(".md")) return;
+        try {
+          const content = await this.app.vault.cachedRead(file);
+          if (!content.includes("type: meeting")) return;
+          const baseUrl = this.getHttpBaseUrl();
+          await fetch(`${baseUrl}/recordings/update-meta`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              old_path: oldPath,
+              new_path: file.path,
+              new_name: file.basename
+            })
+          });
+        } catch {
+        }
+      })
+    );
     this.addCommand({
       id: "open-side-panel",
       name: "\uC0AC\uC774\uB4DC \uD328\uB110 \uC5F4\uAE30",

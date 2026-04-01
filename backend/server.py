@@ -1154,6 +1154,34 @@ class RecordingRequeueRequest(BaseModel):
     wav_path: str
 
 
+class RecordingUpdateMetaRequest(BaseModel):
+    old_path: str
+    new_path: str
+    new_name: str
+
+
+@app.post("/recordings/update-meta")
+async def update_recording_meta(req: RecordingUpdateMetaRequest):
+    """Update document_name/path in meta files when document is renamed."""
+    import json as _json
+    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+    updated = 0
+
+    for meta_path in recordings_dir.glob("*.meta.json"):
+        try:
+            meta = _json.loads(meta_path.read_text())
+            if meta.get("document_path") == req.old_path:
+                meta["document_name"] = req.new_name
+                meta["document_path"] = req.new_path
+                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+                updated += 1
+                logger.info("Updated meta %s: %s → %s", meta_path.name, req.old_path, req.new_path)
+        except Exception:
+            continue
+
+    return {"ok": True, "updated": updated}
+
+
 @app.post("/recordings/requeue")
 async def requeue_recording(req: RecordingRequeueRequest):
     """Move a completed recording back to pending by removing .done marker."""

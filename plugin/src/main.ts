@@ -138,6 +138,28 @@ export default class MeetNotePlugin extends Plugin {
 			callback: () => this.generateDashboard(),
 		});
 
+		// ── File rename sync ───────────────────────────────────────────
+		this.registerEvent(
+			this.app.vault.on("rename", async (file, oldPath) => {
+				if (!file.path.endsWith(".md")) return;
+				try {
+					const content = await this.app.vault.cachedRead(file as TFile);
+					if (!content.includes("type: meeting")) return;
+
+					const baseUrl = this.getHttpBaseUrl();
+					await fetch(`${baseUrl}/recordings/update-meta`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							old_path: oldPath,
+							new_path: file.path,
+							new_name: (file as TFile).basename,
+						}),
+					});
+				} catch { /* server might be offline */ }
+			})
+		);
+
 		this.addCommand({
 			id: "open-side-panel",
 			name: "사이드 패널 열기",
