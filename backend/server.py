@@ -521,23 +521,15 @@ async def get_all_recordings():
         # Check for unregistered speakers by matching embeddings against DB
         unregistered_speakers = 0
         total_speakers = 0
-        if meta_path.exists() and state.speaker_db:
+        if meta_path.exists():
             try:
-                import numpy as np
                 meta = _json.loads(meta_path.read_text())
-                embs = meta.get("embeddings", {})
-                total_speakers = len(embs)
-                for label, emb_data in embs.items():
-                    emb = np.array(emb_data, dtype=np.float32)
-                    matched, sim = state.speaker_db.find_match(emb)
-                    if matched is None:
-                        unregistered_speakers += 1
-            except Exception:
-                # Fallback to speaker_map check
-                sp_map = meta.get("speaker_map", {}) if meta_path.exists() else {}
+                sp_map = meta.get("speaker_map", {})
                 for display in sp_map.values():
                     if display.startswith("화자"):
                         unregistered_speakers += 1
+            except Exception:
+                pass
 
         all_recs.append({
             "filename": f.name,
@@ -880,23 +872,8 @@ async def last_meeting_speakers(wav_path: str = ""):
         except Exception:
             pass
 
-    # Re-match against Speaker DB using embeddings (skip if requeued)
-    if state.speaker_db and wav_path:
-        try:
-            import json as _json, numpy as np
-            meta_path = Path(wav_path).with_suffix(".meta.json")
-            if meta_path.exists():
-                meta = _json.loads(meta_path.read_text())
-                skip = meta.get("skip_speaker_matching", False)
-                if not skip:
-                    embs = meta.get("embeddings", {})
-                    for label, emb_data in embs.items():
-                        emb = np.array(emb_data, dtype=np.float32)
-                        matched, sim = state.speaker_db.find_match(emb)
-                        if matched is not None:
-                            speaker_map[label] = matched.name
-        except Exception:
-            pass
+    # Use meta's speaker_map as source of truth (no re-matching)
+    # Speaker DB matching happens only during process-file, not on every API call
 
     return {
         "speaker_map": speaker_map,
