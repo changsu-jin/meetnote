@@ -93,6 +93,27 @@
 .meetnote-recording-list {
 	max-height: 180px;
 	overflow-y: auto;
+	scrollbar-width: thin;
+}
+
+.meetnote-recording-list::-webkit-scrollbar {
+	width: 6px;
+}
+
+.meetnote-recording-list::-webkit-scrollbar-thumb {
+	background: var(--background-modifier-border);
+	border-radius: 3px;
+}
+
+.meetnote-recording-list[data-has-scroll="true"] {
+	border-bottom: 2px solid var(--background-modifier-border);
+}
+
+.meetnote-scroll-hint {
+	text-align: center;
+	font-size: 0.75em;
+	color: var(--text-muted);
+	padding: 2px 0;
 }
 
 .meetnote-recording-item {

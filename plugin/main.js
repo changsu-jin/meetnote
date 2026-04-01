@@ -966,6 +966,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             }
           });
         }
+        if (recordings.length > 3) {
+          container.createEl("div", { text: `\u2193 ${recordings.length - 3}\uAC74 \uB354\uBCF4\uAE30 (\uC2A4\uD06C\uB864)`, cls: "meetnote-scroll-hint" });
+        }
       }
     } catch (err) {
       container.createEl("p", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-error" });
@@ -1012,6 +1015,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             }
             await this.render();
           });
+        }
+        if (completed.length > 3) {
+          container.createEl("div", { text: `\u2193 ${completed.length - 3}\uAC74 \uB354\uBCF4\uAE30 (\uC2A4\uD06C\uB864)`, cls: "meetnote-scroll-hint" });
         }
       }
     } catch {

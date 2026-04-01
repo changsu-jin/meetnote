@@ -186,6 +186,9 @@ export class MeetNoteSidePanel extends ItemView {
 						}
 					});
 				}
+				if (recordings.length > 3) {
+					container.createEl("div", { text: `↓ ${recordings.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
+				}
 			}
 		} catch (err) {
 			container.createEl("p", { text: "서버에 연결할 수 없습니다.", cls: "meetnote-error" });
@@ -241,6 +244,9 @@ export class MeetNoteSidePanel extends ItemView {
 						}
 						await this.render();
 					});
+				}
+				if (completed.length > 3) {
+					container.createEl("div", { text: `↓ ${completed.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
 				}
 			}
 		} catch {
