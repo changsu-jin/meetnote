@@ -1075,7 +1075,9 @@ def _get_gitlab_url(file_path: str) -> str:
         # Relative path from git root to file
         rel_path = Path(file_path).relative_to(current)
 
-        return f"{web_url}/-/blob/{branch}/{rel_path}"
+        from urllib.parse import quote
+        encoded_path = quote(str(rel_path), safe="/")
+        return f"{web_url}/-/blob/{branch}/{encoded_path}"
 
     except Exception:
         return ""
