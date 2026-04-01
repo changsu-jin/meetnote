@@ -960,7 +960,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
 \uC0AD\uC81C \uB300\uC0C1:
 - \uB179\uC74C \uD30C\uC77C (WAV)
 - \uBA54\uD0C0\uB370\uC774\uD130
-- \uC5F0\uACB0\uB41C \uBB38\uC11C\uC758 MeetNote \uC139\uC158`);
+- \uC5F0\uACB0\uB41C \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C`);
             if (!confirmed) return;
             try {
               await this.api("/recordings/delete", {
@@ -970,9 +970,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
               if (rec.document_path) {
                 const file = this.app.vault.getAbstractFileByPath(rec.document_path);
                 if (file) {
-                  await this.app.vault.process(file, (content) => {
-                    return content.replace(/<!-- meetnote-start -->[\s\S]*?<!-- meetnote-end -->/, "").replace(/^---\n[\s\S]*?\n---\n*/, "");
-                  });
+                  await this.app.vault.delete(file);
                 }
               }
               new import_obsidian3.Notice(`${docName} \uC0AD\uC81C \uC644\uB8CC`);
