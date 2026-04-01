@@ -219,8 +219,8 @@ class AudioRecorder:
                     int16_data = np.clip(data, -1.0, 1.0)
                     int16_data = (int16_data * 32767).astype(np.int16)
                     self._wav_file.writeframes(int16_data.tobytes())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("WAV write failed in callback: %s", exc)
 
             if self.chunk_callback is not None:
                 self._chunk_buffer.append(data)
@@ -410,8 +410,8 @@ class AudioRecorder:
                     int16_data = np.clip(mixed, -1.0, 1.0)
                     int16_data = (int16_data * 32767).astype(np.int16)
                     self._wav_file.writeframes(int16_data.tobytes())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("WAV write failed in mix_pending: %s", exc)
 
             if self.chunk_callback is not None:
                 self._chunk_buffer.append(mixed)

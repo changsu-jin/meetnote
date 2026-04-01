@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, requestUrl, setIcon } from "obsidian";
+import { Modal, Notice, Plugin, TFile, requestUrl, setIcon } from "obsidian";
 import {
 	type MeetNoteSettings,
 	DEFAULT_SETTINGS,
@@ -65,9 +65,15 @@ export default class MeetNotePlugin extends Plugin {
 				this.statusBar.setIdle();
 				this.isRecording = false;
 				this.updateRibbonIcon();
+
+				const parts = ["회의록 작성이 완료되었습니다."];
+				if (this.writer.tags.length > 0) {
+					parts.push(`태그: ${this.writer.tags.slice(0, 5).map(t => `#${t}`).join(" ")}`);
+				}
+				new Notice(parts.join("\n"), 8000);
+
 				this.writer.reset();
 				this.recordingStartTime = null;
-				new Notice("회의록 작성이 완료되었습니다.");
 
 				// Slack 전송 결과 알림
 				if (slackStatus) {
@@ -146,8 +152,9 @@ export default class MeetNotePlugin extends Plugin {
 					const content = await this.app.vault.cachedRead(file as TFile);
 					if (!content.includes("type: meeting")) return;
 
+					console.log(`[MeetNote] File moved: ${oldPath} → ${file.path}`);
 					const baseUrl = this.getHttpBaseUrl();
-					await fetch(`${baseUrl}/recordings/update-meta`, {
+					const resp = await fetch(`${baseUrl}/recordings/update-meta`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
@@ -156,7 +163,14 @@ export default class MeetNotePlugin extends Plugin {
 							new_name: (file as TFile).basename,
 						}),
 					});
-				} catch { /* server might be offline */ }
+					if (resp.ok) {
+						console.log("[MeetNote] Meta sync OK:", file.path);
+					} else {
+						console.warn("[MeetNote] Meta sync failed:", resp.status, await resp.text());
+					}
+				} catch (err) {
+					console.warn("[MeetNote] Meta sync error (server offline?):", err);
+				}
 			})
 		);
 
@@ -173,6 +187,11 @@ export default class MeetNotePlugin extends Plugin {
 		);
 
 		this.addSettingTab(new MeetNoteSettingTab(this.app, this));
+
+		// Show onboarding if required settings are missing
+		if (!this.settings.backendDir) {
+			this.showOnboarding();
+		}
 
 		console.log("MeetNote plugin loaded");
 	}
@@ -248,6 +267,12 @@ export default class MeetNotePlugin extends Plugin {
 
 		if (this.settings.processMode === "queue") {
 			// Queue mode: just save WAV, don't wait for processing
+			// Clean up live transcription section from the document
+			this.writer.cleanupLiveSection().catch((err) =>
+				console.error("[MeetNote] Live section cleanup failed:", err)
+			);
+			this.writer.reset();
+			this.recordingStartTime = null;
 			this.statusBar.setIdle();
 			new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
 		} else {
@@ -306,8 +331,10 @@ export default class MeetNotePlugin extends Plugin {
 			if (!fmMatch) continue;
 
 			const fm = fmMatch[1];
+			if (!/^type:\s*meeting$/m.test(fm)) continue;
 			const dateMatch = fm.match(/^date:\s*(.+)$/m);
 			if (!dateMatch) continue;
+			if (/^dashboardType:\s*task$/m.test(fm)) continue;
 
 			// Parse frontmatter
 			const tags: string[] = [];
@@ -410,7 +437,8 @@ export default class MeetNotePlugin extends Plugin {
 			: "N/A";
 
 		// Build dashboard markdown
-		const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+		const d = new Date();
+		const now = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 		const barChar = (ratio: number, width: number = 15) => {
 			const filled = Math.round(ratio * width);
 			return "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
@@ -618,20 +646,33 @@ export default class MeetNotePlugin extends Plugin {
 		try {
 			const mdFiles = this.app.vault.getMarkdownFiles();
 
-			// Filter files with meetnote frontmatter (has date + tags with "회의")
-			const meetingFiles: Array<{ file: TFile; date: string }> = [];
+			// Filter files with meetnote frontmatter — prefer same folder (same meeting series)
+			const activeFile = this.app.workspace.getActiveFile();
+			const activeFolder = activeFile?.parent?.path || "";
+
+			const meetingFiles: Array<{ file: TFile; date: string; sameFolder: boolean }> = [];
 			for (const file of mdFiles) {
-				if (file.path === this.app.workspace.getActiveFile()?.path) continue;
+				if (file.path === activeFile?.path) continue;
 				const content = await this.app.vault.cachedRead(file);
 				const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
 				if (!fmMatch) continue;
 				const dateMatch = fmMatch[1].match(/^date:\s*(.+)$/m);
 				if (dateMatch) {
-					meetingFiles.push({ file, date: dateMatch[1].trim() });
+					const sameFolder = activeFolder && file.parent?.path === activeFolder;
+					meetingFiles.push({ file, date: dateMatch[1].trim(), sameFolder });
 				}
 			}
 
 			if (meetingFiles.length === 0) return "";
+
+			// Prefer same folder, then most recent
+			meetingFiles.sort((a, b) => {
+				if (a.sameFolder !== b.sameFolder) return a.sameFolder ? -1 : 1;
+				return b.date.localeCompare(a.date);
+			});
+
+			// Only use context from same folder — skip if no related meetings exist
+			if (!meetingFiles[0].sameFolder) return "";
 
 			// Sort by date descending, take the most recent
 			meetingFiles.sort((a, b) => b.date.localeCompare(a.date));
@@ -709,5 +750,89 @@ export default class MeetNotePlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	private showOnboarding(): void {
+		const modal = new OnboardingModal(this.app, this);
+		modal.open();
+	}
+}
+
+class OnboardingModal extends Modal {
+	private plugin: MeetNotePlugin;
+
+	constructor(app: import("obsidian").App, plugin: MeetNotePlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("meetnote-onboarding");
+
+		contentEl.createEl("h2", { text: "MeetNote 시작하기" });
+
+		const steps = contentEl.createDiv({ cls: "meetnote-onboarding-steps" });
+
+		// Step 1
+		const step1 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step1.createEl("div", { text: "1", cls: "meetnote-onboarding-number" });
+		const step1Content = step1.createDiv();
+		step1Content.createEl("strong", { text: "백엔드 설치" });
+		step1Content.createEl("p", { text: "backend 폴더에서 install.sh를 실행하세요. Python 3.11+, venv, 모델 다운로드를 자동으로 처리합니다." });
+
+		// Step 2
+		const step2 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step2.createEl("div", { text: "2", cls: "meetnote-onboarding-number" });
+		const step2Content = step2.createDiv();
+		step2Content.createEl("strong", { text: "백엔드 경로 설정 (필수)" });
+		step2Content.createEl("p", { text: "backend 디렉토리의 절대 경로를 입력하세요." });
+		const pathInput = step2Content.createEl("input", {
+			type: "text",
+			placeholder: "/path/to/meetnote/backend",
+			cls: "meetnote-onboarding-input",
+		});
+		pathInput.value = this.plugin.settings.backendDir;
+
+		// Step 3
+		const step3 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step3.createEl("div", { text: "3", cls: "meetnote-onboarding-number" });
+		const step3Content = step3.createDiv();
+		step3Content.createEl("strong", { text: "서버 시작" });
+		step3Content.createEl("p", { text: "사이드 패널(리본 메뉴)에서 '시작' 버튼으로 서버를 실행하세요." });
+
+		// Step 4
+		const step4 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step4.createEl("div", { text: "4", cls: "meetnote-onboarding-number" });
+		const step4Content = step4.createDiv();
+		step4Content.createEl("strong", { text: "녹음 시작" });
+		step4Content.createEl("p", { text: "마크다운 문서를 열고, 리본의 마이크 아이콘을 클릭하면 녹음이 시작됩니다. 녹음 종료 후 큐 모드에서는 사이드 패널에서 '처리' 버튼을 눌러 전사 + 요약을 실행하세요." });
+
+		// Action buttons
+		const btnRow = contentEl.createDiv({ cls: "meetnote-onboarding-actions" });
+
+		const saveBtn = btnRow.createEl("button", { text: "저장 후 시작", cls: "mod-cta" });
+		saveBtn.addEventListener("click", async () => {
+			const path = pathInput.value.trim();
+			if (!path) {
+				new Notice("백엔드 경로를 입력하세요.");
+				pathInput.focus();
+				return;
+			}
+			this.plugin.settings.backendDir = path;
+			await this.plugin.saveSettings();
+			new Notice("설정이 저장되었습니다. 사이드 패널에서 서버를 시작하세요.");
+			this.close();
+			// Open side panel
+			(this.app as any).commands.executeCommandById("meetnote:open-side-panel");
+		});
+
+		const skipBtn = btnRow.createEl("button", { text: "나중에 설정" });
+		skipBtn.addEventListener("click", () => this.close());
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

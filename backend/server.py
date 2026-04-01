@@ -66,8 +66,31 @@ def load_config() -> dict[str, Any]:
     return config
 
 
+def _validate_config(config: dict) -> None:
+    """Validate critical config at startup."""
+    audio_cfg = config.get("audio", {})
+    save_path = audio_cfg.get("save_path", "./recordings")
+    if save_path:
+        Path(save_path).mkdir(parents=True, exist_ok=True)
+        logger.info("Recording save path ready: %s", Path(save_path).resolve())
+
+    whisper_cfg = config.get("whisper", {})
+    model_size = whisper_cfg.get("model_size", "large-v3-turbo")
+    valid_models = {"tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"}
+    if model_size not in valid_models:
+        logger.warning("Unknown whisper model '%s', falling back to 'large-v3-turbo'.", model_size)
+        whisper_cfg["model_size"] = "large-v3-turbo"
+
+    server_cfg = config.get("server", {})
+    port = server_cfg.get("port", 8765)
+    if not isinstance(port, int) or port < 1 or port > 65535:
+        logger.warning("Invalid server port %s, using default 8765.", port)
+        server_cfg["port"] = 8765
+
+
 # Global mutable config that can be patched at runtime via POST /config.
 _config: dict[str, Any] = load_config()
+_validate_config(_config)
 
 
 def _write_result_to_vault(
@@ -347,6 +370,8 @@ class AppState:
         self.last_meeting_speaker_map: dict[str, str] = {}
         # Previous meeting context for follow-up tracking (sent from plugin at start).
         self.previous_context: str = ""
+        # Processing progress for polling from side panel
+        self.process_progress: dict = {"stage": "", "percent": 0, "wav_path": ""}
 
     def reset(self) -> None:
         self.recording = False
@@ -432,6 +457,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize shared state for routers
+from routers.shared import set_state, set_config
+set_state(state)
+set_config(_config)
+
+# Include routers
+from routers.speakers import router as speakers_router
+from routers.email import router as email_router
+from routers.config import router as config_router
+app.include_router(speakers_router)
+app.include_router(email_router)
+app.include_router(config_router)
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -503,6 +541,17 @@ async def health_check():
         "transcriber": state.transcriber is not None,
         "diarizer": state.diarizer is not None,
         "speaker_db_count": len(state.speaker_db.list_speakers()) if state.speaker_db else 0,
+    }
+
+
+@app.get("/recordings/progress")
+async def get_processing_progress():
+    """Return current processing progress for side panel polling."""
+    return {
+        "processing": state.processing,
+        "stage": state.process_progress["stage"],
+        "percent": state.process_progress["percent"],
+        "wav_path": state.process_progress["wav_path"],
     }
 
 
@@ -644,38 +693,56 @@ async def process_file(req: ProcessFileRequest):
 
     # Run the same pipeline as handle_stop but with an existing file
     state.processing = True
+    state.process_progress = {"stage": "준비 중", "percent": 0, "wav_path": wav_path}
     await send_status(ws)
+
+    stage_labels = {
+        "transcription": "전사 중",
+        "diarization": "화자 분리 중",
+        "speaker_embedding": "음성 특징 추출",
+        "merging": "결과 병합",
+        "correcting": "교정 중",
+        "summarizing": "요약 중",
+    }
+
+    async def progress(stage: str, percent: float) -> None:
+        state.process_progress = {
+            "stage": stage_labels.get(stage, stage),
+            "percent": percent,
+            "wav_path": wav_path,
+        }
+        await ws_send(ws, {"type": "progress", "stage": stage, "percent": percent})
 
     try:
         # Transcription
-        await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 10.0})
+        await progress("transcription", 10.0)
         transcription_segments = await asyncio.to_thread(
             state.transcriber.transcribe_file, wav_path
         )
-        await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 50.0})
+        await progress("transcription", 50.0)
 
         # Diarization
         diarization_segments = []
         speaker_embeddings: dict = {}
         speaker_map: dict[str, str] = {}
         try:
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 55.0})
+            await progress("diarization", 55.0)
             diarization_segments = await asyncio.to_thread(state.diarizer.run, wav_path)
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 75.0})
+            await progress("diarization", 75.0)
 
             if diarization_segments:
-                await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 78.0})
+                await progress("speaker_embedding", 78.0)
                 speaker_embeddings = await asyncio.to_thread(
                     state.diarizer.extract_embeddings, wav_path, diarization_segments,
                 )
-                await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 82.0})
+                await progress("speaker_embedding", 82.0)
 
                 # Always match against Speaker DB
                 if state.speaker_db and speaker_embeddings:
                     match_results = state.speaker_db.match_speakers(speaker_embeddings)
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
 
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 85.0})
+            await progress("diarization", 85.0)
         except Exception as diar_exc:
             logger.warning("Diarization skipped: %s", diar_exc)
 
@@ -705,7 +772,7 @@ async def process_file(req: ProcessFileRequest):
             ]
 
         # Merge
-        await ws_send(ws, {"type": "progress", "stage": "merging", "percent": 90.0})
+        await progress("merging", 90.0)
         if diarization_segments:
             merged = await asyncio.to_thread(
                 merge, transcription_segments, diarization_segments, speaker_map=speaker_map,
@@ -722,7 +789,7 @@ async def process_file(req: ProcessFileRequest):
 
         # Correction
         if final_segments:
-            await ws_send(ws, {"type": "progress", "stage": "correcting", "percent": 88.0})
+            await progress("correcting", 88.0)
             try:
                 correction = await asyncio.to_thread(correct_transcript, final_segments)
                 if correction.success:
@@ -734,7 +801,7 @@ async def process_file(req: ProcessFileRequest):
         # Summarize
         summary_text = ""
         if state.summarizer and final_segments:
-            await ws_send(ws, {"type": "progress", "stage": "summarizing", "percent": 92.0})
+            await progress("summarizing", 92.0)
             try:
                 summary_result = await asyncio.to_thread(
                     state.summarizer.summarize, final_segments,
@@ -779,474 +846,15 @@ async def process_file(req: ProcessFileRequest):
 
     finally:
         state.processing = False
+        state.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
         await send_status(ws)
 
 
-class SpeakerRegisterRequest(BaseModel):
-    """Register a speaker from the last meeting's unmatched diarization label."""
-    speaker_label: str  # e.g. "SPEAKER_00"
-    name: str
-    email: str = ""
 
 
-class SpeakerUpdateRequest(BaseModel):
-    """Update a registered speaker's info."""
-    name: str | None = None
-    email: str | None = None
+# Speaker, participant, email, slack, security, and search endpoints
+# are now in routers/speakers.py, routers/email.py, routers/config.py
 
-
-@app.get("/speakers")
-async def list_speakers():
-    """List all registered speakers."""
-    if not state.speaker_db:
-        return []
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "email": p.email,
-            "registered_at": p.registered_at,
-            "last_matched_at": p.last_matched_at,
-        }
-        for p in state.speaker_db.list_speakers()
-    ]
-
-
-class SpeakerRegisterFromFileRequest(BaseModel):
-    """Register a speaker using embedding from a specific recording's meta file."""
-    speaker_label: str
-    name: str
-    email: str = ""
-    wav_path: str = ""  # If provided, load embedding from .meta.json
-
-
-@app.post("/speakers/register")
-async def register_speaker(req: SpeakerRegisterFromFileRequest):
-    """Register a speaker using their embedding from a meeting."""
-    if not state.speaker_db:
-        return {"ok": False, "message": "Speaker DB not initialised"}
-
-    import numpy as np
-
-    # Try memory first, then meta file
-    embedding = state.last_meeting_embeddings.get(req.speaker_label)
-
-    if embedding is None and req.wav_path:
-        # Load from meta file
-        try:
-            import json as _json
-            meta_path = Path(req.wav_path).with_suffix(".meta.json")
-            if meta_path.exists():
-                meta = _json.loads(meta_path.read_text())
-                emb_data = meta.get("embeddings", {}).get(req.speaker_label)
-                if emb_data:
-                    embedding = np.array(emb_data, dtype=np.float32)
-        except Exception as exc:
-            logger.warning("Failed to load embedding from meta: %s", exc)
-
-    if embedding is None:
-        return {
-            "ok": False,
-            "message": f"No embedding found for '{req.speaker_label}'. "
-                       f"Available: {list(state.last_meeting_embeddings.keys())}",
-        }
-
-    # Check if same person already exists (name + embedding similarity)
-    existing = None
-    for p in state.speaker_db.list_speakers():
-        if p.name == req.name:
-            sim = state.speaker_db._cosine_similarity(embedding, p.embedding_array())
-            if sim > 0.5:  # Same person, different recording
-                existing = p
-                break
-
-    if existing:
-        profile = state.speaker_db.update_speaker(
-            existing.id,
-            email=req.email or existing.email,
-            embedding=embedding,
-        )
-        logger.info("Updated existing speaker '%s' (sim=%.2f) with new embedding.",
-                    req.name, state.speaker_db._cosine_similarity(embedding, existing.embedding_array()))
-    else:
-        profile = state.speaker_db.add_speaker(
-            name=req.name,
-            email=req.email,
-            embedding=embedding,
-        )
-
-    # Update meta + document atomically
-    old_display_name = ""
-    if req.wav_path:
-        try:
-            import json as _json, re as _re
-            meta_path = Path(req.wav_path).with_suffix(".meta.json")
-            if meta_path.exists():
-                meta = _json.loads(meta_path.read_text())
-
-                # Get old display name for document replacement
-                if "speaker_map" not in meta:
-                    meta["speaker_map"] = {}
-                old_val = meta["speaker_map"].get(req.speaker_label, "")
-                old_display_name = old_val.get("name", old_val) if isinstance(old_val, dict) else str(old_val)
-
-                # Update meta speaker_map (rich format)
-                meta["speaker_map"][req.speaker_label] = {"name": req.name, "email": req.email}
-                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-
-                # Update document (if old name exists and differs)
-                if old_display_name and old_display_name != req.name:
-                    doc_path = meta.get("document_path", "")
-                    if doc_path:
-                        _update_document_speaker(doc_path, old_display_name, req.name)
-
-        except Exception as exc:
-            logger.warning("Failed to update meta/document: %s", exc)
-
-    return {"ok": True, "speaker": {"id": profile.id, "name": profile.name, "email": profile.email}}
-
-
-@app.put("/speakers/{speaker_id}")
-async def update_speaker_endpoint(speaker_id: str, req: SpeakerUpdateRequest):
-    """Update a registered speaker's name or email."""
-    if not state.speaker_db:
-        return {"ok": False, "message": "Speaker DB not initialised"}
-
-    profile = state.speaker_db.update_speaker(
-        speaker_id, name=req.name, email=req.email,
-    )
-    if profile is None:
-        return {"ok": False, "message": f"Speaker '{speaker_id}' not found"}
-
-    return {"ok": True, "speaker": {"id": profile.id, "name": profile.name, "email": profile.email}}
-
-
-@app.delete("/speakers/{speaker_id}")
-async def delete_speaker_endpoint(speaker_id: str):
-    """Delete a registered speaker."""
-    if not state.speaker_db:
-        return {"ok": False, "message": "Speaker DB not initialised"}
-
-    deleted = state.speaker_db.delete_speaker(speaker_id)
-    return {"ok": deleted}
-
-
-@app.get("/speakers/last-meeting")
-async def last_meeting_speakers(wav_path: str = ""):
-    """Return speaker info from a meeting. If wav_path is given, load from meta file."""
-    speaker_map = dict(state.last_meeting_speaker_map)
-    available_labels = list(state.last_meeting_embeddings.keys())
-
-    # Load from meta file if wav_path provided or memory is empty
-    if wav_path or not available_labels:
-        try:
-            import json as _json
-            # Find the most recent meta file if wav_path not specified
-            if not wav_path:
-                recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
-                meta_files = sorted(recordings_dir.glob("*.meta.json"), reverse=True)
-                if meta_files:
-                    wav_path = str(meta_files[0].with_suffix(".wav"))
-
-            if wav_path:
-                meta_path = Path(wav_path).with_suffix(".meta.json")
-                if meta_path.exists():
-                    meta = _json.loads(meta_path.read_text())
-                    if "embeddings" in meta:
-                        available_labels = list(meta["embeddings"].keys())
-                    if "speaker_map" in meta:
-                        raw = meta["speaker_map"]
-                        name_map, email_map = _parse_speaker_map(raw)
-                        speaker_map = name_map
-                        speaker_email_map = email_map
-        except Exception:
-            pass
-
-    # If speaker_map is empty but labels exist, generate default 화자N
-    if available_labels and not speaker_map:
-        for idx, label in enumerate(sorted(available_labels), 1):
-            speaker_map[label] = f"화자{idx}"
-
-    return {
-        "speaker_map": speaker_map,
-        "speaker_email_map": locals().get("speaker_email_map", {}),
-        "available_labels": available_labels,
-        "wav_path": wav_path,
-    }
-
-
-class SpeakerReassignRequest(BaseModel):
-    """Reassign a speaker label to a different person."""
-    wav_path: str           # Recording WAV path
-    speaker_label: str      # e.g. "SPEAKER_00"
-    old_name: str           # Current name in document
-    new_name: str           # New name to assign
-    new_email: str = ""
-
-
-@app.post("/speakers/reassign")
-async def reassign_speaker(req: SpeakerReassignRequest):
-    """Reassign a speaker: update Speaker DB embedding + meta + return info for doc update."""
-    import json as _json, numpy as np
-
-    if not state.speaker_db:
-        return {"ok": False, "message": "Speaker DB not initialised"}
-
-    # Load embedding from meta
-    meta_path = Path(req.wav_path).with_suffix(".meta.json")
-    if not meta_path.exists():
-        return {"ok": False, "message": "Meta file not found"}
-
-    meta = _json.loads(meta_path.read_text())
-    embs = meta.get("embeddings", {})
-    emb_data = embs.get(req.speaker_label)
-    if emb_data is None:
-        return {"ok": False, "message": f"No embedding for {req.speaker_label}"}
-
-    embedding = np.array(emb_data, dtype=np.float32)
-
-    # Remove old speaker entry if it matches this embedding
-    for profile in state.speaker_db.list_speakers():
-        if profile.name == req.old_name:
-            sim = state.speaker_db._cosine_similarity(
-                embedding, profile.embedding_array()
-            )
-            if sim > 0.5:  # Likely the same person's embedding
-                state.speaker_db.delete_speaker(profile.id)
-                break
-
-    # Register or update speaker (name + embedding similarity check)
-    existing = None
-    for p in state.speaker_db.list_speakers():
-        if p.name == req.new_name:
-            sim = state.speaker_db._cosine_similarity(embedding, p.embedding_array())
-            if sim > 0.5:
-                existing = p
-                break
-
-    if existing:
-        new_profile = state.speaker_db.update_speaker(
-            existing.id,
-            email=req.new_email or existing.email,
-            embedding=embedding,
-        )
-        logger.info("Updated existing speaker '%s' with reassigned embedding.", req.new_name)
-    else:
-        new_profile = state.speaker_db.add_speaker(
-            name=req.new_name,
-            email=req.new_email,
-            embedding=embedding,
-        )
-
-    # Update meta speaker_map
-    if "speaker_map" not in meta:
-        meta["speaker_map"] = {}
-    meta["speaker_map"][req.speaker_label] = {"name": req.new_name, "email": req.new_email}
-    meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-
-    # Update document
-    doc_path = meta.get("document_path", "")
-    if doc_path and req.old_name != req.new_name:
-        _update_document_speaker(doc_path, req.old_name, req.new_name)
-
-    logger.info("Speaker reassigned: %s -> %s (label=%s)", req.old_name, req.new_name, req.speaker_label)
-
-    return {
-        "ok": True,
-        "old_name": req.old_name,
-        "new_name": req.new_name,
-        "speaker_id": new_profile.id,
-    }
-
-
-class ManualParticipantRequest(BaseModel):
-    """Add a participant who wasn't detected by diarization."""
-    wav_path: str
-    name: str
-    email: str = ""
-
-
-@app.post("/participants/add")
-async def add_manual_participant(req: ManualParticipantRequest):
-    """Add a manual participant to the recording's meta file."""
-    import json as _json
-    meta_path = Path(req.wav_path).with_suffix(".meta.json")
-    if not meta_path.exists():
-        return {"ok": False, "message": "Meta file not found"}
-
-    try:
-        meta = _json.loads(meta_path.read_text())
-        if "manual_participants" not in meta:
-            meta["manual_participants"] = []
-
-        # Avoid duplicates
-        existing = {p["name"] for p in meta["manual_participants"]}
-        if req.name in existing:
-            return {"ok": False, "message": f"'{req.name}' 이미 추가됨"}
-
-        meta["manual_participants"].append({"name": req.name, "email": req.email})
-        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-        return {"ok": True, "name": req.name}
-    except Exception as exc:
-        return {"ok": False, "message": str(exc)}
-
-
-@app.post("/participants/remove")
-async def remove_manual_participant(req: ManualParticipantRequest):
-    """Remove a manual participant from the recording's meta file."""
-    import json as _json
-    meta_path = Path(req.wav_path).with_suffix(".meta.json")
-    if not meta_path.exists():
-        return {"ok": False, "message": "Meta file not found"}
-
-    try:
-        meta = _json.loads(meta_path.read_text())
-        participants = meta.get("manual_participants", [])
-        meta["manual_participants"] = [p for p in participants if p["name"] != req.name]
-        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-        return {"ok": True}
-    except Exception as exc:
-        return {"ok": False, "message": str(exc)}
-
-
-@app.get("/participants/manual")
-async def get_manual_participants(wav_path: str):
-    """Get manual participants for a recording."""
-    import json as _json
-    meta_path = Path(wav_path).with_suffix(".meta.json")
-    if not meta_path.exists():
-        return {"participants": []}
-
-    try:
-        meta = _json.loads(meta_path.read_text())
-        return {"participants": meta.get("manual_participants", [])}
-    except Exception:
-        return {"participants": []}
-
-
-class EmailSendRequest(BaseModel):
-    """Send meeting minutes via email."""
-    recipients: list[str]        # email addresses
-    from_address: str
-    vault_file_path: str         # absolute path to .md file
-    include_gitlab_link: bool = True
-
-
-@app.post("/email/send")
-async def send_email(req: EmailSendRequest):
-    """Send meeting minutes to selected participants via sendmail."""
-    import subprocess, re
-
-    vault_path = Path(req.vault_file_path)
-    if not vault_path.exists():
-        return {"ok": False, "message": "Document not found"}
-
-    content = vault_path.read_text(encoding="utf-8")
-
-    # Extract summary section (between meetnote-start and 녹취록)
-    summary_match = re.search(
-        r'<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|$)', content
-    )
-    body_text = summary_match.group(1).strip() if summary_match else content[:3000]
-
-    # Extract GitLab URL if enabled
-    gitlab_url = ""
-    if req.include_gitlab_link:
-        gitlab_url = await asyncio.to_thread(_get_gitlab_url, str(vault_path))
-
-    # Build email subject
-    doc_name = vault_path.stem
-    subject = f"[MeetNote] {doc_name}"
-
-    # Build email body
-    email_body = body_text
-    if gitlab_url:
-        email_body += f"\n\n---\n📎 문서 링크: {gitlab_url}\n"
-
-    # Send to each recipient
-    sent = []
-    failed = []
-    for recipient in req.recipients:
-        try:
-            email_msg = f"Subject: {subject}\nFrom: {req.from_address}\nTo: {recipient}\nContent-Type: text/plain; charset=utf-8\n\n{email_body}"
-            result = subprocess.run(
-                ["sendmail", "-f", req.from_address, recipient],
-                input=email_msg.encode("utf-8"),
-                capture_output=True, timeout=10,
-            )
-            if result.returncode == 0:
-                sent.append(recipient)
-            else:
-                failed.append(recipient)
-                logger.warning("sendmail failed for %s: %s", recipient, result.stderr.decode())
-        except Exception as exc:
-            failed.append(recipient)
-            logger.warning("Email send failed for %s: %s", recipient, exc)
-
-    logger.info("Email sent to %d/%d recipients.", len(sent), len(req.recipients))
-    return {"ok": len(failed) == 0, "sent": sent, "failed": failed}
-
-
-def _get_gitlab_url(file_path: str) -> str:
-    """Extract GitLab URL for a file by finding its git remote."""
-    import subprocess
-    current = Path(file_path).parent
-
-    # Walk up to find .git directory
-    while current != current.parent:
-        if (current / ".git").exists():
-            break
-        current = current.parent
-    else:
-        return ""
-
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=str(current), capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return ""
-
-        remote_url = result.stdout.strip()
-
-        # Get default branch
-        branch_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(current), capture_output=True, text=True, timeout=5,
-        )
-        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
-
-        # Convert SSH/HTTPS remote to web URL (strip port, force https)
-        # ssh://git@gitlab.com:2201/group/repo.git → https://gitlab.com/group/repo
-        # git@gitlab.com:group/repo.git → https://gitlab.com/group/repo
-        # https://gitlab.com:8443/group/repo.git → https://gitlab.com/group/repo
-        import re
-        web_url = remote_url
-
-        # ssh://git@host:port/path.git
-        ssh_url_match = re.match(r"ssh://git@([^:/]+)(?::\d+)?/(.+?)(?:\.git)?$", remote_url)
-        if ssh_url_match:
-            web_url = f"https://{ssh_url_match.group(1)}/{ssh_url_match.group(2)}"
-        else:
-            # git@host:path.git
-            ssh_match = re.match(r"git@([^:]+):(.+?)(?:\.git)?$", remote_url)
-            if ssh_match:
-                web_url = f"https://{ssh_match.group(1)}/{ssh_match.group(2)}"
-            else:
-                # https://host:port/path.git → https://host/path
-                web_url = re.sub(r":\d+/", "/", web_url)
-                web_url = re.sub(r"\.git$", "", web_url)
-
-        # Relative path from git root to file
-        rel_path = Path(file_path).relative_to(current)
-
-        from urllib.parse import quote
-        encoded_path = quote(str(rel_path), safe="/")
-        return f"{web_url}/-/blob/{branch}/{encoded_path}"
-
-    except Exception:
-        return ""
 
 
 class RecordingDeleteRequest(BaseModel):
@@ -1326,147 +934,6 @@ async def requeue_recording(req: RecordingRequeueRequest):
 
     logger.info("Requeued recording (reset participants): %s", req.wav_path)
     return {"ok": True}
-
-
-@app.get("/speakers/search")
-async def search_speakers(q: str = ""):
-    """Search registered speakers by name."""
-    if not state.speaker_db:
-        return {"speakers": []}
-    all_speakers = state.speaker_db.list_speakers()
-    if q:
-        q_lower = q.lower()
-        all_speakers = [s for s in all_speakers if q_lower in s.name.lower()]
-    return {
-        "speakers": [
-            {"id": s.id, "name": s.name, "email": s.email,
-             "registered_at": s.registered_at, "last_matched_at": s.last_matched_at}
-            for s in all_speakers[:20]
-        ]
-    }
-
-
-# ---------------------------------------------------------------------------
-# Slack endpoints
-# ---------------------------------------------------------------------------
-
-class SlackConfigUpdate(BaseModel):
-    """Slack configuration update from the plugin."""
-    enabled: bool = False
-    webhook_url: str = ""
-
-
-@app.post("/slack/config")
-async def update_slack_config(req: SlackConfigUpdate):
-    """Update Slack webhook configuration at runtime."""
-    slack_cfg = SlackConfig(enabled=req.enabled, webhook_url=req.webhook_url)
-    if state.slack_sender:
-        state.slack_sender.update_config(slack_cfg)
-    else:
-        state.slack_sender = SlackSender(slack_cfg)
-
-    # Persist to runtime config
-    _config["slack"] = {"enabled": req.enabled, "webhook_url": req.webhook_url}
-
-    return {"ok": True, "enabled": slack_cfg.enabled}
-
-
-@app.post("/slack/test")
-async def test_slack_connection():
-    """Test Slack webhook connectivity."""
-    if not state.slack_sender:
-        return {"ok": False, "message": "Slack sender가 초기화되지 않았습니다."}
-
-    success, message = await asyncio.to_thread(state.slack_sender.test_connection)
-    return {"ok": success, "message": message}
-
-
-# ---------------------------------------------------------------------------
-# Security endpoints
-# ---------------------------------------------------------------------------
-
-class SecurityConfigUpdate(BaseModel):
-    """Security configuration update from the plugin."""
-    encryption_enabled: bool = False
-    auto_delete_days: int = 0
-
-
-@app.post("/security/config")
-async def update_security_config(req: SecurityConfigUpdate):
-    """Update security configuration at runtime."""
-    sec_cfg = SecurityConfig(
-        encryption_enabled=req.encryption_enabled,
-        auto_delete_days=req.auto_delete_days,
-        key_path=_config.get("security", {}).get("key_path", "./meetnote.key"),
-        audit_log_path=_config.get("security", {}).get("audit_log_path", "./audit.log"),
-    )
-    state.crypto = RecordingCrypto(sec_cfg)
-
-    # Persist to runtime config
-    if "security" not in _config:
-        _config["security"] = {}
-    _config["security"]["encryption_enabled"] = req.encryption_enabled
-    _config["security"]["auto_delete_days"] = req.auto_delete_days
-
-    return {"ok": True, "encryption_enabled": sec_cfg.encryption_enabled}
-
-
-# ---------------------------------------------------------------------------
-# Meeting search endpoints
-# ---------------------------------------------------------------------------
-
-class SearchIndexRequest(BaseModel):
-    """Update the search index with meeting documents from the vault."""
-    meetings: dict[str, str]  # filename -> content
-
-
-class SearchQueryRequest(BaseModel):
-    """Query past meetings."""
-    question: str
-    top_k: int = 3
-
-
-@app.post("/search/index")
-async def update_search_index(req: SearchIndexRequest):
-    """Rebuild the meeting search index."""
-    if not state.searcher:
-        return {"ok": False, "message": "Searcher not initialized"}
-    count = await asyncio.to_thread(state.searcher.update_index, req.meetings)
-    return {"ok": True, "indexed": count}
-
-
-@app.post("/search/query")
-async def search_query(req: SearchQueryRequest):
-    """Search and answer questions about past meetings."""
-    if not state.searcher:
-        return {"ok": False, "message": "Searcher not initialized"}
-
-    result = await asyncio.to_thread(state.searcher.query, req.question, req.top_k)
-    return {
-        "ok": result.success,
-        "answer": result.answer,
-        "sources": [
-            {"filename": s.filename, "score": s.score, "snippet": s.snippet}
-            for s in result.sources
-        ],
-        "error": result.error,
-    }
-
-
-@app.post("/search/find")
-async def search_find(req: SearchQueryRequest):
-    """Simple keyword search without LLM (fast)."""
-    if not state.searcher:
-        return {"ok": False, "message": "Searcher not initialized"}
-
-    results = await asyncio.to_thread(state.searcher.search, req.question, req.top_k)
-    return {
-        "ok": True,
-        "results": [
-            {"filename": r.filename, "score": r.score, "snippet": r.snippet}
-            for r in results
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1690,7 +1157,7 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
             except Exception as tail_exc:
                 logger.warning("Tail transcription skipped: %s", tail_exc)
 
-            await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 50.0})
+            await progress("transcription", 50.0)
         else:
             # Fallback: no chunks collected (e.g., very short recording) — transcribe full file
             logger.info("No chunk segments available, transcribing full file.")
@@ -1698,24 +1165,24 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
             transcription_segments = await asyncio.to_thread(
                 state.transcriber.transcribe_file, wav_path
             )
-            await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 50.0})
+            await progress("transcription", 50.0)
 
         # 2b. Diarization
         diarization_segments = []
         speaker_embeddings: dict = {}
         speaker_map: dict[str, str] = {}
         try:
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 55.0})
+            await progress("diarization", 55.0)
             diarization_segments = await asyncio.to_thread(state.diarizer.run, wav_path)
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 75.0})
+            await progress("diarization", 75.0)
 
             # 2b-2. Extract speaker embeddings
             if diarization_segments:
-                await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 78.0})
+                await progress("speaker_embedding", 78.0)
                 speaker_embeddings = await asyncio.to_thread(
                     state.diarizer.extract_embeddings, wav_path, diarization_segments,
                 )
-                await ws_send(ws, {"type": "progress", "stage": "speaker_embedding", "percent": 82.0})
+                await progress("speaker_embedding", 82.0)
 
                 # 2b-3. Match against speaker DB
                 if state.speaker_db and speaker_embeddings:
@@ -1723,7 +1190,7 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
                     logger.info("Speaker map: %s", speaker_map)
 
-            await ws_send(ws, {"type": "progress", "stage": "diarization", "percent": 85.0})
+            await progress("diarization", 85.0)
         except (ValueError, Exception) as diar_exc:
             logger.warning("Diarization skipped: %s", diar_exc)
             await ws_send(ws, {
@@ -1759,7 +1226,7 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
             ]
 
         # 2c. Merge (or fallback to transcription-only)
-        await ws_send(ws, {"type": "progress", "stage": "merging", "percent": 90.0})
+        await progress("merging", 90.0)
         if diarization_segments:
             merged = await asyncio.to_thread(
                 merge, transcription_segments, diarization_segments, speaker_map=speaker_map,
@@ -1778,7 +1245,7 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
 
         # 2d. LLM transcript correction (optional) ----------------------
         if final_segments:
-            await ws_send(ws, {"type": "progress", "stage": "correcting", "percent": 88.0})
+            await progress("correcting", 88.0)
             try:
                 correction = await asyncio.to_thread(correct_transcript, final_segments)
                 if correction.success:
@@ -1791,7 +1258,7 @@ async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
         # 3. Summarize (optional) ----------------------------------------
         summary_text = ""
         if state.summarizer and final_segments:
-            await ws_send(ws, {"type": "progress", "stage": "summarizing", "percent": 92.0})
+            await progress("summarizing", 92.0)
             try:
                 summary_result = await asyncio.to_thread(
                     state.summarizer.summarize, final_segments,

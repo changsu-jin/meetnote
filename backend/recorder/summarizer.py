@@ -56,13 +56,7 @@ SUMMARY_PROMPT = """\
 - 액션아이템의 기한은 반드시 YYYY-MM-DD 형식으로 작성하세요. 상대적 표현(예: "금요일", "다음 주")은 오늘 날짜를 기준으로 절대 날짜로 변환하세요.
 - 기한이 명시되지 않은 액션아이템은 📅 없이 작성하세요.
 - 태그는 회의의 핵심 주제/프로젝트/기술을 3~7개 추출하세요. 한글 또는 영어 단어, 공백 없이 #으로 시작.
-- 이전 회의 컨텍스트가 제공되면, 이전 액션아이템 중 이번 회의에서 언급된 것의 달성 여부를 "### 이전 액션아이템 추적" 섹션에 표시하세요. 형식: `- [x] 완료된 항목` 또는 `- [ ] 미완료 항목 (사유)`
-- 이전 컨텍스트가 없으면 "### 이전 액션아이템 추적" 섹션을 생략하세요.
 - 마크다운 형식만 출력하세요. 다른 설명은 불필요합니다.
-
-## 이전 회의 컨텍스트
-
-{previous_context}
 
 ## 이번 회의 녹취록
 
@@ -115,12 +109,10 @@ def _get_ollama_model(cfg: dict) -> str:
 
 
 def _build_prompt(transcript: str, previous_context: str = "") -> str:
-    """Build the summary prompt with today's date, transcript, and optional previous context."""
-    ctx = previous_context if previous_context else "(이전 회의 컨텍스트 없음)"
+    """Build the summary prompt with today's date and transcript."""
     return SUMMARY_PROMPT.format(
         today=date.today().isoformat(),
         transcript=transcript[:_MAX_TRANSCRIPT_CHARS],
-        previous_context=ctx,
     )
 
 

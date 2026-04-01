@@ -385,6 +385,29 @@ export class MeetingWriter {
 		return relatedFiles.length;
 	}
 
+	/**
+	 * Remove live transcription markers and content from the document.
+	 * Used in queue mode when stopping recording — the full transcription
+	 * will be written later by process-file.
+	 */
+	async cleanupLiveSection(): Promise<void> {
+		if (!this.activeFile) return;
+
+		await this.app.vault.process(this.activeFile, (content) => {
+			// Remove the entire meetnote section (markers + live content)
+			const startIdx = content.indexOf(SECTION_MARKER_START);
+			const endIdx = content.indexOf(SECTION_MARKER_END);
+
+			if (startIdx !== -1 && endIdx !== -1) {
+				const before = content.slice(0, startIdx).replace(/\n+$/, "");
+				const after = content.slice(endIdx + SECTION_MARKER_END.length).replace(/^\n+/, "");
+				return before + (after ? "\n" + after : "");
+			}
+
+			return content;
+		});
+	}
+
 	reset(): void {
 		this.activeFile = null;
 		this.startTime = null;

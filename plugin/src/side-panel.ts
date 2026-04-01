@@ -47,6 +47,9 @@ export class MeetNoteSidePanel extends ItemView {
 	private selectedDocName: string = "";  // Document name for display
 	private cachedNames: string[] = [];    // Auto-suggest names from vault
 	private nameEmailMap: Record<string, string> = {};  // name → email mapping
+	private collapsedSections: Set<string> = new Set();
+	private rendering = false;
+	private processingDocName: string = "";
 
 	constructor(leaf: WorkspaceLeaf, plugin: MeetNotePlugin) {
 		super(leaf);
@@ -74,6 +77,16 @@ export class MeetNoteSidePanel extends ItemView {
 	}
 
 	async render(): Promise<void> {
+		if (this.rendering) return;
+		this.rendering = true;
+		try {
+		await this._doRender();
+		} finally {
+		this.rendering = false;
+		}
+	}
+
+	private async _doRender(): Promise<void> {
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("meetnote-side-panel");
@@ -107,7 +120,7 @@ export class MeetNoteSidePanel extends ItemView {
 			});
 
 			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn", attr: { title: "서버 중지" } });
-			stopBtn.addEventListener("click", async () => { await this.stopServer(); await this.render(); });
+			stopBtn.addEventListener("click", async () => { await this.stopServer(); setTimeout(() => this.render(), 1500); });
 		} else {
 			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn", attr: { title: "서버 시작" } });
 			startBtn.addEventListener("click", async () => { await this.startServer(); setTimeout(() => this.render(), 12000); });
@@ -122,17 +135,18 @@ export class MeetNoteSidePanel extends ItemView {
 		refreshBtn.addEventListener("click", () => this.render());
 
 		// ── Recording Queue Section ──
-		container.createEl("h4", { text: "대기 중" });
-
+		let pendingCount = 0;
 		try {
-			const baseUrl = this.getHttpBaseUrl();
 			const resp = await this.api("/recordings/pending");
 			const recordings: PendingRecording[] = resp.recordings || [];
+			pendingCount = recordings.length;
+
+			const pendingContent = this.createCollapsibleSection(container, "pending", "대기 중", pendingCount > 0 ? `${pendingCount}` : undefined);
 
 			if (recordings.length === 0) {
-				container.createEl("p", { text: "대기 중인 녹음이 없습니다.", cls: "meetnote-empty" });
+				pendingContent.createEl("p", { text: "대기 중인 녹음이 없습니다.", cls: "meetnote-empty" });
 			} else {
-				const listContainer = container.createDiv({ cls: "meetnote-recording-list" });
+				const listContainer = pendingContent.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of recordings) {
 					const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
 
@@ -183,7 +197,7 @@ export class MeetNoteSidePanel extends ItemView {
 					});
 				}
 				if (recordings.length > 3) {
-					container.createEl("div", { text: `↓ ${recordings.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
+					pendingContent.createEl("div", { text: `↓ ${recordings.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
 				}
 			}
 		} catch (err) {
@@ -192,14 +206,13 @@ export class MeetNoteSidePanel extends ItemView {
 
 		// ── Completed Recordings Section ──
 		try {
-			const baseUrl = this.getHttpBaseUrl();
 			const allResp = await this.api("/recordings/all");
 			const allRecs: PendingRecording[] = allResp.recordings || [];
 			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
 
 			if (completed.length > 0) {
-				container.createEl("h4", { text: "최근 회의" });
-				const completedList = container.createDiv({ cls: "meetnote-recording-list" });
+				const completedContent = this.createCollapsibleSection(container, "completed", "최근 회의", `${completed.length}`);
+				const completedList = completedContent.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of completed) {
 					const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
@@ -227,7 +240,7 @@ export class MeetNoteSidePanel extends ItemView {
 					info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
 
 					const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
-					const mapBtn = btnGroup.createEl("button", { text: "관리", cls: "meetnote-process-btn" });
+					const mapBtn = btnGroup.createEl("button", { text: "참석자", cls: "meetnote-process-btn" });
 					mapBtn.addEventListener("click", async () => {
 						this.selectedWavPath = rec.path;
 						this.selectedDocName = rec.document_name || rec.filename;
@@ -257,7 +270,7 @@ export class MeetNoteSidePanel extends ItemView {
 					});
 				}
 				if (completed.length > 3) {
-					container.createEl("div", { text: `↓ ${completed.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
+					completedContent.createEl("div", { text: `↓ ${completed.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
 				}
 			}
 		} catch {
@@ -266,13 +279,28 @@ export class MeetNoteSidePanel extends ItemView {
 
 		// ── Progress Section ──
 		if (this.processing) {
-			container.createEl("h4", { text: "처리 중..." });
-			const progressBar = container.createDiv({ cls: "meetnote-progress" });
-			progressBar.createDiv({ cls: "meetnote-progress-bar" });
+			const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
+			const title = this.processingDocName ? `처리 중: ${this.processingDocName}` : "처리 중...";
+			progressSection.createEl("h4", { text: title });
+			const stageEl = progressSection.createEl("div", { text: "준비 중...", cls: "meetnote-progress-stage" });
+			const progressBar = progressSection.createDiv({ cls: "meetnote-progress" });
+			const bar = progressBar.createDiv({ cls: "meetnote-progress-bar" });
+			// Poll and update progress in-place
+			const progressPoller = setInterval(async () => {
+				if (!this.processing) { clearInterval(progressPoller); return; }
+				try {
+					const prog = await this.api("/recordings/progress");
+					if (prog.processing && prog.stage) {
+						stageEl.textContent = `${prog.stage} (${Math.round(prog.percent)}%)`;
+						bar.style.width = `${Math.round(prog.percent)}%`;
+						bar.style.animation = "none";
+					}
+				} catch { /* ignore */ }
+			}, 2000);
 		}
 
 		// ── Speaker Mapping Section (document-specific) ──
-		container.createEl("h4", { text: "회의 참석자" });
+		const speakerContent = this.createCollapsibleSection(container, "speakers", "회의 참석자");
 
 		if (this.cachedNames.length === 0) {
 			this.cachedNames = await this.loadSuggestNames();
@@ -281,7 +309,7 @@ export class MeetNoteSidePanel extends ItemView {
 		try {
 			if (this.selectedWavPath) {
 				if (this.selectedDocName) {
-					container.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+					speakerContent.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
 				}
 
 				const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
@@ -302,13 +330,13 @@ export class MeetNoteSidePanel extends ItemView {
 				const emailCheckboxes: Array<{ email: string; checkbox: HTMLInputElement }> = [];
 
 				if (lastMeeting.available_labels.length > 0) {
-					container.createEl("div", { text: "🎙 음성 인식", cls: "meetnote-subsection" });
+					speakerContent.createEl("div", { text: "🎙 음성 인식", cls: "meetnote-subsection" });
 
 					for (const label of lastMeeting.available_labels) {
 						const displayName = lastMeeting.speaker_map[label] || label;
 						const isUnregistered = displayName.startsWith("화자");
 						const email = speakerEmailMap[displayName] || "";
-						const row = container.createDiv({ cls: "meetnote-participant-row" });
+						const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
 
 						// Checkbox for email
 						const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" }) as HTMLInputElement;
@@ -351,7 +379,7 @@ export class MeetNoteSidePanel extends ItemView {
 
 				// ── Save button for voice-detected speaker changes ──
 				if (lastMeeting.available_labels.length > 0) {
-					const btnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const btnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
 					const batchBtn = btnRow.createEl("button", { text: "음성 참석자 저장", cls: "meetnote-register-btn meetnote-batch-btn" });
 					batchBtn.addEventListener("click", async () => {
 						// Check all unregistered speakers have names filled
@@ -386,14 +414,14 @@ export class MeetNoteSidePanel extends ItemView {
 				}
 
 				// ── 수동 추가 참석자 ──
-				container.createEl("div", { text: "👤 수동 추가", cls: "meetnote-subsection" });
+				speakerContent.createEl("div", { text: "👤 수동 추가", cls: "meetnote-subsection" });
 
 				try {
 					const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
 					const manualList: Array<{ name: string; email: string }> = manualResp.participants || [];
 
 					for (const p of manualList) {
-						const row = container.createDiv({ cls: "meetnote-participant-row" });
+						const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
 
 						const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" }) as HTMLInputElement;
 						if (p.email) {
@@ -419,7 +447,7 @@ export class MeetNoteSidePanel extends ItemView {
 				} catch { /* ignore */ }
 
 				// Add manual participant form
-				const addBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
+				const addBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
 				const addWrapper = addBtnRow.createDiv({ cls: "meetnote-input-wrapper" });
 				const addInput = addWrapper.createEl("input", { type: "text", placeholder: "이름 입력", cls: "meetnote-speaker-input" });
 				const addEmailInput = addBtnRow.createEl("input", { type: "text", placeholder: "이메일", cls: "meetnote-speaker-input" });
@@ -435,7 +463,7 @@ export class MeetNoteSidePanel extends ItemView {
 
 				// ── Email send button ──
 				if (emailCheckboxes.length > 0) {
-					const emailBtnRow = container.createDiv({ cls: "meetnote-batch-register" });
+					const emailBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
 					const emailBtn = emailBtnRow.createEl("button", { text: "📧 선택한 참석자에게 회의록 전송", cls: "meetnote-register-btn meetnote-batch-btn" });
 					emailBtn.addEventListener("click", async () => {
 						const selected = emailCheckboxes.filter((c) => c.checkbox.checked).map((c) => c.email);
@@ -478,23 +506,23 @@ export class MeetNoteSidePanel extends ItemView {
 				}
 
 			} else {
-				container.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
+				speakerContent.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
 			}
 
 			// ── Speaker DB Management Section ──
 			const allSpeakersResp = await this.api("/speakers");
 			const allDbSpeakers: SpeakerInfo[] = allSpeakersResp || [];
 
-			container.createEl("h4", { text: `음성 등록 사용자 (${allDbSpeakers.length}명)` });
-			container.createEl("p", { text: "음성이 등록되어 다음 회의 시 자동으로 인식됩니다.", cls: "meetnote-section-desc" });
+			const dbContent = this.createCollapsibleSection(container, "speaker-db", "음성 등록 사용자", `${allDbSpeakers.length}명`);
+			dbContent.createEl("p", { text: "음성이 등록되어 다음 회의 시 자동으로 인식됩니다.", cls: "meetnote-section-desc" });
 
-			const searchWrapper = container.createDiv({ cls: "meetnote-search-wrapper" });
+			const searchWrapper = dbContent.createDiv({ cls: "meetnote-search-wrapper" });
 			const searchInput = searchWrapper.createEl("input", {
 				type: "text",
 				placeholder: "🔍 검색...",
 				cls: "meetnote-search-input",
 			});
-			const speakerListEl = container.createDiv({ cls: "meetnote-recording-list" });
+			const speakerListEl = dbContent.createDiv({ cls: "meetnote-recording-list" });
 
 			const renderSpeakerList = (speakers: SpeakerInfo[]) => {
 				speakerListEl.empty();
@@ -579,7 +607,49 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 	}
 
+	/**
+	 * Create a collapsible section with toggle header.
+	 * Returns the content container to append children to.
+	 */
+	private createCollapsibleSection(parent: HTMLElement, id: string, title: string, badge?: string): HTMLElement {
+		const isCollapsed = this.collapsedSections.has(id);
+
+		const header = parent.createDiv({ cls: "meetnote-collapsible-header" });
+		const arrow = header.createEl("span", {
+			text: isCollapsed ? "▶" : "▼",
+			cls: "meetnote-collapsible-arrow",
+		});
+		const titleEl = header.createEl("span", { text: title, cls: "meetnote-collapsible-title" });
+		if (badge) {
+			header.createEl("span", { text: badge, cls: "meetnote-collapsible-badge" });
+		}
+
+		const content = parent.createDiv({ cls: "meetnote-collapsible-content" });
+		if (isCollapsed) {
+			content.style.display = "none";
+		}
+
+		header.addEventListener("click", () => {
+			if (this.collapsedSections.has(id)) {
+				this.collapsedSections.delete(id);
+				arrow.textContent = "▼";
+				content.style.display = "";
+			} else {
+				this.collapsedSections.add(id);
+				arrow.textContent = "▶";
+				content.style.display = "none";
+			}
+		});
+
+		return content;
+	}
+
 	private async processRecording(rec: PendingRecording, btn: HTMLElement): Promise<void> {
+		if (this.processing) {
+			new Notice("다른 회의를 처리 중입니다. 완료 후 다시 시도해주세요.");
+			return;
+		}
+
 		// Resolve vault file path — from meta or active file
 		let vaultFilePath = "";
 		if (rec.document_path) {
@@ -602,20 +672,23 @@ export class MeetNoteSidePanel extends ItemView {
 		btn.setText("처리 중...");
 		btn.setAttribute("disabled", "true");
 		this.processing = true;
+		this.processingDocName = rec.document_name || rec.filename;
+		await this.render();
 
-		const docName = rec.document_name || rec.filename;
+		const docName = this.processingDocName;
 		const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
 		new Notice(`처리 시작: ${docName} (예상 ~${estMinutes}분)`);
 
-		// Show progress in status bar
-		this.plugin.statusBar.setProgress("전사 중", 10);
-		const progressTimer = setInterval(() => {
-			// Simulate progress based on estimated time
-			const elapsed = (Date.now() - startTime) / 1000;
-			const estTotal = estMinutes * 60;
-			const pct = Math.min(95, Math.round((elapsed / estTotal) * 100));
-			this.plugin.statusBar.setProgress("처리 중", pct);
-		}, 3000);
+		// Poll real progress from backend
+		this.plugin.statusBar.setProgress("준비 중", 0);
+		const progressTimer = setInterval(async () => {
+			try {
+				const prog = await this.api("/recordings/progress");
+				if (prog.processing && prog.stage) {
+					this.plugin.statusBar.setProgress(prog.stage, Math.round(prog.percent));
+				}
+			} catch { /* ignore polling errors */ }
+		}, 2000);
 		const startTime = Date.now();
 
 		try {
@@ -628,17 +701,18 @@ export class MeetNoteSidePanel extends ItemView {
 			});
 
 			if (resp.ok) {
-				new Notice(`처리 완료: ${resp.segments}개 세그먼트`);
+				const elapsed = Math.round((Date.now() - startTime) / 1000);
+				const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}분 ${elapsed % 60}초` : `${elapsed}초`;
 
 				// Run tag extraction + related meeting links
 				const docPath = rec.document_path || "";
+				let linkedCount = 0;
 				if (docPath) {
 					const file = this.app.vault.getAbstractFileByPath(docPath);
 					if (file) {
 						try {
 							const { MeetingWriter } = await import("./writer");
 							const writer = new MeetingWriter(this.app);
-							// Read document to extract tags from summary
 							const content = await this.app.vault.read(file as any);
 							const tagMatch = content.match(/### 태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
 							if (tagMatch) {
@@ -647,27 +721,37 @@ export class MeetNoteSidePanel extends ItemView {
 									writer["activeFile"] = file;
 									writer["lastTags"] = tags.includes("회의") ? tags : ["회의", ...tags];
 									if (this.plugin.settings.autoLinkEnabled) {
-										const linked = await writer.linkRelatedMeetings();
-										if (linked > 0) {
-											new Notice(`${linked}개 연관 회의를 링크했습니다.`);
-										}
+										linkedCount = await writer.linkRelatedMeetings();
 									}
 								}
 							}
 						} catch (err) {
 							console.error("[MeetNote] Related meetings link failed:", err);
 						}
+
+						// Auto-open the processed document
+						await this.app.workspace.getLeaf().openFile(file as any);
 					}
 				}
+
+				// Enhanced completion notice (longer display duration)
+				const parts = [`처리 완료! (${elapsedStr})`, `${resp.segments}개 세그먼트`];
+				if (linkedCount > 0) parts.push(`${linkedCount}개 연관 회의 링크`);
+				new Notice(parts.join("\n"), 8000);
+
+				// Auto-select this recording for speaker management
+				this.selectedWavPath = rec.path;
+				this.selectedDocName = rec.document_name || rec.filename;
 			} else {
-				new Notice(`처리 실패: ${resp.message}`);
+				new Notice(`처리 실패: ${resp.message}`, 10000);
 			}
 		} catch (err) {
-			new Notice("처리 실패: 서버 오류");
+			new Notice("처리 실패: 서버 오류\n다시 시도해주세요.", 10000);
 		} finally {
 			clearInterval(progressTimer);
 			this.plugin.statusBar.setIdle();
 			this.processing = false;
+			this.processingDocName = "";
 			await this.render();
 		}
 	}
@@ -689,7 +773,7 @@ export class MeetNoteSidePanel extends ItemView {
 			const stopBtn = statusRow.createEl("button", { text: "중지", cls: "meetnote-server-btn" });
 			stopBtn.addEventListener("click", async () => {
 				await this.stopServer();
-				await this.render();
+				setTimeout(() => this.render(), 1500);
 			});
 		} else {
 			statusRow.createEl("span", { text: "● 중지됨", cls: "meetnote-status-offline" });
@@ -706,7 +790,10 @@ export class MeetNoteSidePanel extends ItemView {
 	private async checkServerHealth(): Promise<boolean> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const resp = await fetch(`${baseUrl}/health`);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 2000);
+			const resp = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+			clearTimeout(timeout);
 			const data = await resp.json();
 			return data?.ok === true;
 		} catch {
@@ -726,10 +813,24 @@ export class MeetNoteSidePanel extends ItemView {
 			const pythonPath = `${backendDir}/venv/bin/python3`;
 			const serverPath = `${backendDir}/server.py`;
 
+			// Inherit PATH — include common tool locations for Claude CLI, asdf, homebrew
+			const homedir = require("os").homedir();
+			const extraPaths = [
+				`${backendDir}/venv/bin`,
+				`${homedir}/.asdf/shims`,
+				`${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+				"/usr/local/bin",
+				"/opt/homebrew/bin",
+			];
+			const env = Object.assign({}, process.env, {
+				PATH: [...extraPaths, process.env.PATH || ""].join(":"),
+			});
+
 			const child = spawn(pythonPath, [serverPath], {
 				cwd: backendDir,
 				detached: true,
 				stdio: ["ignore", "pipe", "pipe"],
+				env,
 			});
 
 			// Write logs

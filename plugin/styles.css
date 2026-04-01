@@ -360,9 +360,155 @@
 	width: 50%;
 	background: var(--interactive-accent);
 	animation: meetnote-pulse 1.5s ease-in-out infinite;
+	transition: width 0.5s ease;
+}
+
+.meetnote-progress-section h4 {
+	font-size: 0.9em;
+	margin: 8px 0 4px 0;
+}
+
+.meetnote-progress-stage {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-bottom: 4px;
 }
 
 @keyframes meetnote-pulse {
 	0%, 100% { opacity: 0.4; }
 	50% { opacity: 1; }
+}
+
+/* ── Settings tabs ─────────────────────────────────────────── */
+
+.meetnote-settings-tabs {
+	display: flex;
+	gap: 0;
+	margin-bottom: 16px;
+	border-bottom: 2px solid var(--background-modifier-border);
+}
+
+.meetnote-settings-tab {
+	padding: 8px 20px;
+	cursor: pointer;
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -2px;
+	font-size: 0.95em;
+	color: var(--text-muted);
+	font-weight: 500;
+}
+
+.meetnote-settings-tab:hover {
+	color: var(--text-normal);
+}
+
+.meetnote-settings-tab-active {
+	color: var(--text-accent);
+	border-bottom-color: var(--interactive-accent);
+}
+
+.meetnote-settings-hint {
+	color: var(--text-muted);
+	font-size: 0.85em;
+	margin-bottom: 12px;
+}
+
+.meetnote-input-error {
+	border-color: var(--text-error) !important;
+	box-shadow: 0 0 0 1px var(--text-error);
+}
+
+/* ── Collapsible sections ──────────────────────────────────── */
+
+.meetnote-collapsible-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 0 4px 0;
+	cursor: pointer;
+	user-select: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-top: 8px;
+}
+
+.meetnote-collapsible-header:hover {
+	color: var(--text-accent);
+}
+
+.meetnote-collapsible-arrow {
+	font-size: 0.7em;
+	width: 12px;
+	text-align: center;
+	flex-shrink: 0;
+}
+
+.meetnote-collapsible-title {
+	font-weight: 600;
+	font-size: 0.95em;
+}
+
+.meetnote-collapsible-badge {
+	font-size: 0.75em;
+	color: var(--text-on-accent);
+	background: var(--interactive-accent);
+	padding: 1px 6px;
+	border-radius: 8px;
+	margin-left: auto;
+}
+
+.meetnote-collapsible-content {
+	padding-top: 4px;
+}
+
+/* ── Onboarding modal ──────────────────────────────────────── */
+
+.meetnote-onboarding {
+	max-width: 520px;
+}
+
+.meetnote-onboarding-steps {
+	margin: 16px 0;
+}
+
+.meetnote-onboarding-step {
+	display: flex;
+	gap: 12px;
+	margin-bottom: 16px;
+	align-items: flex-start;
+}
+
+.meetnote-onboarding-number {
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-weight: 700;
+	font-size: 0.85em;
+	flex-shrink: 0;
+}
+
+.meetnote-onboarding-step p {
+	margin: 4px 0 0 0;
+	color: var(--text-muted);
+	font-size: 0.9em;
+	line-height: 1.4;
+}
+
+.meetnote-onboarding-input {
+	width: 100%;
+	margin-top: 6px;
+	padding: 6px 8px;
+}
+
+.meetnote-onboarding-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
 }

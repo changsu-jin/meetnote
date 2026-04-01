@@ -85,6 +85,18 @@ class SpeakerDB:
 
     def _load(self) -> None:
         if not self._path.exists():
+            # Try loading from backup
+            bak_path = self._path.with_suffix(".json.bak")
+            if bak_path.exists():
+                logger.warning("Speaker DB not found, recovering from backup: %s", bak_path)
+                try:
+                    raw = json.loads(bak_path.read_text(encoding="utf-8"))
+                    self._profiles = [SpeakerProfile(**s) for s in raw.get("speakers", [])]
+                    self._save()  # Restore main file from backup
+                    logger.info("Recovered %d speaker(s) from backup.", len(self._profiles))
+                    return
+                except Exception as exc:
+                    logger.warning("Backup recovery failed: %s", exc)
             self._profiles = []
             logger.info("Speaker DB not found at %s — starting fresh.", self._path)
             return
@@ -94,11 +106,30 @@ class SpeakerDB:
             self._profiles = [SpeakerProfile(**s) for s in raw.get("speakers", [])]
             logger.info("Loaded %d speaker(s) from %s.", len(self._profiles), self._path)
         except (json.JSONDecodeError, TypeError, KeyError) as exc:
+            # Main file corrupted — try backup
+            bak_path = self._path.with_suffix(".json.bak")
+            if bak_path.exists():
+                logger.warning("Speaker DB corrupted, recovering from backup: %s", exc)
+                try:
+                    raw = json.loads(bak_path.read_text(encoding="utf-8"))
+                    self._profiles = [SpeakerProfile(**s) for s in raw.get("speakers", [])]
+                    logger.info("Recovered %d speaker(s) from backup.", len(self._profiles))
+                    return
+                except Exception:
+                    pass
             logger.warning("Failed to load speaker DB (%s) — starting fresh: %s", self._path, exc)
             self._profiles = []
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # Create backup of existing file before writing
+        if self._path.exists():
+            bak_path = self._path.with_suffix(".json.bak")
+            try:
+                import shutil
+                shutil.copy2(self._path, bak_path)
+            except Exception as exc:
+                logger.warning("Failed to create speaker DB backup: %s", exc)
         data = {"speakers": [asdict(p) for p in self._profiles]}
         self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.debug("Saved %d speaker(s) to %s.", len(self._profiles), self._path)
@@ -268,6 +299,12 @@ class SpeakerDB:
             self._save()
 
         matched = sum(1 for r in results if r.matched_profile is not None)
+        for r in results:
+            if r.matched_profile:
+                logger.info("  %s → %s (sim=%.3f)", r.speaker_id, r.display_name, r.similarity)
+            else:
+                logger.info("  %s → %s (best_sim=%.3f, below threshold=%.2f)",
+                           r.speaker_id, r.display_name, r.similarity, self._threshold)
         logger.info(
             "Speaker matching: %d/%d matched (threshold=%.2f).",
             matched, len(results), self._threshold,

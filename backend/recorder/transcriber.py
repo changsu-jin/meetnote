@@ -137,22 +137,45 @@ class Transcriber:
         time_offset: float = 0.0,
     ) -> list[TranscriptionSegment]:
         """Transcribe a short audio chunk for near-realtime processing."""
+        import time
+        start = time.monotonic()
         audio = self._prepare_audio(audio)
+        duration_s = len(audio) / self._sample_rate
 
-        if self._use_mlx:
-            return self._mlx_transcribe_audio(audio, time_offset=time_offset)
-        else:
-            return self._fw_transcribe_audio(audio, time_offset=time_offset)
+        try:
+            if self._use_mlx:
+                result = self._mlx_transcribe_audio(audio, time_offset=time_offset)
+            else:
+                result = self._fw_transcribe_audio(audio, time_offset=time_offset)
+            elapsed = time.monotonic() - start
+            logger.debug("Chunk transcribed: %.1fs audio in %.1fs (offset=%.1f, segments=%d)",
+                        duration_s, elapsed, time_offset, len(result))
+            return result
+        except Exception as exc:
+            elapsed = time.monotonic() - start
+            logger.error("Chunk transcription failed: %s (audio=%.1fs, offset=%.1f, elapsed=%.1fs)",
+                        exc, duration_s, time_offset, elapsed)
+            return []  # Skip failed chunk, continue recording
 
     def transcribe_file(self, file_path: str | Path) -> list[TranscriptionSegment]:
         """Transcribe an entire WAV file (batch mode)."""
+        import time
+        start = time.monotonic()
         file_path = Path(file_path)
         logger.info("Transcribing file: %s", file_path)
 
-        if self._use_mlx:
-            return self._mlx_transcribe_file(file_path)
-        else:
-            return self._fw_transcribe_file(file_path)
+        try:
+            if self._use_mlx:
+                result = self._mlx_transcribe_file(file_path)
+            else:
+                result = self._fw_transcribe_file(file_path)
+            elapsed = time.monotonic() - start
+            logger.info("File transcribed: %d segments in %.1fs — %s", len(result), elapsed, file_path.name)
+            return result
+        except Exception as exc:
+            elapsed = time.monotonic() - start
+            logger.error("File transcription failed: %s (file=%s, elapsed=%.1fs)", exc, file_path.name, elapsed)
+            raise  # Re-raise for process-file to handle
 
     def transcribe_file_from_offset(
         self, file_path: str | Path, offset_seconds: float
@@ -168,13 +191,17 @@ class Transcriber:
         if len(tail) < self._sample_rate:  # less than 1 second
             return []
 
-        logger.info("Transcribing tail: %.1fs audio from offset %.1fs.",
-                    len(tail) / self._sample_rate, offset_seconds)
+        duration_s = len(tail) / self._sample_rate
+        logger.info("Transcribing tail: %.1fs audio from offset %.1fs.", duration_s, offset_seconds)
 
-        if self._use_mlx:
-            return self._mlx_transcribe_audio(tail, time_offset=offset_seconds)
-        else:
-            return self._fw_transcribe_audio(tail, time_offset=offset_seconds)
+        try:
+            if self._use_mlx:
+                return self._mlx_transcribe_audio(tail, time_offset=offset_seconds)
+            else:
+                return self._fw_transcribe_audio(tail, time_offset=offset_seconds)
+        except Exception as exc:
+            logger.error("Tail transcription failed: %s (duration=%.1fs, offset=%.1fs)", exc, duration_s, offset_seconds)
+            return []  # Graceful degradation
 
     # ------------------------------------------------------------------
     # MLX Whisper backend
