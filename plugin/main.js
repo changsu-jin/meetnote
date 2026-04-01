@@ -2,6 +2,9 @@ var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -15,6 +18,298 @@ var __copyProps = (to, from, except, desc) => {
   return to;
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// src/writer.ts
+var writer_exports = {};
+__export(writer_exports, {
+  MeetingWriter: () => MeetingWriter,
+  extractTags: () => extractTags
+});
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function formatTime(date) {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+function formatDateTime(date) {
+  const y = date.getFullYear();
+  const m = pad2(date.getMonth() + 1);
+  const d = pad2(date.getDate());
+  const h = pad2(date.getHours());
+  const min = pad2(date.getMinutes());
+  return `${y}-${m}-${d} ${h}:${min}`;
+}
+function formatDate(date) {
+  const y = date.getFullYear();
+  const m = pad2(date.getMonth() + 1);
+  const d = pad2(date.getDate());
+  return `${y}-${m}-${d}`;
+}
+function secondsToWallClock(seconds, startTime) {
+  return new Date(startTime.getTime() + seconds * 1e3);
+}
+function extractTags(summary) {
+  const tagSectionMatch = summary.match(/###\s*태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
+  if (!tagSectionMatch) return [];
+  const tagLine = tagSectionMatch[1].trim();
+  const tags = tagLine.match(/#[\w가-힣]+/g);
+  return tags ? tags.map((t) => t.slice(1)) : [];
+}
+function extractFrontmatterTags(content) {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return [];
+  const tags = [];
+  const lines = fmMatch[1].split("\n");
+  let inTags = false;
+  for (const line of lines) {
+    if (/^tags:\s*$/.test(line)) {
+      inTags = true;
+      continue;
+    }
+    if (inTags) {
+      const tagMatch = line.match(/^\s+-\s+(.+)/);
+      if (tagMatch) {
+        tags.push(tagMatch[1].trim());
+      } else {
+        inTags = false;
+      }
+    }
+  }
+  return tags;
+}
+function buildFrontmatter(tags, date, participants) {
+  const lines = ["---"];
+  lines.push("type: meeting");
+  if (tags.length > 0) {
+    lines.push("tags:");
+    for (const tag of tags) {
+      lines.push(`  - ${tag}`);
+    }
+  }
+  lines.push(`date: ${date}`);
+  if (participants.length > 0) {
+    lines.push("participants:");
+    for (const p of participants) {
+      lines.push(`  - ${p}`);
+    }
+  }
+  lines.push("---");
+  lines.push("");
+  return lines.join("\n");
+}
+var LIVE_MARKER_START, LIVE_MARKER_END, SECTION_MARKER_START, SECTION_MARKER_END, RELATED_MARKER_START, RELATED_MARKER_END, MeetingWriter;
+var init_writer = __esm({
+  "src/writer.ts"() {
+    LIVE_MARKER_START = "<!-- meetnote-live-start -->";
+    LIVE_MARKER_END = "<!-- meetnote-live-end -->";
+    SECTION_MARKER_START = "<!-- meetnote-start -->";
+    SECTION_MARKER_END = "<!-- meetnote-end -->";
+    RELATED_MARKER_START = "<!-- meetnote-related-start -->";
+    RELATED_MARKER_END = "<!-- meetnote-related-end -->";
+    MeetingWriter = class {
+      constructor(app) {
+        this.activeFile = null;
+        this.startTime = null;
+        this.lastTags = [];
+        this.app = app;
+      }
+      get currentFile() {
+        return this.activeFile;
+      }
+      get tags() {
+        return this.lastTags;
+      }
+      async init(file, startTime) {
+        this.activeFile = file;
+        this.startTime = startTime;
+        const liveSection = [
+          "",
+          SECTION_MARKER_START,
+          "",
+          "## \uD68C\uC758 \uB179\uCDE8\uB85D",
+          "",
+          LIVE_MARKER_START,
+          LIVE_MARKER_END,
+          "",
+          SECTION_MARKER_END,
+          ""
+        ].join("\n");
+        await this.app.vault.process(this.activeFile, (content) => {
+          return content + liveSection;
+        });
+      }
+      async appendChunk(segments) {
+        if (!this.activeFile || !this.startTime) return;
+        const lines = [];
+        for (const seg of segments) {
+          const wallClock = secondsToWallClock(seg.start, this.startTime);
+          const ts = formatTime(wallClock);
+          lines.push(`**[${ts}]** ${seg.text.trim()}`);
+          lines.push("");
+        }
+        const newText = lines.join("\n");
+        await this.app.vault.process(this.activeFile, (content) => {
+          const markerIdx = content.lastIndexOf(LIVE_MARKER_END);
+          if (markerIdx === -1) {
+            return content + "\n" + newText;
+          }
+          return content.slice(0, markerIdx) + newText + content.slice(markerIdx);
+        });
+      }
+      async writeFinal(segments, startTime, endTime, summary, speakingStats) {
+        if (!this.activeFile) return;
+        const speakerSet = /* @__PURE__ */ new Set();
+        for (const seg of segments) {
+          speakerSet.add(seg.speaker);
+        }
+        const speakers = Array.from(speakerSet);
+        const speakerCount = speakers.length;
+        const speakerLabels = speakers.map(
+          (s) => s.startsWith("SPEAKER_") ? s.replace(/^SPEAKER_(\d+)$/, (_, n) => `\uD654\uC790${parseInt(n) + 1}`) : s
+        );
+        this.lastTags = summary ? extractTags(summary) : [];
+        if (!this.lastTags.includes("\uD68C\uC758")) {
+          this.lastTags.unshift("\uD68C\uC758");
+        }
+        const header = [
+          "## \uD68C\uC758 \uB179\uCDE8\uB85D",
+          "",
+          `> \uB179\uC74C: ${formatDateTime(startTime)} ~ ${formatTime(endTime)}`,
+          `> \uCC38\uC11D\uC790: ${speakerLabels.join(", ")} (\uC790\uB3D9 \uAC10\uC9C0 ${speakerCount}\uBA85)`,
+          ""
+        ];
+        if (speakingStats && speakingStats.length > 0) {
+          header.push("### \uBC1C\uC5B8 \uBE44\uC728");
+          header.push("");
+          for (const stat of speakingStats) {
+            const pct = Math.round(stat.ratio * 100);
+            const mins = Math.floor(stat.total_seconds / 60);
+            const secs = Math.round(stat.total_seconds % 60);
+            const barWidth = 20;
+            const filled = Math.round(stat.ratio * barWidth);
+            const bar = "\u25A0".repeat(filled) + "\u25A1".repeat(barWidth - filled);
+            header.push(`> ${stat.speaker} ${pct}% ${bar} (${mins}\uBD84 ${secs}\uCD08)`);
+          }
+          header.push("");
+        }
+        const summarySection = [];
+        if (summary && summary.trim()) {
+          summarySection.push(summary.trim());
+          summarySection.push("");
+          summarySection.push("---");
+          summarySection.push("");
+        }
+        const body = [];
+        body.push("## \uB179\uCDE8\uB85D");
+        body.push("");
+        let i = 0;
+        while (i < segments.length) {
+          const seg = segments[i];
+          const speakerLabel = seg.speaker.startsWith("SPEAKER_") ? seg.speaker.replace(/^SPEAKER_(\d+)$/, (_, n) => `\uD654\uC790${parseInt(n) + 1}`) : seg.speaker;
+          const groupStart = secondsToWallClock(seg.timestamp, startTime);
+          const texts = [seg.text.trim()];
+          let lastTimestamp = seg.timestamp;
+          while (i + 1 < segments.length && segments[i + 1].speaker === seg.speaker) {
+            i++;
+            texts.push(segments[i].text.trim());
+            lastTimestamp = segments[i].timestamp;
+          }
+          const groupEnd = secondsToWallClock(lastTimestamp, startTime);
+          const tsStart = formatTime(groupStart);
+          if (texts.length > 1) {
+            const tsEnd = formatTime(groupEnd);
+            body.push(`### ${tsStart} ~ ${tsEnd}`);
+          } else {
+            body.push(`### ${tsStart}`);
+          }
+          body.push(`**${speakerLabel}**: ${texts.join(" ")}`);
+          body.push("");
+          i++;
+        }
+        const finalContent = [...header, ...summarySection, ...body].join("\n");
+        const frontmatter = buildFrontmatter(
+          this.lastTags,
+          formatDate(startTime),
+          speakerLabels
+        );
+        await this.app.vault.process(this.activeFile, (content) => {
+          let cleanContent = content.replace(/^---\n[\s\S]*?\n---\n*/, "");
+          const startIdx = cleanContent.indexOf(SECTION_MARKER_START);
+          const endIdx = cleanContent.indexOf(SECTION_MARKER_END);
+          let bodyContent;
+          if (startIdx === -1 || endIdx === -1) {
+            bodyContent = cleanContent + "\n" + finalContent;
+          } else {
+            bodyContent = cleanContent.slice(0, startIdx) + SECTION_MARKER_START + "\n\n" + finalContent + "\n" + cleanContent.slice(endIdx);
+          }
+          return frontmatter + bodyContent;
+        });
+      }
+      /**
+       * Find related meetings in the vault and add bidirectional [[links]].
+       */
+      async linkRelatedMeetings(minOverlap = 2) {
+        if (!this.activeFile || this.lastTags.length === 0) return 0;
+        const currentPath = this.activeFile.path;
+        const currentTags = new Set(this.lastTags);
+        const relatedFiles = [];
+        const mdFiles = this.app.vault.getMarkdownFiles();
+        for (const file of mdFiles) {
+          if (file.path === currentPath) continue;
+          const content = await this.app.vault.cachedRead(file);
+          const fileTags = extractFrontmatterTags(content);
+          if (fileTags.length === 0) continue;
+          const commonTags = fileTags.filter((t) => currentTags.has(t));
+          if (commonTags.length >= minOverlap) {
+            relatedFiles.push({ file, commonTags });
+          }
+        }
+        if (relatedFiles.length === 0) return 0;
+        relatedFiles.sort((a, b) => b.commonTags.length - a.commonTags.length);
+        const relatedLines = [
+          "",
+          RELATED_MARKER_START,
+          "## \uC5F0\uAD00 \uD68C\uC758",
+          ""
+        ];
+        for (const { file, commonTags } of relatedFiles.slice(0, 10)) {
+          const name = file.basename;
+          const tagStr = commonTags.map((t) => `#${t}`).join(", ");
+          relatedLines.push(`- [[${name}]] (\uACF5\uD1B5: ${tagStr})`);
+        }
+        relatedLines.push("");
+        relatedLines.push(RELATED_MARKER_END);
+        await this.app.vault.process(this.activeFile, (content) => {
+          const cleaned = content.replace(
+            new RegExp(`\\n?${RELATED_MARKER_START}[\\s\\S]*?${RELATED_MARKER_END}\\n?`),
+            ""
+          );
+          return cleaned + relatedLines.join("\n");
+        });
+        const currentName = this.activeFile.basename;
+        for (const { file, commonTags } of relatedFiles.slice(0, 10)) {
+          await this.app.vault.process(file, (content) => {
+            if (content.includes(`[[${currentName}]]`)) return content;
+            const tagStr = commonTags.map((t) => `#${t}`).join(", ");
+            const linkLine = `- [[${currentName}]] (\uACF5\uD1B5: ${tagStr})`;
+            const relStartIdx = content.indexOf(RELATED_MARKER_START);
+            const relEndIdx = content.indexOf(RELATED_MARKER_END);
+            if (relStartIdx !== -1 && relEndIdx !== -1) {
+              return content.slice(0, relEndIdx) + linkLine + "\n" + content.slice(relEndIdx);
+            }
+            return content + "\n" + RELATED_MARKER_START + "\n## \uC5F0\uAD00 \uD68C\uC758\n\n" + linkLine + "\n" + RELATED_MARKER_END + "\n";
+          });
+        }
+        return relatedFiles.length;
+      }
+      reset() {
+        this.activeFile = null;
+        this.startTime = null;
+        this.lastTags = [];
+      }
+    };
+  }
+});
 
 // src/main.ts
 var main_exports = {};
@@ -448,287 +743,8 @@ var BackendClient = class {
   }
 };
 
-// src/writer.ts
-var LIVE_MARKER_START = "<!-- meetnote-live-start -->";
-var LIVE_MARKER_END = "<!-- meetnote-live-end -->";
-var SECTION_MARKER_START = "<!-- meetnote-start -->";
-var SECTION_MARKER_END = "<!-- meetnote-end -->";
-var RELATED_MARKER_START = "<!-- meetnote-related-start -->";
-var RELATED_MARKER_END = "<!-- meetnote-related-end -->";
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-function formatTime(date) {
-  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-}
-function formatDateTime(date) {
-  const y = date.getFullYear();
-  const m = pad2(date.getMonth() + 1);
-  const d = pad2(date.getDate());
-  const h = pad2(date.getHours());
-  const min = pad2(date.getMinutes());
-  return `${y}-${m}-${d} ${h}:${min}`;
-}
-function formatDate(date) {
-  const y = date.getFullYear();
-  const m = pad2(date.getMonth() + 1);
-  const d = pad2(date.getDate());
-  return `${y}-${m}-${d}`;
-}
-function secondsToWallClock(seconds, startTime) {
-  return new Date(startTime.getTime() + seconds * 1e3);
-}
-function extractTags(summary) {
-  const tagSectionMatch = summary.match(/###\s*태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
-  if (!tagSectionMatch) return [];
-  const tagLine = tagSectionMatch[1].trim();
-  const tags = tagLine.match(/#[\w가-힣]+/g);
-  return tags ? tags.map((t) => t.slice(1)) : [];
-}
-function extractFrontmatterTags(content) {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return [];
-  const tags = [];
-  const lines = fmMatch[1].split("\n");
-  let inTags = false;
-  for (const line of lines) {
-    if (/^tags:\s*$/.test(line)) {
-      inTags = true;
-      continue;
-    }
-    if (inTags) {
-      const tagMatch = line.match(/^\s+-\s+(.+)/);
-      if (tagMatch) {
-        tags.push(tagMatch[1].trim());
-      } else {
-        inTags = false;
-      }
-    }
-  }
-  return tags;
-}
-function buildFrontmatter(tags, date, participants) {
-  const lines = ["---"];
-  lines.push("type: meeting");
-  if (tags.length > 0) {
-    lines.push("tags:");
-    for (const tag of tags) {
-      lines.push(`  - ${tag}`);
-    }
-  }
-  lines.push(`date: ${date}`);
-  if (participants.length > 0) {
-    lines.push("participants:");
-    for (const p of participants) {
-      lines.push(`  - ${p}`);
-    }
-  }
-  lines.push("---");
-  lines.push("");
-  return lines.join("\n");
-}
-var MeetingWriter = class {
-  constructor(app) {
-    this.activeFile = null;
-    this.startTime = null;
-    this.lastTags = [];
-    this.app = app;
-  }
-  get currentFile() {
-    return this.activeFile;
-  }
-  get tags() {
-    return this.lastTags;
-  }
-  async init(file, startTime) {
-    this.activeFile = file;
-    this.startTime = startTime;
-    const liveSection = [
-      "",
-      SECTION_MARKER_START,
-      "",
-      "## \uD68C\uC758 \uB179\uCDE8\uB85D",
-      "",
-      LIVE_MARKER_START,
-      LIVE_MARKER_END,
-      "",
-      SECTION_MARKER_END,
-      ""
-    ].join("\n");
-    await this.app.vault.process(this.activeFile, (content) => {
-      return content + liveSection;
-    });
-  }
-  async appendChunk(segments) {
-    if (!this.activeFile || !this.startTime) return;
-    const lines = [];
-    for (const seg of segments) {
-      const wallClock = secondsToWallClock(seg.start, this.startTime);
-      const ts = formatTime(wallClock);
-      lines.push(`**[${ts}]** ${seg.text.trim()}`);
-      lines.push("");
-    }
-    const newText = lines.join("\n");
-    await this.app.vault.process(this.activeFile, (content) => {
-      const markerIdx = content.lastIndexOf(LIVE_MARKER_END);
-      if (markerIdx === -1) {
-        return content + "\n" + newText;
-      }
-      return content.slice(0, markerIdx) + newText + content.slice(markerIdx);
-    });
-  }
-  async writeFinal(segments, startTime, endTime, summary, speakingStats) {
-    if (!this.activeFile) return;
-    const speakerSet = /* @__PURE__ */ new Set();
-    for (const seg of segments) {
-      speakerSet.add(seg.speaker);
-    }
-    const speakers = Array.from(speakerSet);
-    const speakerCount = speakers.length;
-    const speakerLabels = speakers.map(
-      (s) => s.startsWith("SPEAKER_") ? s.replace(/^SPEAKER_(\d+)$/, (_, n) => `\uD654\uC790${parseInt(n) + 1}`) : s
-    );
-    this.lastTags = summary ? extractTags(summary) : [];
-    if (!this.lastTags.includes("\uD68C\uC758")) {
-      this.lastTags.unshift("\uD68C\uC758");
-    }
-    const header = [
-      "## \uD68C\uC758 \uB179\uCDE8\uB85D",
-      "",
-      `> \uB179\uC74C: ${formatDateTime(startTime)} ~ ${formatTime(endTime)}`,
-      `> \uCC38\uC11D\uC790: ${speakerLabels.join(", ")} (\uC790\uB3D9 \uAC10\uC9C0 ${speakerCount}\uBA85)`,
-      ""
-    ];
-    if (speakingStats && speakingStats.length > 0) {
-      header.push("### \uBC1C\uC5B8 \uBE44\uC728");
-      header.push("");
-      for (const stat of speakingStats) {
-        const pct = Math.round(stat.ratio * 100);
-        const mins = Math.floor(stat.total_seconds / 60);
-        const secs = Math.round(stat.total_seconds % 60);
-        const barWidth = 20;
-        const filled = Math.round(stat.ratio * barWidth);
-        const bar = "\u25A0".repeat(filled) + "\u25A1".repeat(barWidth - filled);
-        header.push(`> ${stat.speaker} ${pct}% ${bar} (${mins}\uBD84 ${secs}\uCD08)`);
-      }
-      header.push("");
-    }
-    const summarySection = [];
-    if (summary && summary.trim()) {
-      summarySection.push(summary.trim());
-      summarySection.push("");
-      summarySection.push("---");
-      summarySection.push("");
-    }
-    const body = [];
-    body.push("## \uB179\uCDE8\uB85D");
-    body.push("");
-    let i = 0;
-    while (i < segments.length) {
-      const seg = segments[i];
-      const speakerLabel = seg.speaker.startsWith("SPEAKER_") ? seg.speaker.replace(/^SPEAKER_(\d+)$/, (_, n) => `\uD654\uC790${parseInt(n) + 1}`) : seg.speaker;
-      const groupStart = secondsToWallClock(seg.timestamp, startTime);
-      const texts = [seg.text.trim()];
-      let lastTimestamp = seg.timestamp;
-      while (i + 1 < segments.length && segments[i + 1].speaker === seg.speaker) {
-        i++;
-        texts.push(segments[i].text.trim());
-        lastTimestamp = segments[i].timestamp;
-      }
-      const groupEnd = secondsToWallClock(lastTimestamp, startTime);
-      const tsStart = formatTime(groupStart);
-      if (texts.length > 1) {
-        const tsEnd = formatTime(groupEnd);
-        body.push(`### ${tsStart} ~ ${tsEnd}`);
-      } else {
-        body.push(`### ${tsStart}`);
-      }
-      body.push(`**${speakerLabel}**: ${texts.join(" ")}`);
-      body.push("");
-      i++;
-    }
-    const finalContent = [...header, ...summarySection, ...body].join("\n");
-    const frontmatter = buildFrontmatter(
-      this.lastTags,
-      formatDate(startTime),
-      speakerLabels
-    );
-    await this.app.vault.process(this.activeFile, (content) => {
-      let cleanContent = content.replace(/^---\n[\s\S]*?\n---\n*/, "");
-      const startIdx = cleanContent.indexOf(SECTION_MARKER_START);
-      const endIdx = cleanContent.indexOf(SECTION_MARKER_END);
-      let bodyContent;
-      if (startIdx === -1 || endIdx === -1) {
-        bodyContent = cleanContent + "\n" + finalContent;
-      } else {
-        bodyContent = cleanContent.slice(0, startIdx) + SECTION_MARKER_START + "\n\n" + finalContent + "\n" + cleanContent.slice(endIdx);
-      }
-      return frontmatter + bodyContent;
-    });
-  }
-  /**
-   * Find related meetings in the vault and add bidirectional [[links]].
-   */
-  async linkRelatedMeetings(minOverlap = 2) {
-    if (!this.activeFile || this.lastTags.length === 0) return 0;
-    const currentPath = this.activeFile.path;
-    const currentTags = new Set(this.lastTags);
-    const relatedFiles = [];
-    const mdFiles = this.app.vault.getMarkdownFiles();
-    for (const file of mdFiles) {
-      if (file.path === currentPath) continue;
-      const content = await this.app.vault.cachedRead(file);
-      const fileTags = extractFrontmatterTags(content);
-      if (fileTags.length === 0) continue;
-      const commonTags = fileTags.filter((t) => currentTags.has(t));
-      if (commonTags.length >= minOverlap) {
-        relatedFiles.push({ file, commonTags });
-      }
-    }
-    if (relatedFiles.length === 0) return 0;
-    relatedFiles.sort((a, b) => b.commonTags.length - a.commonTags.length);
-    const relatedLines = [
-      "",
-      RELATED_MARKER_START,
-      "## \uC5F0\uAD00 \uD68C\uC758",
-      ""
-    ];
-    for (const { file, commonTags } of relatedFiles.slice(0, 10)) {
-      const name = file.basename;
-      const tagStr = commonTags.map((t) => `#${t}`).join(", ");
-      relatedLines.push(`- [[${name}]] (\uACF5\uD1B5: ${tagStr})`);
-    }
-    relatedLines.push("");
-    relatedLines.push(RELATED_MARKER_END);
-    await this.app.vault.process(this.activeFile, (content) => {
-      const cleaned = content.replace(
-        new RegExp(`\\n?${RELATED_MARKER_START}[\\s\\S]*?${RELATED_MARKER_END}\\n?`),
-        ""
-      );
-      return cleaned + relatedLines.join("\n");
-    });
-    const currentName = this.activeFile.basename;
-    for (const { file, commonTags } of relatedFiles.slice(0, 10)) {
-      await this.app.vault.process(file, (content) => {
-        if (content.includes(`[[${currentName}]]`)) return content;
-        const tagStr = commonTags.map((t) => `#${t}`).join(", ");
-        const linkLine = `- [[${currentName}]] (\uACF5\uD1B5: ${tagStr})`;
-        const relStartIdx = content.indexOf(RELATED_MARKER_START);
-        const relEndIdx = content.indexOf(RELATED_MARKER_END);
-        if (relStartIdx !== -1 && relEndIdx !== -1) {
-          return content.slice(0, relEndIdx) + linkLine + "\n" + content.slice(relEndIdx);
-        }
-        return content + "\n" + RELATED_MARKER_START + "\n## \uC5F0\uAD00 \uD68C\uC758\n\n" + linkLine + "\n" + RELATED_MARKER_END + "\n";
-      });
-    }
-    return relatedFiles.length;
-  }
-  reset() {
-    this.activeFile = null;
-    this.startTime = null;
-    this.lastTags = [];
-  }
-};
+// src/main.ts
+init_writer();
 
 // src/recorder-view.ts
 var RecorderStatusBar = class {
@@ -1304,6 +1320,33 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       });
       if (resp.ok) {
         new import_obsidian3.Notice(`\uCC98\uB9AC \uC644\uB8CC: ${resp.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`);
+        const docPath = rec.document_path || "";
+        if (docPath) {
+          const file = this.app.vault.getAbstractFileByPath(docPath);
+          if (file) {
+            try {
+              const { MeetingWriter: MeetingWriter2 } = await Promise.resolve().then(() => (init_writer(), writer_exports));
+              const writer = new MeetingWriter2(this.app);
+              const content = await this.app.vault.read(file);
+              const tagMatch = content.match(/### 태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
+              if (tagMatch) {
+                const tags = (tagMatch[1].match(/#[\w가-힣]+/g) || []).map((t) => t.slice(1));
+                if (tags.length > 0) {
+                  writer["activeFile"] = file;
+                  writer["lastTags"] = tags.includes("\uD68C\uC758") ? tags : ["\uD68C\uC758", ...tags];
+                  if (this.plugin.settings.autoLinkEnabled) {
+                    const linked = await writer.linkRelatedMeetings();
+                    if (linked > 0) {
+                      new import_obsidian3.Notice(`${linked}\uAC1C \uC5F0\uAD00 \uD68C\uC758\uB97C \uB9C1\uD06C\uD588\uC2B5\uB2C8\uB2E4.`);
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("[MeetNote] Related meetings link failed:", err);
+            }
+          }
+        }
       } else {
         new import_obsidian3.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.message}`);
       }

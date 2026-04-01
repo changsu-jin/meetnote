@@ -559,6 +559,36 @@ export class MeetNoteSidePanel extends ItemView {
 
 			if (resp.ok) {
 				new Notice(`처리 완료: ${resp.segments}개 세그먼트`);
+
+				// Run tag extraction + related meeting links
+				const docPath = rec.document_path || "";
+				if (docPath) {
+					const file = this.app.vault.getAbstractFileByPath(docPath);
+					if (file) {
+						try {
+							const { MeetingWriter } = await import("./writer");
+							const writer = new MeetingWriter(this.app);
+							// Read document to extract tags from summary
+							const content = await this.app.vault.read(file as any);
+							const tagMatch = content.match(/### 태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
+							if (tagMatch) {
+								const tags = (tagMatch[1].match(/#[\w가-힣]+/g) || []).map((t: string) => t.slice(1));
+								if (tags.length > 0) {
+									writer["activeFile"] = file;
+									writer["lastTags"] = tags.includes("회의") ? tags : ["회의", ...tags];
+									if (this.plugin.settings.autoLinkEnabled) {
+										const linked = await writer.linkRelatedMeetings();
+										if (linked > 0) {
+											new Notice(`${linked}개 연관 회의를 링크했습니다.`);
+										}
+									}
+								}
+							}
+						} catch (err) {
+							console.error("[MeetNote] Related meetings link failed:", err);
+						}
+					}
+				}
 			} else {
 				new Notice(`처리 실패: ${resp.message}`);
 			}
