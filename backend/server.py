@@ -180,9 +180,19 @@ def _write_result_to_vault(
     else:
         new_content = start_marker + "\n\n" + content + "\n" + end_marker + "\n"
 
-    # Clean up any leftover live markers
-    new_content = new_content.replace("<!-- meetnote-live-start -->", "")
-    new_content = new_content.replace("<!-- meetnote-live-end -->", "")
+    # Clean up leftover live section (real-time transcription remnants)
+    import re as _re
+    new_content = _re.sub(
+        r'<!-- meetnote-live-start -->[\s\S]*?<!-- meetnote-live-end -->\s*',
+        '', new_content
+    )
+    # Remove duplicate empty meetnote sections
+    new_content = _re.sub(
+        r'<!-- meetnote-start -->\s*## 회의 녹취록\s*<!-- meetnote-end -->\s*',
+        '', new_content
+    )
+    # Remove duplicate blank lines
+    new_content = _re.sub(r'\n{4,}', '\n\n\n', new_content)
 
     vault_path.write_text(new_content, encoding="utf-8")
 
