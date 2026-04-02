@@ -21,10 +21,11 @@ bash install.sh
 ```
 
 설치 스크립트가 안내에 따라 진행하면 됩니다:
-- Python 환경 자동 설정
+- Python 환경 자동 설정 (venv + 의존성 + MLX Whisper)
 - 플러그인 빌드 및 vault 설치
 - HuggingFace 토큰 입력 (화자 구분용, 무료 가입)
-- BlackHole 설치 여부 선택 (화상회의 녹음 시 필요)
+- Obsidian vault 경로 설정 (자동 탐색 또는 수동 입력)
+- BlackHole 설치 여부 선택 (macOS, 화상회의 녹음 시 필요)
 
 ### HuggingFace 토큰 발급 방법
 
@@ -51,7 +52,7 @@ Zoom/Teams/Meet 녹음이 필요한 경우에만:
 
 플러그인을 처음 활성화하면 온보딩 위저드가 나타납니다.
 
-- **백엔드 경로** (필수): meetnote/backend 디렉토리의 절대 경로 입력
+- **백엔드 경로** (필수): meetnote/backend 디렉토리의 절대 경로 입력 (install.sh 완료 시 경로가 표시됩니다)
 - "저장 후 시작" 클릭 → 사이드패널이 자동으로 열림
 
 수동으로 설정하려면: Obsidian 설정 → MeetNote
@@ -78,13 +79,18 @@ Zoom/Teams/Meet 녹음이 필요한 경우에만:
 
 ### 2. 서버 시작
 
-사이드패널 헤더에서 **"시작"** 버튼 클릭 (약 10초 소요)
+사이드패널 헤더에서 **"시작"** 버튼 클릭 (첫 실행 시 모델 다운로드로 수 분 소요, 이후 약 10초)
 
 상태 표시:
 - 🟢 녹색 점: 서버 실행 중
 - 🔴 빨간 점: 서버 중지
 
-> 또는 터미널에서: `cd meetnote && bash start.sh`
+> 또는 터미널에서:
+> ```bash
+> cd meetnote/backend
+> source venv/bin/activate
+> python3 server.py
+> ```
 
 ## 기본 사용법
 
