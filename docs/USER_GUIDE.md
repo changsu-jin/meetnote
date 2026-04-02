@@ -33,7 +33,9 @@ bash install.sh
 
 1. [huggingface.co](https://huggingface.co/join)에 가입 (무료)
 2. [pyannote 모델 페이지](https://huggingface.co/pyannote/speaker-diarization-3.1)에서 "Agree" 클릭
-3. [토큰 설정 페이지](https://huggingface.co/settings/tokens)에서 "New token" → 이름 입력 → 생성
+3. [토큰 설정 페이지](https://huggingface.co/settings/tokens)에서 "New token" 클릭
+   - **Type**: Read (읽기 전용이면 충분)
+   - **Permissions**: Repositories → Read access to contents of all public gated repos
 4. 생성된 `hf_...` 토큰을 설치 스크립트에 붙여넣기
 
 ### 화상회의 녹음 설정 (선택)

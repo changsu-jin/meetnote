@@ -112,6 +112,8 @@ if [ -z "$CURRENT_TOKEN" ]; then
     echo "  1. https://huggingface.co 에 가입"
     echo "  2. https://huggingface.co/pyannote/speaker-diarization-3.1 에서 이용약관 동의"
     echo "  3. https://huggingface.co/settings/tokens 에서 토큰 생성"
+    echo "     - Type: Read (읽기 전용이면 충분)"
+    echo "     - Permissions: Repositories → Read access to contents of all public gated repos"
     echo ""
     read -p "  HuggingFace 토큰을 입력하세요 (나중에 하려면 Enter): " HF_TOKEN
 
