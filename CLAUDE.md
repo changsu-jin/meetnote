@@ -94,6 +94,7 @@ You MUST read the overview resource to understand the complete workflow. The inf
 2. **결정 확정 후 구현** — 구현 중 요구사항 변경 최소화. 결정을 대화로 확정하고 한번에 구현
 3. **커밋은 태스크 단위** — 작은 수정마다 커밋하지 않고, 태스크 완료 시 한번에 커밋
 4. **결정사항은 PLAN.md에 집중** — 여러 문서에 분산하지 않고 PLAN.md를 single source of truth로
+5. **민감정보 커밋 금지** — 토큰, 비밀번호, 개인정보, API Key 등이 코드/문서에 포함된 경우 **반드시 사용자에게 알리고 확인 받은 후 커밋**. `.env`, 개인 설정 파일은 절대 커밋하지 않는다
 
 ## 세션 시작 시 체크리스트
 1. `PLAN.md` 읽기 — 현재 계획, 결정사항, 남은 작업 확인
