@@ -2168,7 +2168,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         const panel = leaves[0].view;
         panel.render();
       }
-    }, 1e3);
+    }, 3e3);
   }
   async activateSidePanel() {
     const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
