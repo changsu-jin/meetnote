@@ -27,6 +27,11 @@ def _load_dotenv() -> None:
             key, val = line.split("=", 1)
             os.environ.setdefault(key.strip(), val.strip())
 
+    # HuggingFace Hub library reads HF_TOKEN, not HUGGINGFACE_TOKEN
+    hf_token = os.environ.get("HUGGINGFACE_TOKEN", "")
+    if hf_token and not os.environ.get("HF_TOKEN"):
+        os.environ["HF_TOKEN"] = hf_token
+
 
 @dataclass(frozen=True)
 class ServerConfig:

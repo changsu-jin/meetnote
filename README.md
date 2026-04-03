@@ -69,6 +69,24 @@ docker compose pull
 docker compose up -d
 ```
 
+### macOS 로컬 실행 (GPU 가속)
+
+> Docker에서는 Apple Silicon GPU(MPS)에 접근할 수 없습니다.
+> 맥북에서 GPU 가속(MLX Whisper)을 사용하려면 venv로 직접 실행하세요.
+
+```bash
+git clone https://github.com/changsu-jin/meetnote.git
+cd meetnote/backend
+bash install-local.sh   # venv 생성 + 의존성 + MLX Whisper 설치
+bash start-local.sh     # 서버 실행 (기본 포트 8765)
+bash start-local.sh 8766  # 다른 포트로 실행
+```
+
+| 실행 방식 | GPU 가속 | 권장 환경 |
+|----------|---------|----------|
+| Docker | X (CPU only) | Linux 서버 (CUDA 가능), 원격 배포 |
+| venv (로컬) | O (MLX/MPS) | macOS, 로컬 개발 |
+
 ### 환경변수
 
 | 변수 | 기본값 | 설명 |
