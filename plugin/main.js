@@ -1614,20 +1614,63 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 const result = await summarize(finalSegments);
                 if (result.success && result.summary) {
                   await this.app.vault.process(file, (content) => {
-                    const marker = "## \uB179\uCDE8\uB85D";
-                    const idx = content.indexOf(marker);
-                    if (idx !== -1) {
-                      return content.slice(0, idx) + result.summary.trim() + "\n\n---\n\n" + content.slice(idx);
+                    const summaryMatch = result.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
+                    const decisionsMatch = result.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
+                    const actionsMatch = result.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
+                    const tagsMatch = result.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
+                    let updated = content;
+                    if (summaryMatch) {
+                      updated = updated.replace(
+                        /### 요약\n\n\(요약 생성 중\.\.\.\)/,
+                        `### \uC694\uC57D
+${summaryMatch[1].trimEnd()}`
+                      );
                     }
-                    return result.summary.trim() + "\n\n---\n\n" + content;
+                    if (decisionsMatch) {
+                      updated = updated.replace(
+                        /### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/,
+                        `### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+${decisionsMatch[1].trimEnd()}`
+                      );
+                    }
+                    if (actionsMatch) {
+                      updated = updated.replace(
+                        /### 액션아이템\n\n\(요약 생성 중\.\.\.\)/,
+                        `### \uC561\uC158\uC544\uC774\uD15C
+${actionsMatch[1].trimEnd()}`
+                      );
+                    }
+                    if (tagsMatch) {
+                      updated = updated.replace(
+                        /### 태그\n\n\(요약 생성 중\.\.\.\)/,
+                        `### \uD0DC\uADF8
+${tagsMatch[1].trimEnd()}`
+                      );
+                    }
+                    if (updated === content) {
+                      updated = updated.replace(
+                        /### 요약\n\n\(요약 생성 중\.\.\.\)\n\n### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)\n\n### 액션아이템\n\n\(요약 생성 중\.\.\.\)\n\n### 태그\n\n\(요약 생성 중\.\.\.\)/,
+                        result.summary.trim()
+                      );
+                    }
+                    return updated;
                   });
                   hasSummary = true;
                 } else if (result.engine === "none") {
+                  await this.app.vault.process(file, (content) => {
+                    return content.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
+                  });
                   new import_obsidian3.Notice("Claude CLI\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
                 }
               }
             } catch (err) {
               console.error("[MeetNote] Summary generation failed:", err);
+              try {
+                await this.app.vault.process(file, (content) => {
+                  return content.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
+                });
+              } catch {
+              }
             }
             try {
               const { MeetingWriter: MeetingWriter2 } = await Promise.resolve().then(() => (init_writer(), writer_exports));

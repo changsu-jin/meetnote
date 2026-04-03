@@ -103,10 +103,10 @@ def _write_result_to_vault(
     lines.append(f"> 참석자: {', '.join(speakers)} (자동 감지 {len(speakers)}명)")
     lines.append("")
 
-    # Speaking stats
+    # Speaking stats (always show section)
+    lines.append("### 발언 비율")
+    lines.append("")
     if speaking_stats:
-        lines.append("### 발언 비율")
-        lines.append("")
         for stat in speaking_stats:
             pct = round(stat.get("ratio", 0) * 100)
             secs = stat.get("total_seconds", 0)
@@ -116,7 +116,33 @@ def _write_result_to_vault(
             filled = round(stat.get("ratio", 0) * bar_w)
             bar = "\u25A0" * filled + "\u25A1" * (bar_w - filled)
             lines.append(f"> {stat['speaker']} {pct}% {bar} ({mins}분 {sec}초)")
-        lines.append("")
+    else:
+        lines.append("(없음)")
+    lines.append("")
+
+    # Summary placeholder sections (plugin will replace with Claude CLI output)
+    lines.append("### 요약")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("### 주요 결정사항")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("### 액션아이템")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("### 태그")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
 
     # Transcript
     lines.append("## 녹취록")
@@ -148,6 +174,13 @@ def _write_result_to_vault(
         lines.append(f"**{speaker}**: {' '.join(texts)}")
         lines.append("")
         i += 1
+
+    # Related meetings placeholder
+    lines.append("")
+    lines.append("### 연관 회의")
+    lines.append("")
+    lines.append("(없음)")
+    lines.append("")
 
     content = "\n".join(lines)
 

@@ -715,22 +715,69 @@ export class MeetNoteSidePanel extends ItemView {
 							if (finalSegments.length > 0) {
 								const result = await summarize(finalSegments);
 								if (result.success && result.summary) {
-									// Insert summary into document (before 녹취록 section)
+									// Replace placeholder sections with actual summary
 									await this.app.vault.process(file as TFile, (content) => {
-										const marker = "## 녹취록";
-										const idx = content.indexOf(marker);
-										if (idx !== -1) {
-											return content.slice(0, idx) + result.summary.trim() + "\n\n---\n\n" + content.slice(idx);
+										// Extract sections from Claude output
+										const summaryMatch = result.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
+										const decisionsMatch = result.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
+										const actionsMatch = result.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
+										const tagsMatch = result.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
+
+										let updated = content;
+
+										// Replace each placeholder section
+										if (summaryMatch) {
+											updated = updated.replace(
+												/### 요약\n\n\(요약 생성 중\.\.\.\)/,
+												`### 요약\n${summaryMatch[1].trimEnd()}`
+											);
 										}
-										return result.summary.trim() + "\n\n---\n\n" + content;
+										if (decisionsMatch) {
+											updated = updated.replace(
+												/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/,
+												`### 주요 결정사항\n${decisionsMatch[1].trimEnd()}`
+											);
+										}
+										if (actionsMatch) {
+											updated = updated.replace(
+												/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/,
+												`### 액션아이템\n${actionsMatch[1].trimEnd()}`
+											);
+										}
+										if (tagsMatch) {
+											updated = updated.replace(
+												/### 태그\n\n\(요약 생성 중\.\.\.\)/,
+												`### 태그\n${tagsMatch[1].trimEnd()}`
+											);
+										}
+
+										// If no section matches (Claude output format different), replace all placeholders
+										if (updated === content) {
+											updated = updated.replace(
+												/### 요약\n\n\(요약 생성 중\.\.\.\)\n\n### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)\n\n### 액션아이템\n\n\(요약 생성 중\.\.\.\)\n\n### 태그\n\n\(요약 생성 중\.\.\.\)/,
+												result.summary.trim()
+											);
+										}
+
+										return updated;
 									});
 									hasSummary = true;
 								} else if (result.engine === "none") {
+									// Replace placeholders with (없음)
+									await this.app.vault.process(file as TFile, (content) => {
+										return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
+									});
 									new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
 								}
 							}
 						} catch (err) {
 							console.error("[MeetNote] Summary generation failed:", err);
+							// Replace placeholders with (없음) on error
+							try {
+								await this.app.vault.process(file as TFile, (content) => {
+									return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
+								});
+							} catch { /* ignore */ }
 						}
 
 						// Run tag extraction + related meeting links
