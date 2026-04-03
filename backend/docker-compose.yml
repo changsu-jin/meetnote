@@ -2,7 +2,7 @@ services:
   meetnote:
     build: .
     # 릴리즈 시 GHCR 이미지로 교체:
-    # image: ghcr.io/<user>/meetnote-server:latest
+    # image: ghcr.io/changsu-jin/meetnote-server:latest
     ports:
       - "8765:8765"
     env_file:

@@ -4,7 +4,7 @@ title: CI/CD — 플러그인 BRAT 릴리즈 + 서버 GHCR 이미지 빌드
 status: Done
 assignee: []
 created_date: '2026-04-02 07:53'
-updated_date: '2026-04-03 00:48'
+updated_date: '2026-04-03 01:06'
 labels:
   - devops
   - ci-cd
@@ -29,7 +29,7 @@ priority: medium
 **서버 이미지 빌드 (docker.yml 신규):**
 - 태그 `v*` 푸시 시 트리거
 - 멀티 아키텍처 빌드: `linux/amd64`, `linux/arm64`
-- GHCR에 push: `ghcr.io/<user>/meetnote-server:<version>` + `latest`
+- GHCR에 push: `ghcr.io/changsu-jin/meetnote-server:<version>` + `latest`
 - 개발 중 커밋은 빌드하지 않음
 
 CI/CD 릴리즈 룰을 `CLAUDE.md`에 기록할 것.

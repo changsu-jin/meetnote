@@ -107,7 +107,7 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 ### 서버 이미지 빌드 (`.github/workflows/docker.yml`)
 - 멀티 아키텍처: `linux/amd64`, `linux/arm64`
-- GHCR에 push: `ghcr.io/<owner>/meetnote-server:<version>` + `latest`
+- GHCR에 push: `ghcr.io/changsu-jin/meetnote-server:<version>` + `latest`
 - 사용자 업데이트: `docker compose pull && docker compose up -d`
 
 ### 버전 규칙
