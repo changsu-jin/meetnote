@@ -7,8 +7,9 @@
  * - Speaker mapping UI (register/edit/delete)
  */
 
-import { ItemView, Notice, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, TFile, requestUrl, setIcon } from "obsidian";
 import type MeetNotePlugin from "./main";
+import { summarize } from "./summarizer";
 
 export const SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 
@@ -699,16 +700,44 @@ export class MeetNoteSidePanel extends ItemView {
 				const elapsed = Math.round((Date.now() - startTime) / 1000);
 				const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}분 ${elapsed % 60}초` : `${elapsed}초`;
 
-				// Run tag extraction + related meeting links
 				const docPath = rec.document_path || "";
 				let linkedCount = 0;
+				let hasSummary = false;
+
 				if (docPath) {
 					const file = this.app.vault.getAbstractFileByPath(docPath);
 					if (file) {
+						// Generate summary via Claude CLI
+						try {
+							this.plugin.statusBar.setProgress("요약 생성 중", 95);
+							// Build segments from the response for summarization
+							const finalSegments = resp.segments_data || [];
+							if (finalSegments.length > 0) {
+								const result = await summarize(finalSegments);
+								if (result.success && result.summary) {
+									// Insert summary into document (before 녹취록 section)
+									await this.app.vault.process(file as TFile, (content) => {
+										const marker = "## 녹취록";
+										const idx = content.indexOf(marker);
+										if (idx !== -1) {
+											return content.slice(0, idx) + result.summary.trim() + "\n\n---\n\n" + content.slice(idx);
+										}
+										return result.summary.trim() + "\n\n---\n\n" + content;
+									});
+									hasSummary = true;
+								} else if (result.engine === "none") {
+									new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+								}
+							}
+						} catch (err) {
+							console.error("[MeetNote] Summary generation failed:", err);
+						}
+
+						// Run tag extraction + related meeting links
 						try {
 							const { MeetingWriter } = await import("./writer");
 							const writer = new MeetingWriter(this.app);
-							const content = await this.app.vault.read(file as any);
+							const content = await this.app.vault.read(file as TFile);
 							const tagMatch = content.match(/### 태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
 							if (tagMatch) {
 								const tags = (tagMatch[1].match(/#[\w가-힣]+/g) || []).map((t: string) => t.slice(1));
@@ -725,12 +754,13 @@ export class MeetNoteSidePanel extends ItemView {
 						}
 
 						// Auto-open the processed document
-						await this.app.workspace.getLeaf().openFile(file as any);
+						await this.app.workspace.getLeaf().openFile(file as TFile);
 					}
 				}
 
-				// Enhanced completion notice (longer display duration)
+				// Enhanced completion notice
 				const parts = [`처리 완료! (${elapsedStr})`, `${resp.segments}개 세그먼트`];
+				if (hasSummary) parts.push("요약 포함");
 				if (linkedCount > 0) parts.push(`${linkedCount}개 연관 회의 링크`);
 				new Notice(parts.join("\n"), 8000);
 

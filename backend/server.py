@@ -791,7 +791,7 @@ async def process_file(req: ProcessFileRequest):
         done_marker = Path(req.file_path).with_suffix(".done")
         done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
 
-        return {"ok": True, "segments": len(final_segments)}
+        return {"ok": True, "segments": len(final_segments), "segments_data": final_segments}
 
     except Exception as exc:
         logger.exception("Process-file failed")

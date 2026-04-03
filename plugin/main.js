@@ -909,6 +909,98 @@ var RecorderStatusBar = class {
 
 // src/side-panel.ts
 var import_obsidian3 = require("obsidian");
+
+// src/summarizer.ts
+var MAX_TRANSCRIPT_CHARS = 5e4;
+var SUMMARY_TIMEOUT_MS = 12e4;
+var SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
+
+\uC624\uB298 \uB0A0\uC9DC: {today}
+
+## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
+
+### \uC694\uC57D
+- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
+
+### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
+
+### \uC561\uC158\uC544\uC774\uD15C
+- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
+
+### \uD0DC\uADF8
+#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
+
+## \uADDC\uCE59
+- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
+- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
+- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
+- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
+- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
+
+## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
+
+{transcript}
+`;
+function formatTranscript(segments) {
+  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
+}
+function buildPrompt(transcript) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
+}
+function isClaudeAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    execSync("which claude", { stdio: "ignore", timeout: 3e3 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function summarize(segments) {
+  const transcript = formatTranscript(segments);
+  if (!transcript) {
+    return { success: false, summary: "", engine: "none" };
+  }
+  if (!isClaudeAvailable()) {
+    console.log("[Summarizer] Claude CLI not found \u2014 skipping summary.");
+    return { success: false, summary: "", engine: "none" };
+  }
+  const prompt = buildPrompt(transcript);
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      const child = execFile(
+        "claude",
+        ["-p", prompt],
+        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Claude CLI failed:", error.message);
+            resolve({ success: false, summary: "", engine: "claude" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "claude" });
+          } else {
+            console.warn("[Summarizer] Claude CLI returned empty output.");
+            resolve({ success: false, summary: "", engine: "claude" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+
+// src/side-panel.ts
 var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
@@ -1511,9 +1603,32 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}\uBD84 ${elapsed % 60}\uCD08` : `${elapsed}\uCD08`;
         const docPath = rec.document_path || "";
         let linkedCount = 0;
+        let hasSummary = false;
         if (docPath) {
           const file = this.app.vault.getAbstractFileByPath(docPath);
           if (file) {
+            try {
+              this.plugin.statusBar.setProgress("\uC694\uC57D \uC0DD\uC131 \uC911", 95);
+              const finalSegments = resp.segments_data || [];
+              if (finalSegments.length > 0) {
+                const result = await summarize(finalSegments);
+                if (result.success && result.summary) {
+                  await this.app.vault.process(file, (content) => {
+                    const marker = "## \uB179\uCDE8\uB85D";
+                    const idx = content.indexOf(marker);
+                    if (idx !== -1) {
+                      return content.slice(0, idx) + result.summary.trim() + "\n\n---\n\n" + content.slice(idx);
+                    }
+                    return result.summary.trim() + "\n\n---\n\n" + content;
+                  });
+                  hasSummary = true;
+                } else if (result.engine === "none") {
+                  new import_obsidian3.Notice("Claude CLI\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
+                }
+              }
+            } catch (err) {
+              console.error("[MeetNote] Summary generation failed:", err);
+            }
             try {
               const { MeetingWriter: MeetingWriter2 } = await Promise.resolve().then(() => (init_writer(), writer_exports));
               const writer = new MeetingWriter2(this.app);
@@ -1536,6 +1651,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           }
         }
         const parts = [`\uCC98\uB9AC \uC644\uB8CC! (${elapsedStr})`, `${resp.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`];
+        if (hasSummary) parts.push("\uC694\uC57D \uD3EC\uD568");
         if (linkedCount > 0) parts.push(`${linkedCount}\uAC1C \uC5F0\uAD00 \uD68C\uC758 \uB9C1\uD06C`);
         new import_obsidian3.Notice(parts.join("\n"), 8e3);
         this.selectedWavPath = rec.path;
@@ -1739,96 +1855,6 @@ ${partLines}
     return resp.json();
   }
 };
-
-// src/summarizer.ts
-var MAX_TRANSCRIPT_CHARS = 5e4;
-var SUMMARY_TIMEOUT_MS = 12e4;
-var SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
-
-\uC624\uB298 \uB0A0\uC9DC: {today}
-
-## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
-
-### \uC694\uC57D
-- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
-
-### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
-- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
-
-### \uC561\uC158\uC544\uC774\uD15C
-- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
-
-### \uD0DC\uADF8
-#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
-
-## \uADDC\uCE59
-- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
-- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
-- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
-- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
-- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
-
-## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
-
-{transcript}
-`;
-function formatTranscript(segments) {
-  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
-}
-function buildPrompt(transcript) {
-  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
-}
-function isClaudeAvailable() {
-  try {
-    const { execSync } = require("child_process");
-    execSync("which claude", { stdio: "ignore", timeout: 3e3 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function summarize(segments) {
-  const transcript = formatTranscript(segments);
-  if (!transcript) {
-    return { success: false, summary: "", engine: "none" };
-  }
-  if (!isClaudeAvailable()) {
-    console.log("[Summarizer] Claude CLI not found \u2014 skipping summary.");
-    return { success: false, summary: "", engine: "none" };
-  }
-  const prompt = buildPrompt(transcript);
-  return new Promise((resolve) => {
-    try {
-      const { execFile } = require("child_process");
-      const child = execFile(
-        "claude",
-        ["-p", prompt],
-        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.warn("[Summarizer] Claude CLI failed:", error.message);
-            resolve({ success: false, summary: "", engine: "claude" });
-            return;
-          }
-          const output = stdout.trim();
-          if (output) {
-            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
-            resolve({ success: true, summary: output, engine: "claude" });
-          } else {
-            console.warn("[Summarizer] Claude CLI returned empty output.");
-            resolve({ success: false, summary: "", engine: "claude" });
-          }
-        }
-      );
-    } catch (err) {
-      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
-      resolve({ success: false, summary: "", engine: "none" });
-    }
-  });
-}
 
 // src/main.ts
 var MeetNotePlugin = class extends import_obsidian4.Plugin {
