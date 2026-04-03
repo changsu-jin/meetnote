@@ -1114,7 +1114,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     let pendingCount = 0;
     try {
       const resp = await this.api("/recordings/pending");
-      const recordings = resp.recordings || [];
+      const recordings = (resp.recordings || []).sort((a, b) => b.created - a.created);
       pendingCount = recordings.length;
       const pendingContent = this.createCollapsibleSection(container, "pending", "\uB300\uAE30 \uC911", pendingCount > 0 ? `${pendingCount}` : void 0);
       if (recordings.length === 0) {
@@ -2115,6 +2115,16 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice(parts.join("\n"), 8e3);
       this.writer.reset();
       this.recordingStartTime = null;
+    }).onStatus((status) => {
+      if (!status.recording && !status.processing) {
+        setTimeout(() => {
+          const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+          if (leaves.length > 0) {
+            const panel = leaves[0].view;
+            panel.render();
+          }
+        }, 500);
+      }
     }).onProgress((stage, percent) => {
       this.statusBar.setProgress(stage, percent);
     }).onError((message) => {

@@ -96,6 +96,18 @@ export default class MeetNotePlugin extends Plugin {
 				this.writer.reset();
 				this.recordingStartTime = null;
 			})
+			.onStatus((status) => {
+				// When server confirms recording stopped, refresh side panel
+				if (!status.recording && !status.processing) {
+					setTimeout(() => {
+						const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+						if (leaves.length > 0) {
+							const panel = leaves[0].view as MeetNoteSidePanel;
+							panel.render();
+						}
+					}, 500);
+				}
+			})
 			.onProgress((stage, percent) => {
 				this.statusBar.setProgress(stage, percent);
 			})
