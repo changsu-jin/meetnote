@@ -2289,13 +2289,28 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.recordingStartTime = null;
     this.statusBar.setIdle();
     new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
-    setTimeout(() => {
-      const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
-      if (leaves.length > 0) {
-        const panel = leaves[0].view;
-        panel.render();
+    let retries = 0;
+    const pollPending = setInterval(async () => {
+      retries++;
+      if (retries > 10) {
+        clearInterval(pollPending);
+        return;
       }
-    }, 3e3);
+      try {
+        const baseUrl = this.getHttpBaseUrl();
+        const resp = await fetch(`${baseUrl}/recordings/pending`);
+        const data = await resp.json();
+        if (data.recordings && data.recordings.length > 0) {
+          clearInterval(pollPending);
+          const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+          if (leaves.length > 0) {
+            const panel = leaves[0].view;
+            panel.render();
+          }
+        }
+      } catch {
+      }
+    }, 1e3);
   }
   async activateSidePanel() {
     const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);

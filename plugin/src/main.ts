@@ -318,15 +318,25 @@ export default class MeetNotePlugin extends Plugin {
 		this.statusBar.setIdle();
 		new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
 
-		// Auto-refresh side panel to show new pending recording
-		// Wait for server to finish saving WAV before refreshing
-		setTimeout(() => {
-			const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
-			if (leaves.length > 0) {
-				const panel = leaves[0].view as MeetNoteSidePanel;
-				panel.render();
-			}
-		}, 3000);
+		// Poll until pending recording appears (server may take time to save WAV)
+		let retries = 0;
+		const pollPending = setInterval(async () => {
+			retries++;
+			if (retries > 10) { clearInterval(pollPending); return; }
+			try {
+				const baseUrl = this.getHttpBaseUrl();
+				const resp = await fetch(`${baseUrl}/recordings/pending`);
+				const data = await resp.json();
+				if (data.recordings && data.recordings.length > 0) {
+					clearInterval(pollPending);
+					const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+					if (leaves.length > 0) {
+						const panel = leaves[0].view as MeetNoteSidePanel;
+						panel.render();
+					}
+				}
+			} catch { /* server might be reconnecting */ }
+		}, 1000);
 	}
 
 	private async activateSidePanel(): Promise<void> {
