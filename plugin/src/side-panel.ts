@@ -100,8 +100,9 @@ export class MeetNoteSidePanel extends ItemView {
 		const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
 
 		const serverOnline = await this.checkServerHealth();
+		const statusLabel = serverOnline ? `● ${this.getServerLabel()}` : "● 오프라인";
 		headerActions.createEl("span", {
-			text: serverOnline ? "●" : "●",
+			text: statusLabel,
 			cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline",
 		});
 
@@ -134,7 +135,8 @@ export class MeetNoteSidePanel extends ItemView {
 		let pendingCount = 0;
 		try {
 			const resp = await this.api("/recordings/pending");
-			const recordings: PendingRecording[] = resp.recordings || [];
+			const recordings: PendingRecording[] = (resp.recordings || [])
+				.sort((a: PendingRecording, b: PendingRecording) => b.created - a.created);
 			pendingCount = recordings.length;
 
 			const pendingContent = this.createCollapsibleSection(container, "pending", "대기 중", pendingCount > 0 ? `${pendingCount}` : undefined);
@@ -835,6 +837,8 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 	}
 
+	private lastHealthData: { ok: boolean; device?: string; model?: string } | null = null;
+
 	private async checkServerHealth(): Promise<boolean> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
@@ -843,10 +847,20 @@ export class MeetNoteSidePanel extends ItemView {
 			const resp = await fetch(`${baseUrl}/health`, { signal: controller.signal });
 			clearTimeout(timeout);
 			const data = await resp.json();
+			this.lastHealthData = data;
 			return data?.ok === true;
 		} catch {
+			this.lastHealthData = null;
 			return false;
 		}
+	}
+
+	private getServerLabel(): string {
+		const url = this.plugin.settings.serverUrl;
+		const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
+		const type = isLocal ? "로컬" : "원격";
+		const device = this.lastHealthData?.device || "";
+		return device ? `${type} (${device})` : type;
 	}
 
 	/** Write processing result to vault document from plugin side (works with Docker) */

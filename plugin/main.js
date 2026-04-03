@@ -1115,6 +1115,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     this.collapsedSections = /* @__PURE__ */ new Set();
     this.rendering = false;
     this.processingDocName = "";
+    this.lastHealthData = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -1149,8 +1150,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
     const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
     const serverOnline = await this.checkServerHealth();
+    const statusLabel = serverOnline ? `\u25CF ${this.getServerLabel()}` : "\u25CF \uC624\uD504\uB77C\uC778";
     headerActions.createEl("span", {
-      text: serverOnline ? "\u25CF" : "\u25CF",
+      text: statusLabel,
       cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline"
     });
     if (serverOnline) {
@@ -1819,10 +1821,19 @@ ${tagsMatch[1].trimEnd()}`
       const resp = await fetch(`${baseUrl}/health`, { signal: controller.signal });
       clearTimeout(timeout);
       const data = await resp.json();
+      this.lastHealthData = data;
       return data?.ok === true;
     } catch {
+      this.lastHealthData = null;
       return false;
     }
+  }
+  getServerLabel() {
+    const url = this.plugin.settings.serverUrl;
+    const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
+    const type = isLocal ? "\uB85C\uCEEC" : "\uC6D0\uACA9";
+    const device = this.lastHealthData?.device || "";
+    return device ? `${type} (${device})` : type;
   }
   /** Write processing result to vault document from plugin side (works with Docker) */
   async writeResultToVault(file, segments, speakingStats) {
