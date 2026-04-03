@@ -35,6 +35,7 @@ export default class MeetNotePlugin extends Plugin {
 		this.backendClient
 			.onChunk((segments) => {
 				this.writer.appendChunk(segments);
+				this.statusBar.addChunk();
 			})
 			.onFinal(async (segments, speakingStats) => {
 				// Skip writer in queue mode — process-file writes directly to vault

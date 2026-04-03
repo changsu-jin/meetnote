@@ -44,7 +44,7 @@ const SUMMARY_PROMPT = `\
 export interface SummaryResult {
 	success: boolean;
 	summary: string;
-	engine: "claude" | "none";
+	engine: "claude" | "ollama" | "none";
 }
 
 export interface FinalSegment {
@@ -100,9 +100,52 @@ function getClaudePath(): string {
 	return "claude";
 }
 
+const OLLAMA_MODEL = "exaone3.5:7.8b";
+const OLLAMA_TIMEOUT_MS = 180_000;
+
+function isOllamaAvailable(): boolean {
+	try {
+		const { execSync } = require("child_process");
+		execSync("ollama list", { stdio: "ignore", timeout: 5000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function summarizeWithOllama(prompt: string): Promise<SummaryResult> {
+	return new Promise((resolve) => {
+		try {
+			const { execFile } = require("child_process");
+			execFile(
+				"ollama",
+				["run", OLLAMA_MODEL, prompt],
+				{ timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+				(error: Error | null, stdout: string, stderr: string) => {
+					if (error) {
+						console.warn("[Summarizer] Ollama failed:", error.message);
+						resolve({ success: false, summary: "", engine: "ollama" });
+						return;
+					}
+					const output = stdout.trim();
+					if (output) {
+						console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
+						resolve({ success: true, summary: output, engine: "ollama" });
+					} else {
+						resolve({ success: false, summary: "", engine: "ollama" });
+					}
+				},
+			);
+		} catch (err) {
+			console.warn("[Summarizer] Failed to execute Ollama:", err);
+			resolve({ success: false, summary: "", engine: "none" });
+		}
+	});
+}
+
 /**
- * Generate a meeting summary using Claude CLI.
- * Returns immediately with success=false if Claude CLI is not available.
+ * Generate a meeting summary.
+ * Priority: Claude CLI → Ollama → skip
  */
 export async function summarize(segments: FinalSegment[]): Promise<SummaryResult> {
 	const transcript = formatTranscript(segments);
@@ -110,8 +153,17 @@ export async function summarize(segments: FinalSegment[]): Promise<SummaryResult
 		return { success: false, summary: "", engine: "none" };
 	}
 
+	// 1. Try Claude CLI
 	if (!isClaudeAvailable()) {
-		console.log("[Summarizer] Claude CLI not found — skipping summary.");
+		console.log("[Summarizer] Claude CLI not found — trying Ollama...");
+
+		// 2. Try Ollama
+		if (isOllamaAvailable()) {
+			const prompt = buildPrompt(transcript);
+			return summarizeWithOllama(prompt);
+		}
+
+		console.log("[Summarizer] Ollama not found — skipping summary.");
 		return { success: false, summary: "", engine: "none" };
 	}
 

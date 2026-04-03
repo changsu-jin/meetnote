@@ -818,6 +818,7 @@ var RecorderStatusBar = class {
     this.connected = false;
     this.recording = false;
     this.processing = false;
+    this.chunkCount = 0;
     this.el = statusBarEl;
     this.setIdle();
   }
@@ -840,11 +841,18 @@ var RecorderStatusBar = class {
   startRecording() {
     this.recording = true;
     this.processing = false;
+    this.chunkCount = 0;
     this.recordingStartTime = /* @__PURE__ */ new Date();
     this.el.style.display = "";
     this.clearTimer();
     this.updateElapsed();
     this.timerInterval = setInterval(() => this.updateElapsed(), 1e3);
+  }
+  /**
+   * Increment chunk transcription counter.
+   */
+  addChunk() {
+    this.chunkCount++;
   }
   /**
    * Stop the recording timer. Typically transitions to processing or idle.
@@ -897,7 +905,8 @@ var RecorderStatusBar = class {
     const seconds = elapsed % 60;
     const mm = String(minutes).padStart(2, "0");
     const ss = String(seconds).padStart(2, "0");
-    this.el.setText(`\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}`);
+    const chunkInfo = this.chunkCount > 0 ? ` | ${this.chunkCount}\uCCAD\uD06C \uC804\uC0AC` : "";
+    this.el.setText(`\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}${chunkInfo}`);
   }
   clearTimer() {
     if (this.timerInterval !== null) {
@@ -985,13 +994,58 @@ function getClaudePath() {
   }
   return "claude";
 }
+var OLLAMA_MODEL = "exaone3.5:7.8b";
+var OLLAMA_TIMEOUT_MS = 18e4;
+function isOllamaAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    execSync("ollama list", { stdio: "ignore", timeout: 5e3 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function summarizeWithOllama(prompt) {
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      execFile(
+        "ollama",
+        ["run", OLLAMA_MODEL, prompt],
+        { timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Ollama failed:", error.message);
+            resolve({ success: false, summary: "", engine: "ollama" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "ollama" });
+          } else {
+            resolve({ success: false, summary: "", engine: "ollama" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Ollama:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
 async function summarize(segments) {
   const transcript = formatTranscript(segments);
   if (!transcript) {
     return { success: false, summary: "", engine: "none" };
   }
   if (!isClaudeAvailable()) {
-    console.log("[Summarizer] Claude CLI not found \u2014 skipping summary.");
+    console.log("[Summarizer] Claude CLI not found \u2014 trying Ollama...");
+    if (isOllamaAvailable()) {
+      const prompt2 = buildPrompt(transcript);
+      return summarizeWithOllama(prompt2);
+    }
+    console.log("[Summarizer] Ollama not found \u2014 skipping summary.");
     return { success: false, summary: "", engine: "none" };
   }
   const prompt = buildPrompt(transcript);
@@ -2067,6 +2121,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.statusBar = new RecorderStatusBar(this.addStatusBarItem());
     this.backendClient.onChunk((segments) => {
       this.writer.appendChunk(segments);
+      this.statusBar.addChunk();
     }).onFinal(async (segments, speakingStats) => {
       if (!this.isRecording) {
         return;
