@@ -1906,6 +1906,11 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       } else {
         console.log("[MeetNote] \uC11C\uBC84 \uC5F0\uACB0\uC774 \uB04A\uC5B4\uC84C\uC2B5\uB2C8\uB2E4.");
       }
+      const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+      if (leaves.length > 0) {
+        const panel = leaves[0].view;
+        panel.render();
+      }
     });
     this.backendClient.connect();
     this.ribbonIconEl = this.addRibbonIcon(

@@ -109,6 +109,12 @@ export default class MeetNotePlugin extends Plugin {
 				} else {
 					console.log("[MeetNote] 서버 연결이 끊어졌습니다.");
 				}
+				// Auto-refresh side panel on connection change
+				const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+				if (leaves.length > 0) {
+					const panel = leaves[0].view as MeetNoteSidePanel;
+					panel.render();
+				}
 			});
 
 		// ── Connect to backend ─────────────────────────────────────────
