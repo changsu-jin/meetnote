@@ -978,11 +978,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         );
         setTimeout(() => this.render(), 1e3);
       });
-      const stopBtn = headerActions.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-header-btn", attr: { title: "\uC11C\uBC84 \uC911\uC9C0" } });
-      stopBtn.addEventListener("click", async () => {
-        await this.stopServer();
-        setTimeout(() => this.render(), 1500);
-      });
     }
     const dashBtn = headerActions.createEl("button", { text: "\u{1F4CA}", cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
     dashBtn.addEventListener("click", () => {
@@ -1569,14 +1564,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       return data?.ok === true;
     } catch {
       return false;
-    }
-  }
-  async stopServer() {
-    try {
-      await this.api("/shutdown", { method: "POST" });
-      new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC911\uC9C0\uD569\uB2C8\uB2E4.");
-    } catch {
-      new import_obsidian3.Notice("\uC11C\uBC84 \uC911\uC9C0 \uC2E4\uD328");
     }
   }
   getHttpBaseUrl() {

@@ -119,8 +119,6 @@ export class MeetNoteSidePanel extends ItemView {
 				setTimeout(() => this.render(), 1000);
 			});
 
-			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn", attr: { title: "서버 중지" } });
-			stopBtn.addEventListener("click", async () => { await this.stopServer(); setTimeout(() => this.render(), 1500); });
 		}
 
 		const dashBtn = headerActions.createEl("button", { text: "📊", cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
@@ -764,15 +762,6 @@ export class MeetNoteSidePanel extends ItemView {
 			return data?.ok === true;
 		} catch {
 			return false;
-		}
-	}
-
-	private async stopServer(): Promise<void> {
-		try {
-			await this.api("/shutdown", { method: "POST" });
-			new Notice("서버를 중지합니다.");
-		} catch {
-			new Notice("서버 중지 실패");
 		}
 	}
 
