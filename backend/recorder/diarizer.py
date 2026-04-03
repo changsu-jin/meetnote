@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _MIN_SPEAKERS_DEFAULT = 2
 _MAX_SPEAKERS_DEFAULT = 6
 
-PIPELINE_NAME = "pyannote/speaker-diarization-community-1"
+PIPELINE_NAME = "pyannote/speaker-diarization-3.1"
 EMBEDDING_MODEL = "pyannote/wespeaker-voxceleb-resnet34-LM"
 
 

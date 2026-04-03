@@ -12,9 +12,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download models (cached as Docker layer, ~3GB)
-# This avoids runtime download issues in restricted networks
-# Uninstall hf-xet to force standard HTTP downloads
+# HF_TOKEN is required for gated pyannote models
+ARG HF_TOKEN=""
 ENV HF_HUB_ENABLE_XET=0
+ENV HF_TOKEN=${HF_TOKEN}
+
 RUN pip uninstall -y hf-xet 2>/dev/null; \
     python -c "\
 from faster_whisper import WhisperModel; \
@@ -22,10 +24,10 @@ print('Downloading Whisper large-v3-turbo...'); \
 WhisperModel('large-v3-turbo', device='cpu', compute_type='int8'); \
 print('Whisper model ready.')"
 
-RUN python -c "\
+RUN python -c "import os; \
 from pyannote.audio import Pipeline; \
-print('Downloading pyannote community-1...'); \
-Pipeline.from_pretrained('pyannote/speaker-diarization-community-1'); \
+print('Downloading pyannote 3.1...'); \
+Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=os.environ.get('HF_TOKEN','')); \
 print('Pyannote model ready.')"
 
 RUN python -c "\
