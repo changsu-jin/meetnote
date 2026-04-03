@@ -16,6 +16,11 @@
 - **install.sh, start.sh 제거** — Docker Compose로 대체
 - **Docker 이미지 레지스트리**: GitHub Container Registry (GHCR)
 - **원격 서버 보안**: HTTPS (nginx 리버스 프록시) + API Key 인증
+- **pyannote community-1 (4.0)으로 업그레이드** — HuggingFace 토큰 제약 제거
+- **요약 엔진**: Claude CLI → Ollama (exaone3.5:7.8b) → 없음 순서 fallback
+- **실시간 전사 유지** — 문서 표시 유지 + 상태바 청크 카운터 추가
+- **macOS venv 유지** — Docker에서 Apple Silicon GPU 불가, macOS 로컬용 install-local.sh/start-local.sh 제공
+- **플랫폼 지원**: Windows/Linux/macOS Docker, macOS venv (GPU)
 
 ## 아키텍처 변경
 

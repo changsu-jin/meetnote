@@ -159,6 +159,68 @@ server {
 
 ---
 
+## 플랫폼별 지원
+
+| 플랫폼 | Docker | GPU 가속 | 권장 실행 방식 |
+|--------|--------|---------|-------------|
+| **Linux + NVIDIA GPU** | O | **CUDA** (Docker에서 지원) | Docker |
+| **Linux (CPU only)** | O | X | Docker |
+| **Windows + NVIDIA GPU** | O | **CUDA** (WSL2 + Docker) | Docker |
+| **Windows (CPU only)** | O | X | Docker |
+| **macOS (Apple Silicon)** | O (CPU only) | **MPS/MLX** (venv만) | venv |
+| **macOS (Intel)** | O (CPU only) | X | Docker |
+
+> **macOS 참고:** Docker에서는 Apple Silicon GPU(MPS)에 접근할 수 없습니다.
+> GPU 가속이 필요하면 `bash install-local.sh` + `bash start-local.sh`로 venv 직접 실행하세요.
+
+### Linux Docker에서 NVIDIA GPU 사용
+
+```yaml
+# docker-compose.yml에 추가
+services:
+  meetnote:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+```
+
+`nvidia-container-toolkit` 설치가 필요합니다. `WHISPER_DEVICE=auto`로 설정하면 CUDA를 자동 감지합니다.
+
+---
+
+## 요약 기능 (선택)
+
+회의록 요약은 **선택 사항**입니다. 설치하지 않아도 녹취록은 정상 동작합니다.
+
+### 요약 엔진 우선순위
+
+| 우선순위 | 엔진 | 품질 | 비용 | 설치 |
+|---------|------|------|------|------|
+| 1 | **Claude CLI** | 최고 | Max 구독 포함 | `npm install -g @anthropic-ai/claude-cli` |
+| 2 | **Ollama** | 좋음 | 무료 | 아래 참고 |
+| 3 | 없음 | - | - | 요약 스킵 |
+
+Claude CLI가 있으면 자동으로 사용하고, 없으면 Ollama를 시도합니다.
+
+### Ollama 설치 (선택)
+
+```bash
+# macOS
+brew install ollama
+
+# Linux / Windows
+# https://ollama.com 에서 다운로드
+
+# 한국어 최적화 모델 다운로드 (~5GB)
+ollama pull exaone3.5:7.8b
+```
+
+[EXAONE 3.5](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct)는 LG AI에서 개발한 한국어 특화 모델로, 회의록 요약에 적합합니다.
+
+---
+
 ## 개발
 
 ```bash
@@ -168,7 +230,10 @@ cd plugin && npm install && npm run build
 # 서버 로컬 실행 (Docker)
 cd backend && docker compose up -d
 
-# 서버 로컬 실행 (venv, 개발용)
+# 서버 로컬 실행 (venv, macOS GPU 가속)
+cd backend && bash install-local.sh && bash start-local.sh
+
+# 서버 로컬 실행 (venv, 수동)
 cd backend && python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt && python server.py
 ```
