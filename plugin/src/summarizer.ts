@@ -70,11 +70,34 @@ function buildPrompt(transcript: string): string {
 function isClaudeAvailable(): boolean {
 	try {
 		const { execSync } = require("child_process");
-		execSync("which claude", { stdio: "ignore", timeout: 3000 });
+		const homedir = require("os").homedir();
+		const extraPaths = [
+			`${homedir}/.asdf/shims`,
+			`${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+			"/usr/local/bin",
+			"/opt/homebrew/bin",
+		];
+		const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+		execSync("which claude", { stdio: "ignore", timeout: 3000, env });
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+function getClaudePath(): string {
+	const homedir = require("os").homedir();
+	const candidates = [
+		`${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
+		`${homedir}/.asdf/shims/claude`,
+		"/usr/local/bin/claude",
+		"/opt/homebrew/bin/claude",
+	];
+	const fs = require("fs");
+	for (const p of candidates) {
+		try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+	}
+	return "claude";
 }
 
 /**
@@ -97,11 +120,20 @@ export async function summarize(segments: FinalSegment[]): Promise<SummaryResult
 	return new Promise((resolve) => {
 		try {
 			const { execFile } = require("child_process");
+			const claudePath = getClaudePath();
+			const homedir = require("os").homedir();
+			const extraPaths = [
+				`${homedir}/.asdf/shims`,
+				`${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+				"/usr/local/bin",
+				"/opt/homebrew/bin",
+			];
+			const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
 
 			const child = execFile(
-				"claude",
+				claudePath,
 				["-p", prompt],
-				{ timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+				{ timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
 				(error: Error | null, stdout: string, stderr: string) => {
 					if (error) {
 						console.warn("[Summarizer] Claude CLI failed:", error.message);

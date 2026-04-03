@@ -305,6 +305,15 @@ export default class MeetNotePlugin extends Plugin {
 		this.recordingStartTime = null;
 		this.statusBar.setIdle();
 		new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
+
+		// Auto-refresh side panel to show new pending recording
+		setTimeout(() => {
+			const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+			if (leaves.length > 0) {
+				const panel = leaves[0].view as MeetNoteSidePanel;
+				panel.render();
+			}
+		}, 1000);
 	}
 
 	private async activateSidePanel(): Promise<void> {

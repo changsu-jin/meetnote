@@ -954,11 +954,36 @@ function buildPrompt(transcript) {
 function isClaudeAvailable() {
   try {
     const { execSync } = require("child_process");
-    execSync("which claude", { stdio: "ignore", timeout: 3e3 });
+    const homedir = require("os").homedir();
+    const extraPaths = [
+      `${homedir}/.asdf/shims`,
+      `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+      "/usr/local/bin",
+      "/opt/homebrew/bin"
+    ];
+    const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+    execSync("which claude", { stdio: "ignore", timeout: 3e3, env });
     return true;
   } catch {
     return false;
   }
+}
+function getClaudePath() {
+  const homedir = require("os").homedir();
+  const candidates = [
+    `${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
+    `${homedir}/.asdf/shims/claude`,
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude"
+  ];
+  const fs = require("fs");
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+    }
+  }
+  return "claude";
 }
 async function summarize(segments) {
   const transcript = formatTranscript(segments);
@@ -973,10 +998,19 @@ async function summarize(segments) {
   return new Promise((resolve) => {
     try {
       const { execFile } = require("child_process");
+      const claudePath = getClaudePath();
+      const homedir = require("os").homedir();
+      const extraPaths = [
+        `${homedir}/.asdf/shims`,
+        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+        "/usr/local/bin",
+        "/opt/homebrew/bin"
+      ];
+      const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
       const child = execFile(
-        "claude",
+        claudePath,
         ["-p", prompt],
-        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
         (error, stdout, stderr) => {
           if (error) {
             console.warn("[Summarizer] Claude CLI failed:", error.message);
@@ -2128,6 +2162,13 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.recordingStartTime = null;
     this.statusBar.setIdle();
     new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
+    setTimeout(() => {
+      const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+      if (leaves.length > 0) {
+        const panel = leaves[0].view;
+        panel.render();
+      }
+    }, 1e3);
   }
   async activateSidePanel() {
     const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
