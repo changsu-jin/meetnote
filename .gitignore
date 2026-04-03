@@ -39,3 +39,16 @@ Thumbs.db
 # Claude Code
 .claude/
 plugin/.vault_path
+
+# Internal documents (not for public)
+PLAN.md
+PRD.md
+CLAUDE.md
+TEST_CHECKLIST.md
+TEST_PROGRESS.md
+backlog/
+PAID_IMPROVEMENTS.md
+
+# Backend data directories
+backend/data/
+backend/models/
