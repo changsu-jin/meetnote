@@ -59,6 +59,5 @@ jobs:
             ### Server Setup
             ```bash
             curl -O https://raw.githubusercontent.com/${{ github.repository }}/main/backend/docker-compose.yml
-            echo "HUGGINGFACE_TOKEN=hf_xxxxx" > .env
             docker compose up -d
             ```
