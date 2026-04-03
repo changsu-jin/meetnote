@@ -1,9 +1,10 @@
 ---
 id: REC-67
 title: Ollama 요약 fallback 추가 — Claude CLI 없을 때 로컬 LLM 요약
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-04-03 05:59'
+updated_date: '2026-04-03 06:20'
 labels:
   - plugin
   - feature
@@ -34,7 +35,13 @@ ollama pull exaone3.5:7.8b
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Claude CLI 없을 때 Ollama로 요약이 생성된다
-- [ ] #2 Ollama도 없으면 요약을 스킵하고 안내한다
+- [x] #1 Claude CLI 없을 때 Ollama로 요약이 생성된다
+- [x] #2 Ollama도 없으면 요약을 스킵하고 안내한다
 - [ ] #3 README에 Ollama 설치 가이드가 포함된다
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Ollama 요약 fallback 추가. Claude CLI → Ollama (exaone3.5:7.8b) → 없음 순서. README 가이드는 이전 커밋에서 추가됨.
+<!-- SECTION:FINAL_SUMMARY:END -->

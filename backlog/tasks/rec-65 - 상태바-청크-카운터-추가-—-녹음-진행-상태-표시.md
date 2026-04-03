@@ -1,9 +1,10 @@
 ---
 id: REC-65
 title: 상태바 청크 카운터 추가 — 녹음 진행 상태 표시
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-04-03 05:58'
+updated_date: '2026-04-03 06:20'
 labels:
   - plugin
   - ux
@@ -27,6 +28,12 @@ priority: low
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 녹음 중 상태바에 청크 전사 카운터가 표시된다
-- [ ] #2 녹음 종료 시 카운터가 초기화된다
+- [x] #1 녹음 중 상태바에 청크 전사 카운터가 표시된다
+- [x] #2 녹음 종료 시 카운터가 초기화된다
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+상태바에 청크 전사 카운터 추가. 녹음 중 '🔴 녹음 중 03:25 | 7청크 전사' 형식으로 표시.
+<!-- SECTION:FINAL_SUMMARY:END -->
