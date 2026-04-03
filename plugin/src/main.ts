@@ -21,6 +21,7 @@ export default class MeetNotePlugin extends Plugin {
 	private audioCapture: AudioCapture | null = null;
 	statusBar: RecorderStatusBar;
 	private recordingStartTime: Date | null = null;
+	private _sidePanelRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -109,12 +110,15 @@ export default class MeetNotePlugin extends Plugin {
 				} else {
 					console.log("[MeetNote] 서버 연결이 끊어졌습니다.");
 				}
-				// Auto-refresh side panel on connection change
-				const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
-				if (leaves.length > 0) {
-					const panel = leaves[0].view as MeetNoteSidePanel;
-					panel.render();
-				}
+				// Debounced side panel refresh (prevent flicker on reconnect loops)
+				if (this._sidePanelRefreshTimer) clearTimeout(this._sidePanelRefreshTimer);
+				this._sidePanelRefreshTimer = setTimeout(() => {
+					const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+					if (leaves.length > 0) {
+						const panel = leaves[0].view as MeetNoteSidePanel;
+						panel.render();
+					}
+				}, 2000);
 			});
 
 		// ── Connect to backend ─────────────────────────────────────────
