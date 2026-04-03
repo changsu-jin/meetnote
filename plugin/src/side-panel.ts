@@ -906,7 +906,8 @@ export class MeetNoteSidePanel extends ItemView {
 
 	/** Load names and emails from vault folder for auto-suggest */
 	private async loadSuggestNames(): Promise<string[]> {
-		const folderPath = this.plugin.settings.participantSuggestPath || "TEAM-TF/io-second-brain/내부 사용자";
+		const folderPath = this.plugin.settings.participantSuggestPath;
+		if (!folderPath) return [];
 		const folder = this.app.vault.getAbstractFileByPath(folderPath);
 		if (!folder) return [];
 

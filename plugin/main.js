@@ -538,7 +538,7 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
     });
     containerEl.createEl("h3", { text: "\uCC38\uC11D\uC790 / \uC774\uBA54\uC77C" });
     new import_obsidian.Setting(containerEl).setName("\uCC38\uC11D\uC790 \uC790\uB3D9\uC644\uC131 \uACBD\uB85C").setDesc("vault \uB0B4 \uC0AC\uC6A9\uC790 \uC815\uBCF4 \uD3F4\uB354 (\uC774\uB984 + \uC774\uBA54\uC77C \uC790\uB3D9\uC644\uC131\uC5D0 \uC0AC\uC6A9)").addText(
-      (text) => text.setPlaceholder("TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790").setValue(this.plugin.settings.participantSuggestPath).onChange(async (value) => {
+      (text) => text.setPlaceholder("people \uB610\uB294 team/members").setValue(this.plugin.settings.participantSuggestPath).onChange(async (value) => {
         this.plugin.settings.participantSuggestPath = value.trim();
         await this.plugin.saveSettings();
       })
@@ -1700,7 +1700,8 @@ ${partLines}
   }
   /** Load names and emails from vault folder for auto-suggest */
   async loadSuggestNames() {
-    const folderPath = this.plugin.settings.participantSuggestPath || "TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790";
+    const folderPath = this.plugin.settings.participantSuggestPath;
+    if (!folderPath) return [];
     const folder = this.app.vault.getAbstractFileByPath(folderPath);
     if (!folder) return [];
     const names = [];

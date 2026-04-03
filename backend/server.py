@@ -767,6 +767,14 @@ async def process_file(req: ProcessFileRequest):
                     speaker_map, speaking_stats,
                 )
                 logger.info("Result written to vault: %s", req.vault_file_path)
+
+                # Save vault_file_path to meta for speaker update
+                import json as _json_meta
+                meta_path = Path(req.file_path).with_suffix(".meta.json")
+                if meta_path.exists():
+                    meta = _json_meta.loads(meta_path.read_text())
+                    meta["vault_file_path"] = req.vault_file_path
+                    meta_path.write_text(_json_meta.dumps(meta, ensure_ascii=False))
             except Exception as write_exc:
                 logger.warning("Failed to write to vault: %s", write_exc)
 

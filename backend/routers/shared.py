@@ -79,29 +79,45 @@ def save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) 
 
 
 def update_document_speaker(document_path: str, old_name: str, new_name: str) -> None:
-    """Replace a speaker name in the vault document (text + frontmatter)."""
-    for base in [
-        Path.home() / "Works" / "management",
-        Path.cwd().parent,
-    ]:
-        full_path = base / document_path
-        if full_path.exists():
-            try:
-                content = full_path.read_text(encoding="utf-8")
-                updated = content
-                updated = updated.replace(f"**{old_name}**", f"**{new_name}**")
-                updated = re.sub(rf"> {re.escape(old_name)} ", f"> {new_name} ", updated)
-                updated = updated.replace(f"  - {old_name}", f"  - {new_name}")
-                updated = re.sub(
-                    rf"({re.escape(old_name)})(,|\s|\()",
-                    rf"{new_name}\2",
-                    updated,
-                )
-                if updated != content:
-                    full_path.write_text(updated, encoding="utf-8")
-                    logger.info("Document updated: %s → %s in %s", old_name, new_name, document_path)
-            except Exception as exc:
-                logger.warning("Failed to update document %s: %s", document_path, exc)
-            return
+    """Replace a speaker name in the vault document (text + frontmatter).
 
-    logger.warning("Document not found: %s", document_path)
+    document_path can be absolute or relative. For relative paths,
+    we look up the vault_file_path from the recording's meta.json.
+    """
+    # Try absolute path first
+    full_path = Path(document_path)
+    if not full_path.is_absolute():
+        # Try to find via meta files in recordings directory
+        recordings_dir = Path(get_config().get("audio", {}).get("save_path", "./data/recordings"))
+        for meta_file in recordings_dir.glob("*.meta.json"):
+            try:
+                import json as _json
+                meta = _json.loads(meta_file.read_text())
+                if meta.get("document_path") == document_path:
+                    vault_path = meta.get("vault_file_path", "")
+                    if vault_path and Path(vault_path).exists():
+                        full_path = Path(vault_path)
+                        break
+            except Exception:
+                continue
+
+    if not full_path.exists():
+        logger.warning("Document not found: %s", document_path)
+        return
+
+    try:
+        content = full_path.read_text(encoding="utf-8")
+        updated = content
+        updated = updated.replace(f"**{old_name}**", f"**{new_name}**")
+        updated = re.sub(rf"> {re.escape(old_name)} ", f"> {new_name} ", updated)
+        updated = updated.replace(f"  - {old_name}", f"  - {new_name}")
+        updated = re.sub(
+            rf"({re.escape(old_name)})(,|\s|\()",
+            rf"{new_name}\2",
+            updated,
+        )
+        if updated != content:
+            full_path.write_text(updated, encoding="utf-8")
+            logger.info("Document updated: %s → %s in %s", old_name, new_name, full_path)
+    except Exception as exc:
+        logger.warning("Failed to update document %s: %s", document_path, exc)

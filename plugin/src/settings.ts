@@ -104,7 +104,7 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 			.setDesc("vault 내 사용자 정보 폴더 (이름 + 이메일 자동완성에 사용)")
 			.addText((text) =>
 				text
-					.setPlaceholder("TEAM-TF/io-second-brain/내부 사용자")
+					.setPlaceholder("people 또는 team/members")
 					.setValue(this.plugin.settings.participantSuggestPath)
 					.onChange(async (value) => {
 						this.plugin.settings.participantSuggestPath = value.trim();
