@@ -88,8 +88,15 @@ You MUST read the overview resource to understand the complete workflow. The inf
 
 > 사용자가 "여기서 끊자", "오늘은 여기까지" 등을 말할 때까지 이 모드를 유지한다.
 
+## 작업 방식 규칙
+
+1. **세션 목표 먼저 정하기** — 세션 시작 시 "이번 세션 목표: X"를 먼저 정하고, 그 범위만 완료
+2. **결정 확정 후 구현** — 구현 중 요구사항 변경 최소화. 결정을 대화로 확정하고 한번에 구현
+3. **커밋은 태스크 단위** — 작은 수정마다 커밋하지 않고, 태스크 완료 시 한번에 커밋
+4. **결정사항은 PLAN.md에 집중** — 여러 문서에 분산하지 않고 PLAN.md를 single source of truth로
+
 ## 세션 시작 시 체크리스트
-1. `TEST_PROGRESS.md` 읽기 — 현재 진행 상태, 벤치마크 결과, 다음 작업 확인
+1. `PLAN.md` 읽기 — 현재 계획, 결정사항, 남은 작업 확인
 2. `PRD.md` 읽기 — 요구사항, 아키텍처, 차별점 확인
 3. `backlog task_list` 실행 — 태스크 현황 확인
 4. 서버 실행: `cd backend && docker compose up -d`
