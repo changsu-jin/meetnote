@@ -1046,6 +1046,11 @@ async def websocket_endpoint(ws: WebSocket):
         while True:
             message = await ws.receive()
 
+            # Handle disconnect message explicitly
+            if message["type"] == "websocket.disconnect":
+                logger.info("WebSocket client disconnected (disconnect message).")
+                break
+
             if message["type"] == "websocket.receive":
                 # Binary message = audio chunk
                 if "bytes" in message and message["bytes"]:
@@ -1075,8 +1080,6 @@ async def websocket_endpoint(ws: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected.")
-        if state.recording:
-            state.reset()
 
     except Exception as exc:
         logger.exception("WebSocket error")
@@ -1086,6 +1089,9 @@ async def websocket_endpoint(ws: WebSocket):
             pass
     finally:
         ping_task.cancel()
+        if state.recording:
+            state.reset()
+            logger.info("Recording state reset on WebSocket close.")
 
 
 # ---------------------------------------------------------------------------
