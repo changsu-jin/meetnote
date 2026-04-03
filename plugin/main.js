@@ -1182,7 +1182,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     try {
       const allResp = await this.api("/recordings/all");
       const allRecs = allResp.recordings || [];
-      const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+      const completed = allRecs.filter((r) => r.processed).sort((a, b) => b.created - a.created).slice(0, 10);
       if (completed.length > 0) {
         const completedContent = this.createCollapsibleSection(container, "completed", "\uCD5C\uADFC \uD68C\uC758", `${completed.length}`);
         const completedList = completedContent.createDiv({ cls: "meetnote-recording-list" });
@@ -1638,12 +1638,15 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         const docPath = rec.document_path || "";
         let linkedCount = 0;
         let hasSummary = false;
+        const finalSegments = resp.segments_data || [];
         if (docPath) {
           const file = this.app.vault.getAbstractFileByPath(docPath);
           if (file) {
+            if (finalSegments.length > 0) {
+              await this.writeResultToVault(file, finalSegments, resp.speaking_stats || []);
+            }
             try {
               this.plugin.statusBar.setProgress("\uC694\uC57D \uC0DD\uC131 \uC911", 95);
-              const finalSegments = resp.segments_data || [];
               if (finalSegments.length > 0) {
                 const result = await summarize(finalSegments);
                 if (result.success && result.summary) {
@@ -1758,6 +1761,120 @@ ${tagsMatch[1].trimEnd()}`
     } catch {
       return false;
     }
+  }
+  /** Write processing result to vault document from plugin side (works with Docker) */
+  async writeResultToVault(file, segments, speakingStats) {
+    const speakers = [...new Set(segments.map((s) => s.speaker))];
+    const fmt = (ts) => {
+      const h = Math.floor(ts / 3600);
+      const m = Math.floor(ts % 3600 / 60);
+      const s = Math.floor(ts % 60);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    };
+    const lines = [];
+    lines.push("## \uD68C\uC758 \uB179\uCDE8\uB85D");
+    lines.push("");
+    lines.push(`> \uCC38\uC11D\uC790: ${speakers.join(", ")} (\uC790\uB3D9 \uAC10\uC9C0 ${speakers.length}\uBA85)`);
+    lines.push("");
+    lines.push("### \uBC1C\uC5B8 \uBE44\uC728");
+    lines.push("");
+    if (speakingStats.length > 0) {
+      for (const stat of speakingStats) {
+        const pct = Math.round(stat.ratio * 100);
+        const mins = Math.floor(stat.total_seconds / 60);
+        const secs = Math.floor(stat.total_seconds % 60);
+        const filled = Math.round(stat.ratio * 20);
+        const bar = "\u25A0".repeat(filled) + "\u25A1".repeat(20 - filled);
+        lines.push(`> ${stat.speaker} ${pct}% ${bar} (${mins}\uBD84 ${secs}\uCD08)`);
+      }
+    } else {
+      lines.push("(\uC5C6\uC74C)");
+    }
+    lines.push("");
+    lines.push("### \uC694\uC57D");
+    lines.push("");
+    lines.push("(\uC694\uC57D \uC0DD\uC131 \uC911...)");
+    lines.push("");
+    lines.push("### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D");
+    lines.push("");
+    lines.push("(\uC694\uC57D \uC0DD\uC131 \uC911...)");
+    lines.push("");
+    lines.push("### \uC561\uC158\uC544\uC774\uD15C");
+    lines.push("");
+    lines.push("(\uC694\uC57D \uC0DD\uC131 \uC911...)");
+    lines.push("");
+    lines.push("### \uD0DC\uADF8");
+    lines.push("");
+    lines.push("(\uC694\uC57D \uC0DD\uC131 \uC911...)");
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    lines.push("## \uB179\uCDE8\uB85D");
+    lines.push("");
+    let i = 0;
+    while (i < segments.length) {
+      const seg = segments[i];
+      const speaker = seg.speaker;
+      const texts = [seg.text.trim()];
+      const startTs = seg.timestamp;
+      let lastTs = startTs;
+      while (i + 1 < segments.length && segments[i + 1].speaker === speaker) {
+        i++;
+        texts.push(segments[i].text.trim());
+        lastTs = segments[i].timestamp;
+      }
+      if (texts.length > 1) {
+        lines.push(`### ${fmt(startTs)} ~ ${fmt(lastTs)}`);
+      } else {
+        lines.push(`### ${fmt(startTs)}`);
+      }
+      lines.push(`**${speaker}**: ${texts.join(" ")}`);
+      lines.push("");
+      i++;
+    }
+    lines.push("");
+    lines.push("### \uC5F0\uAD00 \uD68C\uC758");
+    lines.push("");
+    lines.push("(\uC5C6\uC74C)");
+    lines.push("");
+    const content = lines.join("\n");
+    const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const fmLines = [
+      "---",
+      "type: meeting",
+      "tags:",
+      "  - \uD68C\uC758",
+      `date: ${today}`
+    ];
+    if (speakers.length > 0) {
+      fmLines.push("participants:");
+      for (const s of speakers) {
+        fmLines.push(`  - ${s}`);
+      }
+    }
+    fmLines.push("---");
+    fmLines.push("");
+    const frontmatter = fmLines.join("\n");
+    const startMarker = "<!-- meetnote-start -->";
+    const endMarker = "<!-- meetnote-end -->";
+    await this.app.vault.process(file, (existing) => {
+      const startIdx = existing.indexOf(startMarker);
+      const endIdx = existing.indexOf(endMarker);
+      let newContent;
+      if (startIdx !== -1 && endIdx !== -1) {
+        const endIdxFull = endIdx + endMarker.length;
+        newContent = existing.slice(0, startIdx) + startMarker + "\n\n" + content + "\n" + endMarker + "\n" + existing.slice(endIdxFull);
+      } else {
+        newContent = existing + "\n\n" + startMarker + "\n\n" + content + "\n" + endMarker + "\n";
+      }
+      newContent = newContent.replace(/<!-- meetnote-live-start -->[\s\S]*?<!-- meetnote-live-end -->\s*/g, "");
+      newContent = newContent.replace(/<!-- meetnote-start -->\s*## 회의 녹취록\s*<!-- meetnote-end -->\s*/g, "");
+      newContent = newContent.replace(/\n{4,}/g, "\n\n\n");
+      if (newContent.startsWith("---\n")) {
+        newContent = newContent.replace(/^---\n[\s\S]*?\n---\n*/, "");
+      }
+      return frontmatter + newContent;
+    });
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
