@@ -1,45 +1,11 @@
-FROM python:3.11-slim
+FROM ghcr.io/changsu-jin/meetnote-server-base:latest
 
 WORKDIR /app
 
-# System dependencies for audio processing
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Python dependencies (cached unless requirements.txt changes)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Pre-download models (cached as Docker layer, ~3GB)
-# HF_TOKEN is required for gated pyannote models
-ARG HF_TOKEN=""
-ENV HF_HUB_ENABLE_XET=0
-ENV HF_TOKEN=${HF_TOKEN}
-
-RUN pip uninstall -y hf-xet 2>/dev/null; \
-    python -c "\
-from faster_whisper import WhisperModel; \
-print('Downloading Whisper large-v3-turbo...'); \
-WhisperModel('large-v3-turbo', device='cpu', compute_type='int8'); \
-print('Whisper model ready.')"
-
-RUN python -c "import os; \
-from pyannote.audio import Pipeline; \
-print('Downloading pyannote 3.1...'); \
-Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=os.environ.get('HF_TOKEN','')); \
-print('Pyannote model ready.')"
-
-RUN python -c "\
-from pyannote.audio import Model; \
-print('Downloading wespeaker embedding model...'); \
-Model.from_pretrained('pyannote/wespeaker-voxceleb-resnet34-LM'); \
-print('Embedding model ready.')"
-
-# Application code (changes frequently, small layer)
+# Application code only (changes frequently, small layer)
 COPY . .
 
-# Default environment variables (override via .env or docker-compose)
+# Default environment variables
 ENV WHISPER_MODEL=large-v3-turbo
 ENV WHISPER_LANGUAGE=ko
 ENV WHISPER_DEVICE=auto
@@ -50,11 +16,11 @@ ENV ENCRYPTION_ENABLED=false
 ENV AUTO_DELETE_DAYS=0
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8765
+ENV HF_HUB_ENABLE_XET=0
 ENV SMTP_HOST=smtp.gmail.com
 ENV SMTP_PORT=587
 ENV SMTP_USE_TLS=true
 
-# Data directory for persistent storage
 RUN mkdir -p /app/data/recordings
 
 EXPOSE 8765
