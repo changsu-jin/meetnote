@@ -1,13 +1,9 @@
 services:
   meetnote:
-    build: .
-    # 릴리즈 시 GHCR 이미지로 교체:
-    # image: ghcr.io/changsu-jin/meetnote-server:latest
+    image: ghcr.io/changsu-jin/meetnote-server:latest
     ports:
       - "8765:8765"
-    env_file:
-      - .env
     volumes:
-      - ./models:/root/.cache      # HuggingFace 모델 캐시 영속화
-      - ./data:/app/data            # 화자 DB, 녹음 파일, 감사 로그
+      - ./data:/app/data
     restart: unless-stopped
+    init: true
