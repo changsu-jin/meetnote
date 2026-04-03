@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+benchmark*.py
+data/
+models/
+recordings/
+speakers.json
+*.wav
+*.enc
+*.done
+*.meta.json
+.git/

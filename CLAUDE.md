@@ -92,4 +92,24 @@ You MUST read the overview resource to understand the complete workflow. The inf
 1. `TEST_PROGRESS.md` 읽기 — 현재 진행 상태, 벤치마크 결과, 다음 작업 확인
 2. `PRD.md` 읽기 — 요구사항, 아키텍처, 차별점 확인
 3. `backlog task_list` 실행 — 태스크 현황 확인
-4. 서버 실행: `cd backend && source venv/bin/activate && python server.py`
+4. 서버 실행: `cd backend && docker compose up -d`
+
+## CI/CD 릴리즈 룰
+
+### 릴리즈 트리거
+- `v*` 태그 푸시 시 자동 실행 (`git tag v1.x.0 && git push origin v1.x.0`)
+- 개발 중 커밋은 빌드/릴리즈하지 않음
+
+### 플러그인 릴리즈 (`.github/workflows/release.yml`)
+- `plugin/manifest.json`의 version을 태그에서 자동 추출하여 업데이트
+- GitHub Release에 `main.js`, `manifest.json`, `styles.css` 첨부
+- BRAT가 자동으로 최신 릴리즈 감지
+
+### 서버 이미지 빌드 (`.github/workflows/docker.yml`)
+- 멀티 아키텍처: `linux/amd64`, `linux/arm64`
+- GHCR에 push: `ghcr.io/<owner>/meetnote-server:<version>` + `latest`
+- 사용자 업데이트: `docker compose pull && docker compose up -d`
+
+### 버전 규칙
+- 서버와 플러그인은 같은 태그로 릴리즈 (모노레포)
+- API 호환성이 깨지는 변경 시 `api_version` (현재 `2.0`)을 올릴 것

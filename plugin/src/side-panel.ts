@@ -118,12 +118,6 @@ export class MeetNoteSidePanel extends ItemView {
 				);
 				setTimeout(() => this.render(), 1000);
 			});
-
-			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn", attr: { title: "서버 중지" } });
-			stopBtn.addEventListener("click", async () => { await this.stopServer(); setTimeout(() => this.render(), 1500); });
-		} else {
-			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn", attr: { title: "서버 시작" } });
-			startBtn.addEventListener("click", async () => { await this.startServer(); setTimeout(() => this.render(), 12000); });
 		}
 
 		const dashBtn = headerActions.createEl("button", { text: "📊", cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
@@ -756,37 +750,6 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 	}
 
-	// ── Server Management ──
-
-	private async renderServerSection(container: HTMLElement): Promise<void> {
-		const section = container.createDiv({ cls: "meetnote-server-section" });
-		const header = section.createDiv({ cls: "meetnote-server-header" });
-		header.createEl("h4", { text: "서버" });
-
-		const serverOnline = await this.checkServerHealth();
-
-		const statusRow = section.createDiv({ cls: "meetnote-server-status" });
-
-		if (serverOnline) {
-			statusRow.createEl("span", { text: "● 실행 중", cls: "meetnote-status-online" });
-
-			const stopBtn = statusRow.createEl("button", { text: "중지", cls: "meetnote-server-btn" });
-			stopBtn.addEventListener("click", async () => {
-				await this.stopServer();
-				setTimeout(() => this.render(), 1500);
-			});
-		} else {
-			statusRow.createEl("span", { text: "● 중지됨", cls: "meetnote-status-offline" });
-
-			const startBtn = statusRow.createEl("button", { text: "시작", cls: "meetnote-server-btn" });
-			startBtn.addEventListener("click", async () => {
-				await this.startServer();
-				// Wait for server to start
-				setTimeout(() => this.render(), 5000);
-			});
-		}
-	}
-
 	private async checkServerHealth(): Promise<boolean> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
@@ -798,63 +761,6 @@ export class MeetNoteSidePanel extends ItemView {
 			return data?.ok === true;
 		} catch {
 			return false;
-		}
-	}
-
-	private async startServer(): Promise<void> {
-		try {
-			const { spawn } = require("child_process");
-			const backendDir = this.plugin.settings.backendDir || "";
-			if (!backendDir) {
-				new Notice("설정에서 백엔드 경로를 지정해주세요.");
-				return;
-			}
-
-			const pythonPath = `${backendDir}/venv/bin/python3`;
-			const serverPath = `${backendDir}/server.py`;
-
-			// Inherit PATH — include common tool locations for Claude CLI, asdf, homebrew
-			const homedir = require("os").homedir();
-			const extraPaths = [
-				`${backendDir}/venv/bin`,
-				`${homedir}/.asdf/shims`,
-				`${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-				"/usr/local/bin",
-				"/opt/homebrew/bin",
-			];
-			const env = Object.assign({}, process.env, {
-				PATH: [...extraPaths, process.env.PATH || ""].join(":"),
-			});
-
-			const child = spawn(pythonPath, [serverPath], {
-				cwd: backendDir,
-				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
-				env,
-			});
-
-			// Write logs
-			const fs = require("fs");
-			const logStream = fs.createWriteStream("/tmp/meetnote_server.log");
-			child.stdout?.pipe(logStream);
-			child.stderr?.pipe(logStream);
-			child.unref();
-
-			new Notice("서버를 시작합니다... (약 10초 소요)");
-			// Refresh after delay
-			setTimeout(() => this.render(), 12000);
-		} catch (err) {
-			new Notice(`서버 시작 실패: ${err}`);
-			console.error("[MeetNote] Server start failed:", err);
-		}
-	}
-
-	private async stopServer(): Promise<void> {
-		try {
-			await this.api("/shutdown", { method: "POST" });
-			new Notice("서버를 중지합니다.");
-		} catch {
-			new Notice("서버 중지 실패");
 		}
 	}
 

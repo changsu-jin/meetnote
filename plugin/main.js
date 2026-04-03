@@ -339,78 +339,203 @@ var import_obsidian4 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
+
+// src/audio-capture.ts
+var CHUNK_DURATION_SECONDS = 10;
+var TARGET_SAMPLE_RATE = 16e3;
+var AudioCapture = class {
+  constructor(callbacks) {
+    this.stream = null;
+    this.audioContext = null;
+    this.scriptProcessor = null;
+    this.sourceNode = null;
+    this.buffer = [];
+    this.samplesCollected = 0;
+    this._isCapturing = false;
+    this.callbacks = callbacks;
+  }
+  get isCapturing() {
+    return this._isCapturing;
+  }
+  /**
+   * Start capturing audio from the specified device (or default).
+   */
+  async start(deviceId) {
+    if (this._isCapturing) return;
+    try {
+      const constraints = {
+        audio: {
+          channelCount: 1,
+          sampleRate: { ideal: TARGET_SAMPLE_RATE },
+          ...deviceId ? { deviceId: { exact: deviceId } } : {}
+        }
+      };
+      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.audioContext = new AudioContext({
+        sampleRate: this.stream.getAudioTracks()[0].getSettings().sampleRate || 44100
+      });
+      this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
+      this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      const inputSampleRate = this.audioContext.sampleRate;
+      const samplesPerChunk = TARGET_SAMPLE_RATE * CHUNK_DURATION_SECONDS;
+      this.buffer = [];
+      this.samplesCollected = 0;
+      this.scriptProcessor.onaudioprocess = (event) => {
+        if (!this._isCapturing) return;
+        const inputData = event.inputBuffer.getChannelData(0);
+        const resampled = inputSampleRate === TARGET_SAMPLE_RATE ? new Float32Array(inputData) : this.resample(inputData, inputSampleRate, TARGET_SAMPLE_RATE);
+        this.buffer.push(resampled);
+        this.samplesCollected += resampled.length;
+        if (this.samplesCollected >= samplesPerChunk) {
+          this.flushChunk();
+        }
+      };
+      this.sourceNode.connect(this.scriptProcessor);
+      this.scriptProcessor.connect(this.audioContext.destination);
+      this._isCapturing = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.callbacks.onError(`\uB9C8\uC774\uD06C \uC811\uADFC \uC2E4\uD328: ${message}`);
+      this.cleanup();
+    }
+  }
+  /**
+   * Stop capturing and flush any remaining audio.
+   */
+  stop() {
+    if (!this._isCapturing) return;
+    this._isCapturing = false;
+    if (this.samplesCollected > 0) {
+      this.flushChunk();
+    }
+    this.cleanup();
+  }
+  /**
+   * List available audio input devices.
+   */
+  static async listDevices() {
+    try {
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach((t) => t.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === "audioinput").map((d) => ({
+        deviceId: d.deviceId,
+        label: d.label || `\uB9C8\uC774\uD06C ${d.deviceId.slice(0, 8)}`
+      }));
+    } catch {
+      return [];
+    }
+  }
+  // ── Internal ────────────────────────────────────────────────────
+  flushChunk() {
+    const totalLength = this.buffer.reduce((sum, arr) => sum + arr.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const arr of this.buffer) {
+      merged.set(arr, offset);
+      offset += arr.length;
+    }
+    const pcm = this.float32ToInt16(merged);
+    this.buffer = [];
+    this.samplesCollected = 0;
+    this.callbacks.onChunk(pcm.buffer);
+  }
+  float32ToInt16(float32) {
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      int16[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    return int16;
+  }
+  resample(input, fromRate, toRate) {
+    const ratio = fromRate / toRate;
+    const outputLength = Math.round(input.length / ratio);
+    const output = new Float32Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      const srcIndex = i * ratio;
+      const srcIndexFloor = Math.floor(srcIndex);
+      const srcIndexCeil = Math.min(srcIndexFloor + 1, input.length - 1);
+      const frac = srcIndex - srcIndexFloor;
+      output[i] = input[srcIndexFloor] * (1 - frac) + input[srcIndexCeil] * frac;
+    }
+    return output;
+  }
+  cleanup() {
+    if (this.scriptProcessor) {
+      this.scriptProcessor.disconnect();
+      this.scriptProcessor = null;
+    }
+    if (this.sourceNode) {
+      this.sourceNode.disconnect();
+      this.sourceNode = null;
+    }
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {
+      });
+      this.audioContext = null;
+    }
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
+    this.buffer = [];
+    this.samplesCollected = 0;
+  }
+};
+
+// src/settings.ts
 var DEFAULT_SETTINGS = {
   serverUrl: "ws://localhost:8765/ws",
-  modelSize: "large-v3-turbo",
-  huggingfaceToken: "",
-  minSpeakers: null,
-  maxSpeakers: null,
-  recordingPath: "./recordings",
-  slackEnabled: false,
-  slackWebhookUrl: "",
-  encryptionEnabled: false,
-  autoDeleteDays: 0,
+  apiKey: "",
   autoLinkEnabled: true,
-  processMode: "queue",
-  backendDir: "",
   participantSuggestPath: "",
+  audioDevice: "",
   emailFromAddress: "",
   gitlabLinkEnabled: true
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
-    this.activeTab = "basic";
     this.plugin = plugin;
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "MeetNote \uC124\uC815" });
-    const tabNav = containerEl.createDiv({ cls: "meetnote-settings-tabs" });
-    const basicTab = tabNav.createEl("button", {
-      text: "\uAE30\uBCF8 \uC124\uC815",
-      cls: `meetnote-settings-tab ${this.activeTab === "basic" ? "meetnote-settings-tab-active" : ""}`
-    });
-    const advancedTab = tabNav.createEl("button", {
-      text: "\uACE0\uAE09 \uC124\uC815",
-      cls: `meetnote-settings-tab ${this.activeTab === "advanced" ? "meetnote-settings-tab-active" : ""}`
-    });
-    basicTab.addEventListener("click", () => {
-      this.activeTab = "basic";
-      this.display();
-    });
-    advancedTab.addEventListener("click", () => {
-      this.activeTab = "advanced";
-      this.display();
-    });
-    const contentEl = containerEl.createDiv({ cls: "meetnote-settings-content" });
-    if (this.activeTab === "basic") {
-      this.renderBasicSettings(contentEl);
-    } else {
-      this.renderAdvancedSettings(contentEl);
-    }
-  }
-  renderBasicSettings(containerEl) {
-    containerEl.createEl("p", {
-      text: "\uD544\uC218 \uD56D\uBAA9\uC740 * \uB85C \uD45C\uC2DC\uB429\uB2C8\uB2E4.",
-      cls: "meetnote-settings-hint"
-    });
-    new import_obsidian.Setting(containerEl).setName("\uBC31\uC5D4\uB4DC \uACBD\uB85C *").setDesc("Python \uBC31\uC5D4\uB4DC \uB514\uB809\uD1A0\uB9AC \uACBD\uB85C (\uC11C\uBC84 \uC2DC\uC791/\uC911\uC9C0\uC5D0 \uD544\uC694)").addText((text) => {
-      text.setPlaceholder("/path/to/meetnote/backend").setValue(this.plugin.settings.backendDir).onChange(async (value) => {
-        this.plugin.settings.backendDir = value.trim();
+    containerEl.createEl("h3", { text: "\uC11C\uBC84 \uC5F0\uACB0" });
+    new import_obsidian.Setting(containerEl).setName("\uC11C\uBC84 URL *").setDesc("\uBC31\uC5D4\uB4DC WebSocket \uC11C\uBC84 \uC8FC\uC18C (\uB85C\uCEEC: ws://localhost:8765/ws)").addText((text) => {
+      text.setPlaceholder("ws://localhost:8765/ws").setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
+        this.plugin.settings.serverUrl = value.trim();
         await this.plugin.saveSettings();
       });
-      if (!this.plugin.settings.backendDir) {
+      const val = this.plugin.settings.serverUrl;
+      if (val && !this.isValidWsUrl(val)) {
         text.inputEl.addClass("meetnote-input-error");
       }
     });
-    new import_obsidian.Setting(containerEl).setName("\uD6C4\uCC98\uB9AC \uBAA8\uB4DC").setDesc("\uB179\uC74C \uC911\uC9C0 \uD6C4 \uC989\uC2DC \uCC98\uB9AC \uB610\uB294 \uB098\uC911\uC5D0 \uC218\uB3D9 \uCC98\uB9AC").addDropdown(
-      (dropdown) => dropdown.addOption("queue", "\uD050 \uBAA8\uB4DC (\uB098\uC911\uC5D0 \uCC98\uB9AC)").addOption("immediate", "\uC989\uC2DC \uCC98\uB9AC").setValue(this.plugin.settings.processMode).onChange(async (value) => {
-        this.plugin.settings.processMode = value;
+    new import_obsidian.Setting(containerEl).setName("API Key").setDesc("\uC6D0\uACA9 \uC11C\uBC84 \uC778\uC99D\uC6A9 (\uC120\uD0DD, \uB85C\uCEEC \uC11C\uBC84\uB294 \uBD88\uD544\uC694)").addText(
+      (text) => text.setPlaceholder("\uBE44\uC6CC\uB450\uBA74 \uC778\uC99D \uC5C6\uC774 \uC5F0\uACB0").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
+        this.plugin.settings.apiKey = value.trim();
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h3", { text: "\uC624\uB514\uC624" });
+    const audioSetting = new import_obsidian.Setting(containerEl).setName("\uC624\uB514\uC624 \uC785\uB825 \uB514\uBC14\uC774\uC2A4").setDesc("\uB179\uC74C\uC5D0 \uC0AC\uC6A9\uD560 \uB9C8\uC774\uD06C (\uBE44\uC6CC\uB450\uBA74 \uC2DC\uC2A4\uD15C \uAE30\uBCF8)");
+    audioSetting.addDropdown(async (dropdown) => {
+      dropdown.addOption("", "\uC2DC\uC2A4\uD15C \uAE30\uBCF8");
+      try {
+        const devices = await AudioCapture.listDevices();
+        for (const d of devices) {
+          dropdown.addOption(d.deviceId, d.label);
+        }
+      } catch {
+      }
+      dropdown.setValue(this.plugin.settings.audioDevice).onChange(async (value) => {
+        this.plugin.settings.audioDevice = value;
+        await this.plugin.saveSettings();
+      });
+    });
     containerEl.createEl("h3", { text: "\uCC38\uC11D\uC790 / \uC774\uBA54\uC77C" });
     new import_obsidian.Setting(containerEl).setName("\uCC38\uC11D\uC790 \uC790\uB3D9\uC644\uC131 \uACBD\uB85C").setDesc("vault \uB0B4 \uC0AC\uC6A9\uC790 \uC815\uBCF4 \uD3F4\uB354 (\uC774\uB984 + \uC774\uBA54\uC77C \uC790\uB3D9\uC644\uC131\uC5D0 \uC0AC\uC6A9)").addText(
       (text) => text.setPlaceholder("TEAM-TF/io-second-brain/\uB0B4\uBD80 \uC0AC\uC6A9\uC790").setValue(this.plugin.settings.participantSuggestPath).onChange(async (value) => {
@@ -442,176 +567,11 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
   }
-  renderAdvancedSettings(containerEl) {
-    containerEl.createEl("p", {
-      text: "\uC77C\uBC18\uC801\uC73C\uB85C \uAE30\uBCF8\uAC12\uC744 \uAD8C\uC7A5\uD569\uB2C8\uB2E4. \uD544\uC694\uD55C \uACBD\uC6B0\uC5D0\uB9CC \uBCC0\uACBD\uD558\uC138\uC694.",
-      cls: "meetnote-settings-hint"
-    });
-    containerEl.createEl("h3", { text: "\uC11C\uBC84 / \uBAA8\uB378" });
-    new import_obsidian.Setting(containerEl).setName("\uC11C\uBC84 URL").setDesc("\uBC31\uC5D4\uB4DC WebSocket \uC11C\uBC84 \uC8FC\uC18C").addText((text) => {
-      text.setPlaceholder("ws://localhost:8765/ws").setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
-        this.plugin.settings.serverUrl = value.trim();
-        await this.plugin.saveSettings();
-      });
-      const val = this.plugin.settings.serverUrl;
-      if (val && !this.isValidWsUrl(val)) {
-        text.inputEl.addClass("meetnote-input-error");
-      }
-    });
-    new import_obsidian.Setting(containerEl).setName("Whisper \uBAA8\uB378 \uD06C\uAE30").setDesc("\uC74C\uC131 \uC778\uC2DD\uC5D0 \uC0AC\uC6A9\uD560 Whisper \uBAA8\uB378 \uD06C\uAE30").addDropdown(
-      (dropdown) => dropdown.addOption("tiny", "tiny").addOption("base", "base").addOption("small", "small").addOption("medium", "medium").addOption("large-v3", "large-v3").addOption("large-v3-turbo", "large-v3-turbo (\uAD8C\uC7A5)").setValue(this.plugin.settings.modelSize).onChange(async (value) => {
-        this.plugin.settings.modelSize = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("HuggingFace \uD1A0\uD070").setDesc("\uD654\uC790 \uBD84\uB9AC(diarization)\uB97C \uC704\uD55C HuggingFace API \uD1A0\uD070").addText(
-      (text) => text.setPlaceholder("hf_...").setValue(this.plugin.settings.huggingfaceToken).onChange(async (value) => {
-        this.plugin.settings.huggingfaceToken = value.trim();
-        await this.plugin.saveSettings();
-      })
-    );
-    containerEl.createEl("h3", { text: "\uD654\uC790 \uAC10\uC9C0" });
-    new import_obsidian.Setting(containerEl).setName("\uCD5C\uC18C \uD654\uC790 \uC218").setDesc("\uC608\uC0C1 \uCD5C\uC18C \uD654\uC790 \uC218 (\uBE44\uC6CC\uB450\uBA74 \uC790\uB3D9 \uAC10\uC9C0)").addText((text) => {
-      text.setPlaceholder("\uC790\uB3D9 \uAC10\uC9C0").setValue(
-        this.plugin.settings.minSpeakers !== null ? String(this.plugin.settings.minSpeakers) : ""
-      ).onChange(async (value) => {
-        const parsed = value === "" ? null : parseInt(value, 10);
-        if (value !== "" && (isNaN(parsed) || parsed < 1)) {
-          text.inputEl.addClass("meetnote-input-error");
-          return;
-        }
-        text.inputEl.removeClass("meetnote-input-error");
-        this.plugin.settings.minSpeakers = parsed;
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian.Setting(containerEl).setName("\uCD5C\uB300 \uD654\uC790 \uC218").setDesc("\uC608\uC0C1 \uCD5C\uB300 \uD654\uC790 \uC218 (\uBE44\uC6CC\uB450\uBA74 \uC790\uB3D9 \uAC10\uC9C0)").addText((text) => {
-      text.setPlaceholder("\uC790\uB3D9 \uAC10\uC9C0").setValue(
-        this.plugin.settings.maxSpeakers !== null ? String(this.plugin.settings.maxSpeakers) : ""
-      ).onChange(async (value) => {
-        const parsed = value === "" ? null : parseInt(value, 10);
-        if (value !== "" && (isNaN(parsed) || parsed < 1)) {
-          text.inputEl.addClass("meetnote-input-error");
-          return;
-        }
-        text.inputEl.removeClass("meetnote-input-error");
-        this.plugin.settings.maxSpeakers = parsed;
-        await this.plugin.saveSettings();
-      });
-      const min = this.plugin.settings.minSpeakers;
-      const max = this.plugin.settings.maxSpeakers;
-      if (min !== null && max !== null && max < min) {
-        text.inputEl.addClass("meetnote-input-error");
-      }
-    });
-    new import_obsidian.Setting(containerEl).setName("\uB179\uC74C \uC800\uC7A5 \uACBD\uB85C").setDesc("\uB179\uC74C \uD30C\uC77C\uC774 \uC800\uC7A5\uB420 \uACBD\uB85C (\uBC31\uC5D4\uB4DC \uAE30\uC900 \uC0C1\uB300 \uACBD\uB85C)").addText(
-      (text) => text.setPlaceholder("./recordings").setValue(this.plugin.settings.recordingPath).onChange(async (value) => {
-        this.plugin.settings.recordingPath = value.trim();
-        await this.plugin.saveSettings();
-      })
-    );
-    containerEl.createEl("h3", { text: "Slack \uC5F0\uB3D9" });
-    new import_obsidian.Setting(containerEl).setName("Slack \uC804\uC1A1 \uD65C\uC131\uD654").setDesc("\uD68C\uC758 \uC644\uB8CC \uD6C4 Slack \uCC44\uB110\uB85C \uD68C\uC758\uB85D \uC790\uB3D9 \uC804\uC1A1").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.slackEnabled).onChange(async (value) => {
-        this.plugin.settings.slackEnabled = value;
-        await this.plugin.saveSettings();
-        await this.syncSlackConfig();
-        this.display();
-      })
-    );
-    if (this.plugin.settings.slackEnabled) {
-      new import_obsidian.Setting(containerEl).setName("Webhook URL").setDesc("Slack Incoming Webhook URL").addText((text) => {
-        text.setPlaceholder("https://hooks.slack.com/services/...").setValue(this.plugin.settings.slackWebhookUrl).onChange(async (value) => {
-          this.plugin.settings.slackWebhookUrl = value.trim();
-          await this.plugin.saveSettings();
-          await this.syncSlackConfig();
-        });
-        const val = this.plugin.settings.slackWebhookUrl;
-        if (this.plugin.settings.slackEnabled && val && !val.startsWith("https://hooks.slack.com/")) {
-          text.inputEl.addClass("meetnote-input-error");
-        }
-      });
-      new import_obsidian.Setting(containerEl).setName("\uC5F0\uACB0 \uD14C\uC2A4\uD2B8").setDesc("Slack Webhook \uC5F0\uACB0 \uC0C1\uD0DC\uB97C \uD655\uC778\uD569\uB2C8\uB2E4").addButton(
-        (button) => button.setButtonText("\uD14C\uC2A4\uD2B8").onClick(async () => {
-          await this.syncSlackConfig();
-          try {
-            const baseUrl = this.getHttpBaseUrl();
-            const resp = await (0, import_obsidian.requestUrl)({
-              url: `${baseUrl}/slack/test`,
-              method: "POST"
-            });
-            const result = resp.json;
-            if (result.ok) {
-              new import_obsidian.Notice("Slack \uC5F0\uACB0 \uC131\uACF5! \uCC44\uB110\uC744 \uD655\uC778\uD558\uC138\uC694.");
-            } else {
-              new import_obsidian.Notice(`Slack \uC5F0\uACB0 \uC2E4\uD328: ${result.message}`);
-            }
-          } catch {
-            new import_obsidian.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-          }
-        })
-      );
-    }
-    containerEl.createEl("h3", { text: "\uBCF4\uC548" });
-    new import_obsidian.Setting(containerEl).setName("\uB179\uC74C \uD30C\uC77C \uC554\uD638\uD654").setDesc("\uB179\uC74C \uC644\uB8CC \uD6C4 WAV \uD30C\uC77C\uC744 AES \uC554\uD638\uD654\uD558\uC5EC \uC800\uC7A5 (\uC6D0\uBCF8 \uC0AD\uC81C)").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.encryptionEnabled).onChange(async (value) => {
-        this.plugin.settings.encryptionEnabled = value;
-        await this.plugin.saveSettings();
-        await this.syncSecurityConfig();
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("\uC790\uB3D9 \uC0AD\uC81C (\uC77C)").setDesc("N\uC77C \uC774\uC0C1 \uB41C \uB179\uC74C \uD30C\uC77C \uC790\uB3D9 \uC0AD\uC81C (0\uC774\uBA74 \uBE44\uD65C\uC131\uD654)").addText((text) => {
-      text.setPlaceholder("0").setValue(String(this.plugin.settings.autoDeleteDays)).onChange(async (value) => {
-        const parsed = parseInt(value, 10);
-        if (isNaN(parsed) || parsed < 0) {
-          text.inputEl.addClass("meetnote-input-error");
-          return;
-        }
-        text.inputEl.removeClass("meetnote-input-error");
-        this.plugin.settings.autoDeleteDays = parsed;
-        await this.plugin.saveSettings();
-        await this.syncSecurityConfig();
-      });
-    });
-  }
   isValidEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
   isValidWsUrl(url) {
     return /^wss?:\/\/.+/.test(url);
-  }
-  getHttpBaseUrl() {
-    return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
-  }
-  async syncSlackConfig() {
-    try {
-      const baseUrl = this.getHttpBaseUrl();
-      await (0, import_obsidian.requestUrl)({
-        url: `${baseUrl}/slack/config`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({
-          enabled: this.plugin.settings.slackEnabled,
-          webhook_url: this.plugin.settings.slackWebhookUrl
-        })
-      });
-    } catch {
-    }
-  }
-  async syncSecurityConfig() {
-    try {
-      const baseUrl = this.getHttpBaseUrl();
-      await (0, import_obsidian.requestUrl)({
-        url: `${baseUrl}/security/config`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({
-          encryption_enabled: this.plugin.settings.encryptionEnabled,
-          auto_delete_days: this.plugin.settings.autoDeleteDays
-        })
-      });
-    } catch {
-    }
   }
 };
 
@@ -702,19 +662,27 @@ var BackendClient = class {
   sendStart(config) {
     this.send({ type: "start", config });
   }
-  sendStop(processMode = "immediate") {
+  sendStop() {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log("[BackendClient] Sending stop via WebSocket, mode:", processMode);
-      this.ws.send(JSON.stringify({ type: "stop", process_mode: processMode }));
+      console.log("[BackendClient] Sending stop via WebSocket");
+      this.ws.send(JSON.stringify({ type: "stop" }));
     } else {
       console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
-      this.httpStop(processMode);
+      this.httpStop();
     }
   }
-  async httpStop(processMode = "immediate") {
+  /** Send a binary audio chunk (PCM data) to the server. */
+  sendAudioChunk(pcmData) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn("[BackendClient] Cannot send audio \u2014 WebSocket not open");
+      return;
+    }
+    this.ws.send(pcmData);
+  }
+  async httpStop() {
     try {
       const response = await (0, import_obsidian2.requestUrl)({
-        url: `${this.httpBaseUrl}/stop?process_mode=${processMode}`,
+        url: `${this.httpBaseUrl}/stop`,
         method: "POST"
       });
       console.log("[BackendClient] HTTP stop response:", response.json);
@@ -737,13 +705,6 @@ var BackendClient = class {
     this.ws.send(JSON.stringify(message));
   }
   // ── HTTP methods ───────────────────────────────────────────────────
-  async fetchDevices() {
-    const response = await (0, import_obsidian2.requestUrl)({
-      url: `${this.httpBaseUrl}/devices`,
-      method: "GET"
-    });
-    return response.json;
-  }
   async fetchStatus() {
     const response = await (0, import_obsidian2.requestUrl)({
       url: `${this.httpBaseUrl}/status`,
@@ -800,7 +761,7 @@ var BackendClient = class {
         break;
       case "final": {
         const finalMsg = msg;
-        this.callbacks.onFinal?.(finalMsg.segments, finalMsg.summary, finalMsg.speaking_stats, finalMsg.slack_status);
+        this.callbacks.onFinal?.(finalMsg.segments, finalMsg.speaking_stats);
         break;
       }
       case "status":
@@ -1016,17 +977,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
         );
         setTimeout(() => this.render(), 1e3);
-      });
-      const stopBtn = headerActions.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-header-btn", attr: { title: "\uC11C\uBC84 \uC911\uC9C0" } });
-      stopBtn.addEventListener("click", async () => {
-        await this.stopServer();
-        setTimeout(() => this.render(), 1500);
-      });
-    } else {
-      const startBtn = headerActions.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-header-btn", attr: { title: "\uC11C\uBC84 \uC2DC\uC791" } });
-      startBtn.addEventListener("click", async () => {
-        await this.startServer();
-        setTimeout(() => this.render(), 12e3);
       });
     }
     const dashBtn = headerActions.createEl("button", { text: "\u{1F4CA}", cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
@@ -1603,29 +1553,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       await this.render();
     }
   }
-  // ── Server Management ──
-  async renderServerSection(container) {
-    const section = container.createDiv({ cls: "meetnote-server-section" });
-    const header = section.createDiv({ cls: "meetnote-server-header" });
-    header.createEl("h4", { text: "\uC11C\uBC84" });
-    const serverOnline = await this.checkServerHealth();
-    const statusRow = section.createDiv({ cls: "meetnote-server-status" });
-    if (serverOnline) {
-      statusRow.createEl("span", { text: "\u25CF \uC2E4\uD589 \uC911", cls: "meetnote-status-online" });
-      const stopBtn = statusRow.createEl("button", { text: "\uC911\uC9C0", cls: "meetnote-server-btn" });
-      stopBtn.addEventListener("click", async () => {
-        await this.stopServer();
-        setTimeout(() => this.render(), 1500);
-      });
-    } else {
-      statusRow.createEl("span", { text: "\u25CF \uC911\uC9C0\uB428", cls: "meetnote-status-offline" });
-      const startBtn = statusRow.createEl("button", { text: "\uC2DC\uC791", cls: "meetnote-server-btn" });
-      startBtn.addEventListener("click", async () => {
-        await this.startServer();
-        setTimeout(() => this.render(), 5e3);
-      });
-    }
-  }
   async checkServerHealth() {
     try {
       const baseUrl = this.getHttpBaseUrl();
@@ -1637,53 +1564,6 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       return data?.ok === true;
     } catch {
       return false;
-    }
-  }
-  async startServer() {
-    try {
-      const { spawn } = require("child_process");
-      const backendDir = this.plugin.settings.backendDir || "";
-      if (!backendDir) {
-        new import_obsidian3.Notice("\uC124\uC815\uC5D0\uC11C \uBC31\uC5D4\uB4DC \uACBD\uB85C\uB97C \uC9C0\uC815\uD574\uC8FC\uC138\uC694.");
-        return;
-      }
-      const pythonPath = `${backendDir}/venv/bin/python3`;
-      const serverPath = `${backendDir}/server.py`;
-      const homedir = require("os").homedir();
-      const extraPaths = [
-        `${backendDir}/venv/bin`,
-        `${homedir}/.asdf/shims`,
-        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-        "/usr/local/bin",
-        "/opt/homebrew/bin"
-      ];
-      const env = Object.assign({}, process.env, {
-        PATH: [...extraPaths, process.env.PATH || ""].join(":")
-      });
-      const child = spawn(pythonPath, [serverPath], {
-        cwd: backendDir,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env
-      });
-      const fs = require("fs");
-      const logStream = fs.createWriteStream("/tmp/meetnote_server.log");
-      child.stdout?.pipe(logStream);
-      child.stderr?.pipe(logStream);
-      child.unref();
-      new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4... (\uC57D 10\uCD08 \uC18C\uC694)");
-      setTimeout(() => this.render(), 12e3);
-    } catch (err) {
-      new import_obsidian3.Notice(`\uC11C\uBC84 \uC2DC\uC791 \uC2E4\uD328: ${err}`);
-      console.error("[MeetNote] Server start failed:", err);
-    }
-  }
-  async stopServer() {
-    try {
-      await this.api("/shutdown", { method: "POST" });
-      new import_obsidian3.Notice("\uC11C\uBC84\uB97C \uC911\uC9C0\uD569\uB2C8\uB2E4.");
-    } catch {
-      new import_obsidian3.Notice("\uC11C\uBC84 \uC911\uC9C0 \uC2E4\uD328");
     }
   }
   getHttpBaseUrl() {
@@ -1859,12 +1739,103 @@ ${partLines}
   }
 };
 
+// src/summarizer.ts
+var MAX_TRANSCRIPT_CHARS = 5e4;
+var SUMMARY_TIMEOUT_MS = 12e4;
+var SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
+
+\uC624\uB298 \uB0A0\uC9DC: {today}
+
+## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
+
+### \uC694\uC57D
+- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
+
+### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
+
+### \uC561\uC158\uC544\uC774\uD15C
+- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
+
+### \uD0DC\uADF8
+#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
+
+## \uADDC\uCE59
+- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
+- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
+- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
+- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
+- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
+
+## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
+
+{transcript}
+`;
+function formatTranscript(segments) {
+  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
+}
+function buildPrompt(transcript) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
+}
+function isClaudeAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    execSync("which claude", { stdio: "ignore", timeout: 3e3 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function summarize(segments) {
+  const transcript = formatTranscript(segments);
+  if (!transcript) {
+    return { success: false, summary: "", engine: "none" };
+  }
+  if (!isClaudeAvailable()) {
+    console.log("[Summarizer] Claude CLI not found \u2014 skipping summary.");
+    return { success: false, summary: "", engine: "none" };
+  }
+  const prompt = buildPrompt(transcript);
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      const child = execFile(
+        "claude",
+        ["-p", prompt],
+        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Claude CLI failed:", error.message);
+            resolve({ success: false, summary: "", engine: "claude" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "claude" });
+          } else {
+            console.warn("[Summarizer] Claude CLI returned empty output.");
+            resolve({ success: false, summary: "", engine: "claude" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+
 // src/main.ts
 var MeetNotePlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.isRecording = false;
     this.ribbonIconEl = null;
+    this.audioCapture = null;
     this.recordingStartTime = null;
   }
   async onload() {
@@ -1874,8 +1845,8 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.statusBar = new RecorderStatusBar(this.addStatusBarItem());
     this.backendClient.onChunk((segments) => {
       this.writer.appendChunk(segments);
-    }).onFinal(async (segments, summary, speakingStats, slackStatus) => {
-      if (this.settings.processMode === "queue" && !this.isRecording) {
+    }).onFinal(async (segments, speakingStats) => {
+      if (!this.isRecording) {
         return;
       }
       if (!this.writer.currentFile) {
@@ -1884,9 +1855,21 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
           await this.writer.init(activeFile, /* @__PURE__ */ new Date());
         }
       }
+      let summaryText;
+      try {
+        this.statusBar.setProgress("\uC694\uC57D \uC0DD\uC131 \uC911", 95);
+        const result = await summarize(segments);
+        if (result.success) {
+          summaryText = result.summary;
+        } else if (result.engine === "none") {
+          new import_obsidian4.Notice("Claude CLI\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
+        }
+      } catch (err) {
+        console.error("[MeetNote] \uC694\uC57D \uC0DD\uC131 \uC2E4\uD328:", err);
+      }
       const startTime = this.recordingStartTime ?? /* @__PURE__ */ new Date();
       const endTime = /* @__PURE__ */ new Date();
-      await this.writer.writeFinal(segments, startTime, endTime, summary, speakingStats);
+      await this.writer.writeFinal(segments, startTime, endTime, summaryText, speakingStats);
       if (this.settings.autoLinkEnabled && this.writer.tags.length > 0) {
         try {
           const linked = await this.writer.linkRelatedMeetings();
@@ -1901,21 +1884,16 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       this.isRecording = false;
       this.updateRibbonIcon();
       const parts = ["\uD68C\uC758\uB85D \uC791\uC131\uC774 \uC644\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4."];
+      if (summaryText) {
+        parts.push("\uC694\uC57D\uC774 \uD3EC\uD568\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      }
       if (this.writer.tags.length > 0) {
         parts.push(`\uD0DC\uADF8: ${this.writer.tags.slice(0, 5).map((t) => `#${t}`).join(" ")}`);
       }
       new import_obsidian4.Notice(parts.join("\n"), 8e3);
       this.writer.reset();
       this.recordingStartTime = null;
-      if (slackStatus) {
-        if (slackStatus.success) {
-          new import_obsidian4.Notice("\uD68C\uC758\uB85D\uC774 Slack\uC5D0 \uC804\uC1A1\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
-        } else if (slackStatus.error) {
-          new import_obsidian4.Notice(`Slack \uC804\uC1A1 \uC2E4\uD328: ${slackStatus.error}`);
-        }
-      }
     }).onProgress((stage, percent) => {
-      if (this.settings.processMode === "queue" && !this.isRecording) return;
       this.statusBar.setProgress(stage, percent);
     }).onError((message) => {
       new import_obsidian4.Notice(`MeetNote \uC624\uB958: ${message}`);
@@ -1924,8 +1902,6 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       this.statusBar.setConnectionStatus(connected);
       if (connected) {
         console.log("[MeetNote] \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
-        this.syncSlackConfig();
-        this.syncSecurityConfig();
       } else {
         console.log("[MeetNote] \uC11C\uBC84 \uC5F0\uACB0\uC774 \uB04A\uC5B4\uC84C\uC2B5\uB2C8\uB2E4.");
       }
@@ -1999,7 +1975,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       (leaf) => new MeetNoteSidePanel(leaf, this)
     );
     this.addSettingTab(new MeetNoteSettingTab(this.app, this));
-    if (!this.settings.backendDir) {
+    if (this.settings.serverUrl === DEFAULT_SETTINGS.serverUrl) {
       this.showOnboarding();
     }
     console.log("MeetNote plugin loaded");
@@ -2007,6 +1983,10 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
   async onunload() {
     if (this.isRecording) {
       this.stopRecording();
+    }
+    if (this.audioCapture) {
+      this.audioCapture.stop();
+      this.audioCapture = null;
     }
     this.backendClient.disconnect();
     this.statusBar.destroy();
@@ -2032,18 +2012,21 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.updateRibbonIcon();
     await this.writer.init(activeFile, this.recordingStartTime);
     this.statusBar.startRecording();
-    const previousContext = await this.loadPreviousMeetingContext();
     this.backendClient.sendStart({
-      whisper: { model_size: this.settings.modelSize },
-      diarization: {
-        huggingface_token: this.settings.huggingfaceToken || void 0,
-        min_speakers: this.settings.minSpeakers || void 0,
-        max_speakers: this.settings.maxSpeakers || void 0
-      },
-      previous_context: previousContext || void 0,
       document_name: activeFile.basename,
       document_path: activeFile.path
     });
+    this.audioCapture = new AudioCapture({
+      onChunk: (pcmData) => {
+        this.backendClient.sendAudioChunk(pcmData);
+      },
+      onError: (message) => {
+        new import_obsidian4.Notice(`\uC624\uB514\uC624 \uCEA1\uCC98 \uC624\uB958: ${message}`);
+        console.error("[MeetNote] Audio capture error:", message);
+      }
+    });
+    const deviceId = this.settings.audioDevice || void 0;
+    await this.audioCapture.start(deviceId);
     new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
   }
   stopRecording() {
@@ -2051,22 +2034,21 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       new import_obsidian4.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
       return;
     }
-    this.backendClient.sendStop(this.settings.processMode);
+    if (this.audioCapture) {
+      this.audioCapture.stop();
+      this.audioCapture = null;
+    }
+    this.backendClient.sendStop();
     this.statusBar.stopRecording();
     this.isRecording = false;
     this.updateRibbonIcon();
-    if (this.settings.processMode === "queue") {
-      this.writer.cleanupLiveSection().catch(
-        (err) => console.error("[MeetNote] Live section cleanup failed:", err)
-      );
-      this.writer.reset();
-      this.recordingStartTime = null;
-      this.statusBar.setIdle();
-      new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
-    } else {
-      this.statusBar.setProgress("\uD654\uC790 \uAD6C\uBD84", 0);
-      new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC911\uC9C0\uD569\uB2C8\uB2E4. \uCC98\uB9AC \uC911...");
-    }
+    this.writer.cleanupLiveSection().catch(
+      (err) => console.error("[MeetNote] Live section cleanup failed:", err)
+    );
+    this.writer.reset();
+    this.recordingStartTime = null;
+    this.statusBar.setIdle();
+    new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
   }
   async activateSidePanel() {
     const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
@@ -2399,34 +2381,6 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
   getHttpBaseUrl() {
     return this.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
   }
-  async syncSlackConfig() {
-    try {
-      await (0, import_obsidian4.requestUrl)({
-        url: `${this.getHttpBaseUrl()}/slack/config`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({
-          enabled: this.settings.slackEnabled,
-          webhook_url: this.settings.slackWebhookUrl
-        })
-      });
-    } catch {
-    }
-  }
-  async syncSecurityConfig() {
-    try {
-      await (0, import_obsidian4.requestUrl)({
-        url: `${this.getHttpBaseUrl()}/security/config`,
-        method: "POST",
-        contentType: "application/json",
-        body: JSON.stringify({
-          encryption_enabled: this.settings.encryptionEnabled,
-          auto_delete_days: this.settings.autoDeleteDays
-        })
-      });
-    } catch {
-    }
-  }
   async loadSettings() {
     this.settings = Object.assign(
       {},
@@ -2456,41 +2410,33 @@ var OnboardingModal = class extends import_obsidian4.Modal {
     const step1 = steps.createDiv({ cls: "meetnote-onboarding-step" });
     step1.createEl("div", { text: "1", cls: "meetnote-onboarding-number" });
     const step1Content = step1.createDiv();
-    step1Content.createEl("strong", { text: "\uBC31\uC5D4\uB4DC \uC124\uCE58" });
-    step1Content.createEl("p", { text: "backend \uD3F4\uB354\uC5D0\uC11C install.sh\uB97C \uC2E4\uD589\uD558\uC138\uC694. Python 3.11+, venv, \uBAA8\uB378 \uB2E4\uC6B4\uB85C\uB4DC\uB97C \uC790\uB3D9\uC73C\uB85C \uCC98\uB9AC\uD569\uB2C8\uB2E4." });
+    step1Content.createEl("strong", { text: "\uC11C\uBC84 \uC124\uCE58" });
+    step1Content.createEl("p", { text: "docker-compose.yml\uC744 \uB2E4\uC6B4\uB85C\uB4DC\uD558\uACE0 docker compose up -d\uB85C \uC11C\uBC84\uB97C \uC2DC\uC791\uD558\uC138\uC694. \uC790\uC138\uD55C \uBC29\uBC95\uC740 README\uB97C \uCC38\uACE0\uD558\uC138\uC694." });
     const step2 = steps.createDiv({ cls: "meetnote-onboarding-step" });
     step2.createEl("div", { text: "2", cls: "meetnote-onboarding-number" });
     const step2Content = step2.createDiv();
-    step2Content.createEl("strong", { text: "\uBC31\uC5D4\uB4DC \uACBD\uB85C \uC124\uC815 (\uD544\uC218)" });
-    step2Content.createEl("p", { text: "backend \uB514\uB809\uD1A0\uB9AC\uC758 \uC808\uB300 \uACBD\uB85C\uB97C \uC785\uB825\uD558\uC138\uC694." });
-    const pathInput = step2Content.createEl("input", {
+    step2Content.createEl("strong", { text: "\uC11C\uBC84 URL \uC124\uC815" });
+    step2Content.createEl("p", { text: "\uC11C\uBC84\uAC00 \uC2E4\uD589 \uC911\uC778 \uC8FC\uC18C\uB97C \uC785\uB825\uD558\uC138\uC694. \uB85C\uCEEC\uC774\uBA74 \uAE30\uBCF8\uAC12 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD569\uB2C8\uB2E4." });
+    const urlInput = step2Content.createEl("input", {
       type: "text",
-      placeholder: "/path/to/meetnote/backend",
+      placeholder: "ws://localhost:8765/ws",
       cls: "meetnote-onboarding-input"
     });
-    pathInput.value = this.plugin.settings.backendDir;
+    urlInput.value = this.plugin.settings.serverUrl;
     const step3 = steps.createDiv({ cls: "meetnote-onboarding-step" });
     step3.createEl("div", { text: "3", cls: "meetnote-onboarding-number" });
     const step3Content = step3.createDiv();
-    step3Content.createEl("strong", { text: "\uC11C\uBC84 \uC2DC\uC791" });
-    step3Content.createEl("p", { text: "\uC0AC\uC774\uB4DC \uD328\uB110(\uB9AC\uBCF8 \uBA54\uB274)\uC5D0\uC11C '\uC2DC\uC791' \uBC84\uD2BC\uC73C\uB85C \uC11C\uBC84\uB97C \uC2E4\uD589\uD558\uC138\uC694." });
-    const step4 = steps.createDiv({ cls: "meetnote-onboarding-step" });
-    step4.createEl("div", { text: "4", cls: "meetnote-onboarding-number" });
-    const step4Content = step4.createDiv();
-    step4Content.createEl("strong", { text: "\uB179\uC74C \uC2DC\uC791" });
-    step4Content.createEl("p", { text: "\uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uC5F4\uACE0, \uB9AC\uBCF8\uC758 \uB9C8\uC774\uD06C \uC544\uC774\uCF58\uC744 \uD074\uB9AD\uD558\uBA74 \uB179\uC74C\uC774 \uC2DC\uC791\uB429\uB2C8\uB2E4. \uB179\uC74C \uC885\uB8CC \uD6C4 \uD050 \uBAA8\uB4DC\uC5D0\uC11C\uB294 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uC804\uC0AC + \uC694\uC57D\uC744 \uC2E4\uD589\uD558\uC138\uC694." });
+    step3Content.createEl("strong", { text: "\uB179\uC74C \uC2DC\uC791" });
+    step3Content.createEl("p", { text: "\uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uC5F4\uACE0, \uB9AC\uBCF8\uC758 \uB9C8\uC774\uD06C \uC544\uC774\uCF58\uC744 \uD074\uB9AD\uD558\uBA74 \uB179\uC74C\uC774 \uC2DC\uC791\uB429\uB2C8\uB2E4. \uB179\uC74C \uC885\uB8CC \uD6C4 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uC804\uC0AC\uB97C \uC2E4\uD589\uD558\uC138\uC694." });
     const btnRow = contentEl.createDiv({ cls: "meetnote-onboarding-actions" });
     const saveBtn = btnRow.createEl("button", { text: "\uC800\uC7A5 \uD6C4 \uC2DC\uC791", cls: "mod-cta" });
     saveBtn.addEventListener("click", async () => {
-      const path = pathInput.value.trim();
-      if (!path) {
-        new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uACBD\uB85C\uB97C \uC785\uB825\uD558\uC138\uC694.");
-        pathInput.focus();
-        return;
+      const url = urlInput.value.trim();
+      if (url) {
+        this.plugin.settings.serverUrl = url;
       }
-      this.plugin.settings.backendDir = path;
       await this.plugin.saveSettings();
-      new import_obsidian4.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uC11C\uBC84\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
+      new import_obsidian4.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       this.close();
       this.app.commands.executeCommandById("meetnote:open-side-panel");
     });

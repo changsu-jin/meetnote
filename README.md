@@ -2,129 +2,155 @@
 
 Obsidian 플러그인으로 회의를 녹음하고, 자동으로 전사/화자구분/요약하여 마크다운 회의록을 생성합니다.
 
-**완전 로컬 처리 | 비용 0원 | 오프라인 동작 | Apple Silicon GPU 가속**
+**완전 로컬 처리 | 비용 0원 | 오프라인 동작 | GPU 가속 (CUDA / Apple Silicon)**
 
 ## 핵심 기능
 
-- **실시간 전사** — MLX Whisper (large-v3-turbo), 30초 청크 단위 준실시간
-- **화자 구분** — pyannote-audio 3.1, MPS 가속 (CPU 대비 5.5배)
+- **실시간 전사** — Whisper (large-v3-turbo / distil-large-v3), 청크 단위 준실시간
+- **화자 구분** — pyannote-audio 3.1, GPU 자동 감지
 - **화자 매핑** — Speaker embedding DB로 누적 학습, 자동 이름 매칭
-- **AI 요약** — Claude CLI / Ollama, 액션아이템 + Obsidian Tasks 형식
-- **LLM 전사 교정** — 고유명사/오타 자동 교정
-- **Slack 전송** — Incoming Webhook으로 회의록 자동 전송
+- **AI 요약** — Claude CLI로 요약/액션아이템 자동 생성 (Obsidian Tasks 형식)
+- **이메일 전송** — SMTP로 참석자에게 회의록 전송 (Gmail / 사내 메일)
 - **암호화** — AES 녹음 파일 암호화, 자동 삭제, 감사 로그
 - **자동 태그/링크** — LLM 키워드 추출, vault 내 연관 회의 양방향 링크
-- **이전 회의 추적** — 이전 액션아이템 달성 여부 자동 체크
 - **RAG 검색** — 과거 회의 자연어 검색 + LLM 답변
-- **트렌드 대시보드** — 월별 회의 통계, 효율성 지표, 참석자/태그 빈도
+- **트렌드 대시보드** — 월별 회의 통계, 효율성 지표
 
 ## 아키텍처
 
 ```
-┌─────────────────────────────┐     HTTP/WebSocket     ┌──────────────────────────────┐
-│   Obsidian Plugin (TS)      │ ◄──────────────────► │   Python Backend             │
-│                             │                        │                              │
-│ • 녹음 시작/중지 UI         │                        │ • 오디오 녹음 (sounddevice)   │
-│ • 설정 화면                 │                        │ • STT (MLX Whisper)           │
-│ • 전사 결과 → 문서 기록     │                        │ • 화자구분 (pyannote-audio)   │
-│ • 태그/링크/대시보드        │                        │ • LLM 교정/요약 (Claude/Ollama)│
-│ • RAG 검색 UI              │                        │ • Slack/암호화/검색           │
-└─────────────────────────────┘                        └──────────────────────────────┘
+┌─────────────────────┐              ┌──────────────────────────┐
+│   Obsidian Plugin   │    audio     │       서버 (Docker)       │
+│                     │ ───────────► │                          │
+│ - 오디오 캡처       │   (WS/WSS)  │ - STT (Whisper)          │
+│ - UI               │ ◄─────────── │ - 화자구분 (pyannote)     │
+│ - 요약 (Claude CLI) │    text      │ - 병합                   │
+└─────────────────────┘              └──────────────────────────┘
 ```
 
-## 빠른 시작
+플러그인이 마이크 오디오를 캡처하여 서버로 전송하고, 서버가 STT + 화자구분을 처리합니다.
 
-### 설치 (1회)
+---
+
+## 서버 설치
+
+### 1. HuggingFace 토큰 발급 (최초 1회)
+
+화자구분 모델 다운로드에 필요합니다. **모델 캐시 후에는 토큰 없이 동작합니다.**
+
+1. [HuggingFace](https://huggingface.co) 회원가입 (무료)
+2. 모델 이용약관 동의 (2곳, 각각 별도):
+   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) → "Agree"
+   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) → "Agree"
+3. [토큰 생성](https://huggingface.co/settings/tokens):
+   - Type: **Read**
+   - Permissions: **Read access to contents of all public gated repos**
+
+### 2. Docker로 서버 실행
 
 ```bash
-git clone https://github.com/changsu-jin/meetnote.git
-cd meetnote
-bash install.sh
+# docker-compose.yml 다운로드
+curl -O https://raw.githubusercontent.com/<user>/meetnote/main/backend/docker-compose.yml
+
+# 환경변수 설정 (HuggingFace 토큰은 최초 1회만 필요)
+echo "HUGGINGFACE_TOKEN=hf_xxxxx" > .env
+
+# 서버 실행
+docker compose up -d
 ```
 
-설치 스크립트가 자동으로:
-- Python 가상환경 생성 및 의존성 설치
-- Apple Silicon GPU 가속 설정 (해당 시)
-- Obsidian 플러그인 빌드 및 vault에 설치
-- HuggingFace 토큰 입력 안내 (화자 구분용, 무료)
+최초 실행 시 이미지 pull (~3GB) + 모델 다운로드 (~10분)이 소요됩니다.
+이후에는 `.env`에서 토큰을 제거해도 정상 동작합니다.
 
-### 사용
+### 서버 업데이트
 
 ```bash
-bash start.sh          # 서버 시작
+docker compose pull
+docker compose up -d
 ```
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `HUGGINGFACE_TOKEN` | (없음) | pyannote 모델 다운로드 (최초 1회) |
+| `API_KEY` | (없음) | 원격 서버 인증 (선택) |
+| `WHISPER_MODEL` | `large-v3-turbo` | STT 모델 (`distil-large-v3`로 CPU 최적화 가능) |
+| `WHISPER_LANGUAGE` | `ko` | 전사 언어 |
+| `WHISPER_DEVICE` | `auto` | `auto` / `cpu` / `cuda` / `mps` |
+| `WHISPER_COMPUTE_TYPE` | `int8` | 양자화 타입 |
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP 서버 |
+| `SMTP_PORT` | `587` | SMTP 포트 |
+| `SMTP_USER` | (없음) | SMTP 로그인 |
+| `SMTP_PASSWORD` | (없음) | SMTP 비밀번호 (Gmail: 앱 비밀번호) |
+
+---
+
+## 플러그인 설치 (BRAT)
+
+1. Obsidian에서 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 플러그인 설치
+2. BRAT 설정 → "Add Beta Plugin" → 이 레포 URL 입력
+3. Obsidian 설정 → 커뮤니티 플러그인 → **MeetNote** 활성화
+4. MeetNote 설정에서 서버 URL 확인 (로컬: `ws://localhost:8765/ws`)
+
+---
+
+## 사용법
 
 1. Obsidian에서 마크다운 문서 열기
-2. 마이크 아이콘 클릭 → 녹음 시작
-3. 회의 진행 (실시간 전사 표시)
-4. 녹음 중지 → 자동으로 화자구분 + 요약 + 문서 완성
+2. 리본 아이콘(마이크) 또는 명령어 팔레트에서 "녹음 시작"
+3. 회의 진행 — 실시간 전사가 문서에 표시됨
+4. "녹음 중지" → 사이드 패널에서 "처리" 버튼
+5. 전사 + 화자구분 + 요약 → 회의록 완성
 
-> 자세한 사용법은 [사용자 매뉴얼](docs/USER_GUIDE.md)을 참고하세요.
+---
 
-## 프로젝트 구조
+## 원격 서버 설정 (선택)
 
-```
-meetnote/
-├── plugin/                     # Obsidian Plugin (TypeScript)
-│   └── src/
-│       ├── main.ts             # 진입점, 명령어, 콜백
-│       ├── settings.ts         # 설정 UI (서버/Slack/보안/태그)
-│       ├── backend-client.ts   # WebSocket/HTTP 통신
-│       └── writer.ts           # 문서 기록, frontmatter, 태그/링크
-│
-├── backend/                    # Python Backend
-│   ├── recorder/
-│   │   ├── audio.py            # 녹음 (sounddevice)
-│   │   ├── transcriber.py      # STT (MLX Whisper / faster-whisper)
-│   │   ├── diarizer.py         # 화자구분 (pyannote)
-│   │   ├── merger.py           # 전사+화자 병합
-│   │   ├── speaker_db.py       # 화자 embedding DB
-│   │   ├── summarizer.py       # LLM 요약
-│   │   ├── transcript_corrector.py  # LLM 전사 교정
-│   │   ├── analytics.py        # 발언 비율 분석
-│   │   ├── slack_sender.py     # Slack 전송
-│   │   ├── crypto.py           # 암호화/감사로그
-│   │   └── meeting_search.py   # RAG 검색
-│   ├── server.py               # FastAPI + WebSocket
-│   └── config.yaml             # 설정
-│
-├── docs/                       # 문서
-│   ├── SETUP.md                # 개발 환경 구축
-│   ├── API.md                  # API 스펙
-│   ├── ARCHITECTURE.md         # 아키텍처 상세
-│   └── TROUBLESHOOTING.md      # 문제 해결
-│
-├── PRD.md                      # 제품 요구사항
-├── PAID_IMPROVEMENTS.md        # 유료 개선 방향
-├── CONTRIBUTING.md             # 기여 가이드
-├── SECURITY.md                 # 보안 정책
-├── CHANGELOG.md                # 변경 이력
-└── TEST_PROGRESS.md            # 테스트 진행 상황
+사내 서버에서 Docker를 실행하고, 외부에서 접속하는 경우입니다.
+
+### API Key 인증
+
+```bash
+# 서버 .env
+API_KEY=your-secret-key
 ```
 
-## 문서
+플러그인 설정에서 동일한 API Key를 입력합니다.
 
-- [사용자 매뉴얼](docs/USER_GUIDE.md) — 설치부터 전체 기능 사용법
-- [설치 가이드](docs/SETUP.md) — 개발 환경 구축
-- [API 문서](docs/API.md) — WebSocket/HTTP 엔드포인트 스펙
-- [아키텍처](docs/ARCHITECTURE.md) — 시스템 설계, 데이터 흐름
-- [문제 해결](docs/TROUBLESHOOTING.md) — FAQ
-- [기여 가이드](CONTRIBUTING.md)
-- [보안 정책](SECURITY.md)
-- [유료 개선 방향](PAID_IMPROVEMENTS.md) — 비용 투자 시 개선 옵션
-- [변경 이력](CHANGELOG.md)
+### HTTPS (nginx 리버스 프록시)
 
-## 기술 스택
+```nginx
+server {
+    listen 443 ssl;
+    server_name meetnote.example.com;
 
-| 구성요소 | 선택 | 이유 |
-|----------|------|------|
-| STT | MLX Whisper large-v3-turbo | Apple Silicon GPU 가속, 한국어 우수 |
-| 화자구분 | pyannote-audio 3.1 | 로컬 무료, MPS 가속 |
-| 요약 | Claude CLI / Ollama | 무료 (Max 구독 / 로컬) |
-| 백엔드 | FastAPI + WebSocket | 실시간 통신 |
-| 암호화 | Fernet (cryptography) | AES-128-CBC + HMAC |
-| 검색 | TF-IDF + LLM RAG | 추가 의존성 없음 |
+    ssl_certificate /etc/letsencrypt/live/meetnote.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/meetnote.example.com/privkey.pem;
 
-## 라이선스
+    location / {
+        proxy_pass http://localhost:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
 
-MIT
+플러그인 설정에서 서버 URL을 `wss://meetnote.example.com/ws`로 변경합니다.
+
+---
+
+## 개발
+
+```bash
+# 플러그인 빌드
+cd plugin && npm install && npm run build
+
+# 서버 로컬 실행 (Docker)
+cd backend && docker compose up -d
+
+# 서버 로컬 실행 (venv, 개발용)
+cd backend && python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt && python server.py
+```

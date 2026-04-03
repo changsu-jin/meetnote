@@ -15,11 +15,8 @@ export interface FinalSegment {
 }
 
 export interface StartConfig {
-	device?: string;
-	model_size?: string;
-	huggingface_token?: string;
-	min_speakers?: number | null;
-	max_speakers?: number | null;
+	document_name?: string;
+	document_path?: string;
 	[key: string]: unknown;
 }
 
@@ -47,18 +44,11 @@ export interface SpeakingStatEntry {
 	ratio: number;
 }
 
-export interface SlackStatus {
-	success: boolean;
-	error?: string | null;
-}
-
 export interface FinalMessage {
 	type: "final";
 	segments: FinalSegment[];
-	summary?: string;
 	speaker_map?: Record<string, string>;
 	speaking_stats?: SpeakingStatEntry[];
-	slack_status?: SlackStatus;
 }
 
 export interface StatusMessage {
@@ -85,15 +75,6 @@ export type InboundMessage =
 	| ErrorMessage
 	| ProgressMessage;
 
-// Device info returned by GET /devices
-export interface DeviceInfo {
-	index: number;
-	name: string;
-	max_input_channels: number;
-	default_sample_rate: number;
-	is_default: boolean;
-}
-
 // Status returned by GET /status
 export interface BackendStatus {
 	recording: boolean;
@@ -104,7 +85,7 @@ export interface BackendStatus {
 
 export interface BackendClientCallbacks {
 	onChunk?: (segments: ChunkSegment[]) => void;
-	onFinal?: (segments: FinalSegment[], summary?: string, speakingStats?: SpeakingStatEntry[], slackStatus?: SlackStatus) => void;
+	onFinal?: (segments: FinalSegment[], speakingStats?: SpeakingStatEntry[]) => void;
 	onStatus?: (status: StatusMessage) => void;
 	onError?: (message: string) => void;
 	onProgress?: (stage: string, percent: number) => void;
@@ -167,7 +148,6 @@ export class BackendClient {
 		return this;
 	}
 
-
 	onStatus(cb: NonNullable<BackendClientCallbacks["onStatus"]>): this {
 		this.callbacks.onStatus = cb;
 		return this;
@@ -228,22 +208,29 @@ export class BackendClient {
 		this.send({ type: "start", config });
 	}
 
-	sendStop(processMode: string = "immediate"): void {
-		// Try WebSocket first (works even when HTTP is blocked by chunk transcription)
+	sendStop(): void {
 		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-			console.log("[BackendClient] Sending stop via WebSocket, mode:", processMode);
-			this.ws.send(JSON.stringify({ type: "stop", process_mode: processMode }));
+			console.log("[BackendClient] Sending stop via WebSocket");
+			this.ws.send(JSON.stringify({ type: "stop" }));
 		} else {
-			// Fallback to HTTP
 			console.log("[BackendClient] Sending stop via HTTP (WS unavailable)");
-			this.httpStop(processMode);
+			this.httpStop();
 		}
 	}
 
-	private async httpStop(processMode: string = "immediate"): Promise<void> {
+	/** Send a binary audio chunk (PCM data) to the server. */
+	sendAudioChunk(pcmData: ArrayBuffer): void {
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+			console.warn("[BackendClient] Cannot send audio — WebSocket not open");
+			return;
+		}
+		this.ws.send(pcmData);
+	}
+
+	private async httpStop(): Promise<void> {
 		try {
 			const response = await requestUrl({
-				url: `${this.httpBaseUrl}/stop?process_mode=${processMode}`,
+				url: `${this.httpBaseUrl}/stop`,
 				method: "POST",
 			});
 			console.log("[BackendClient] HTTP stop response:", response.json);
@@ -267,14 +254,6 @@ export class BackendClient {
 	}
 
 	// ── HTTP methods ───────────────────────────────────────────────────
-
-	async fetchDevices(): Promise<DeviceInfo[]> {
-		const response = await requestUrl({
-			url: `${this.httpBaseUrl}/devices`,
-			method: "GET",
-		});
-		return response.json as DeviceInfo[];
-	}
 
 	async fetchStatus(): Promise<BackendStatus> {
 		const response = await requestUrl({
@@ -343,7 +322,7 @@ export class BackendClient {
 				break;
 			case "final": {
 				const finalMsg = msg as FinalMessage;
-				this.callbacks.onFinal?.(finalMsg.segments, finalMsg.summary, finalMsg.speaking_stats, finalMsg.slack_status);
+				this.callbacks.onFinal?.(finalMsg.segments, finalMsg.speaking_stats);
 				break;
 			}
 			case "status":

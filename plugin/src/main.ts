@@ -4,10 +4,12 @@ import {
 	DEFAULT_SETTINGS,
 	MeetNoteSettingTab,
 } from "./settings";
-import { BackendClient, type SlackStatus, type SpeakingStatEntry } from "./backend-client";
+import { BackendClient, type SpeakingStatEntry } from "./backend-client";
 import { MeetingWriter } from "./writer";
 import { RecorderStatusBar } from "./recorder-view";
 import { MeetNoteSidePanel, SIDE_PANEL_VIEW_TYPE } from "./side-panel";
+import { AudioCapture } from "./audio-capture";
+import { summarize } from "./summarizer";
 
 export default class MeetNotePlugin extends Plugin {
 	settings: MeetNoteSettings;
@@ -16,6 +18,7 @@ export default class MeetNotePlugin extends Plugin {
 
 	private backendClient: BackendClient;
 	private writer: MeetingWriter;
+	private audioCapture: AudioCapture | null = null;
 	statusBar: RecorderStatusBar;
 	private recordingStartTime: Date | null = null;
 
@@ -32,13 +35,13 @@ export default class MeetNotePlugin extends Plugin {
 			.onChunk((segments) => {
 				this.writer.appendChunk(segments);
 			})
-			.onFinal(async (segments, summary, speakingStats, slackStatus) => {
+			.onFinal(async (segments, speakingStats) => {
 				// Skip writer in queue mode — process-file writes directly to vault
-				if (this.settings.processMode === "queue" && !this.isRecording) {
+				if (!this.isRecording) {
 					return;
 				}
 
-				// If writer not initialized (e.g. process-file), init with active file
+				// If writer not initialized, init with active file
 				if (!this.writer.currentFile) {
 					const activeFile = this.app.workspace.getActiveFile();
 					if (activeFile && activeFile.extension === "md") {
@@ -46,9 +49,23 @@ export default class MeetNotePlugin extends Plugin {
 					}
 				}
 
+				// Generate summary via local Claude CLI
+				let summaryText: string | undefined;
+				try {
+					this.statusBar.setProgress("요약 생성 중", 95);
+					const result = await summarize(segments);
+					if (result.success) {
+						summaryText = result.summary;
+					} else if (result.engine === "none") {
+						new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+					}
+				} catch (err) {
+					console.error("[MeetNote] 요약 생성 실패:", err);
+				}
+
 				const startTime = this.recordingStartTime ?? new Date();
 				const endTime = new Date();
-				await this.writer.writeFinal(segments, startTime, endTime, summary, speakingStats);
+				await this.writer.writeFinal(segments, startTime, endTime, summaryText, speakingStats);
 
 				// Auto-link related meetings if tags were extracted
 				if (this.settings.autoLinkEnabled && this.writer.tags.length > 0) {
@@ -67,6 +84,9 @@ export default class MeetNotePlugin extends Plugin {
 				this.updateRibbonIcon();
 
 				const parts = ["회의록 작성이 완료되었습니다."];
+				if (summaryText) {
+					parts.push("요약이 포함되었습니다.");
+				}
 				if (this.writer.tags.length > 0) {
 					parts.push(`태그: ${this.writer.tags.slice(0, 5).map(t => `#${t}`).join(" ")}`);
 				}
@@ -74,18 +94,8 @@ export default class MeetNotePlugin extends Plugin {
 
 				this.writer.reset();
 				this.recordingStartTime = null;
-
-				// Slack 전송 결과 알림
-				if (slackStatus) {
-					if (slackStatus.success) {
-						new Notice("회의록이 Slack에 전송되었습니다.");
-					} else if (slackStatus.error) {
-						new Notice(`Slack 전송 실패: ${slackStatus.error}`);
-					}
-				}
 			})
 			.onProgress((stage, percent) => {
-				if (this.settings.processMode === "queue" && !this.isRecording) return;
 				this.statusBar.setProgress(stage, percent);
 			})
 			.onError((message) => {
@@ -96,8 +106,6 @@ export default class MeetNotePlugin extends Plugin {
 				this.statusBar.setConnectionStatus(connected);
 				if (connected) {
 					console.log("[MeetNote] 서버에 연결되었습니다.");
-					this.syncSlackConfig();
-					this.syncSecurityConfig();
 				} else {
 					console.log("[MeetNote] 서버 연결이 끊어졌습니다.");
 				}
@@ -188,8 +196,8 @@ export default class MeetNotePlugin extends Plugin {
 
 		this.addSettingTab(new MeetNoteSettingTab(this.app, this));
 
-		// Show onboarding if required settings are missing
-		if (!this.settings.backendDir) {
+		// Show onboarding if server URL is default (not configured)
+		if (this.settings.serverUrl === DEFAULT_SETTINGS.serverUrl) {
 			this.showOnboarding();
 		}
 
@@ -199,6 +207,10 @@ export default class MeetNotePlugin extends Plugin {
 	async onunload() {
 		if (this.isRecording) {
 			this.stopRecording();
+		}
+		if (this.audioCapture) {
+			this.audioCapture.stop();
+			this.audioCapture = null;
 		}
 		this.backendClient.disconnect();
 		this.statusBar.destroy();
@@ -234,21 +246,25 @@ export default class MeetNotePlugin extends Plugin {
 		// Start status bar timer
 		this.statusBar.startRecording();
 
-		// Load previous meeting context for follow-up tracking
-		const previousContext = await this.loadPreviousMeetingContext();
-
-		// Send start command to backend with nested config structure
+		// Send start command to server
 		this.backendClient.sendStart({
-			whisper: { model_size: this.settings.modelSize },
-			diarization: {
-				huggingface_token: this.settings.huggingfaceToken || undefined,
-				min_speakers: this.settings.minSpeakers || undefined,
-				max_speakers: this.settings.maxSpeakers || undefined,
-			},
-			previous_context: previousContext || undefined,
 			document_name: activeFile.basename,
 			document_path: activeFile.path,
 		});
+
+		// Start audio capture from local microphone
+		this.audioCapture = new AudioCapture({
+			onChunk: (pcmData) => {
+				this.backendClient.sendAudioChunk(pcmData);
+			},
+			onError: (message) => {
+				new Notice(`오디오 캡처 오류: ${message}`);
+				console.error("[MeetNote] Audio capture error:", message);
+			},
+		});
+
+		const deviceId = this.settings.audioDevice || undefined;
+		await this.audioCapture.start(deviceId);
 
 		new Notice("녹음을 시작합니다.");
 	}
@@ -259,27 +275,26 @@ export default class MeetNotePlugin extends Plugin {
 			return;
 		}
 
-		// Send stop command with process mode
-		this.backendClient.sendStop(this.settings.processMode);
+		// Stop audio capture first
+		if (this.audioCapture) {
+			this.audioCapture.stop();
+			this.audioCapture = null;
+		}
+
+		// Send stop command to server (queue mode — saves WAV for later processing)
+		this.backendClient.sendStop();
 		this.statusBar.stopRecording();
 		this.isRecording = false;
 		this.updateRibbonIcon();
 
-		if (this.settings.processMode === "queue") {
-			// Queue mode: just save WAV, don't wait for processing
-			// Clean up live transcription section from the document
-			this.writer.cleanupLiveSection().catch((err) =>
-				console.error("[MeetNote] Live section cleanup failed:", err)
-			);
-			this.writer.reset();
-			this.recordingStartTime = null;
-			this.statusBar.setIdle();
-			new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
-		} else {
-			// Immediate mode: wait for processing
-			this.statusBar.setProgress("화자 구분", 0);
-			new Notice("녹음을 중지합니다. 처리 중...");
-		}
+		// Clean up live transcription section from the document
+		this.writer.cleanupLiveSection().catch((err) =>
+			console.error("[MeetNote] Live section cleanup failed:", err)
+		);
+		this.writer.reset();
+		this.recordingStartTime = null;
+		this.statusBar.setIdle();
+		new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
 	}
 
 	private async activateSidePanel(): Promise<void> {
@@ -708,38 +723,6 @@ export default class MeetNotePlugin extends Plugin {
 			.replace(/\/$/, "");
 	}
 
-	private async syncSlackConfig(): Promise<void> {
-		try {
-			await requestUrl({
-				url: `${this.getHttpBaseUrl()}/slack/config`,
-				method: "POST",
-				contentType: "application/json",
-				body: JSON.stringify({
-					enabled: this.settings.slackEnabled,
-					webhook_url: this.settings.slackWebhookUrl,
-				}),
-			});
-		} catch {
-			// Backend might not be running yet
-		}
-	}
-
-	private async syncSecurityConfig(): Promise<void> {
-		try {
-			await requestUrl({
-				url: `${this.getHttpBaseUrl()}/security/config`,
-				method: "POST",
-				contentType: "application/json",
-				body: JSON.stringify({
-					encryption_enabled: this.settings.encryptionEnabled,
-					auto_delete_days: this.settings.autoDeleteDays,
-				}),
-			});
-		} catch {
-			// Backend might not be running yet
-		}
-	}
-
 	async loadSettings() {
 		this.settings = Object.assign(
 			{},
@@ -779,52 +762,41 @@ class OnboardingModal extends Modal {
 		const step1 = steps.createDiv({ cls: "meetnote-onboarding-step" });
 		step1.createEl("div", { text: "1", cls: "meetnote-onboarding-number" });
 		const step1Content = step1.createDiv();
-		step1Content.createEl("strong", { text: "백엔드 설치" });
-		step1Content.createEl("p", { text: "backend 폴더에서 install.sh를 실행하세요. Python 3.11+, venv, 모델 다운로드를 자동으로 처리합니다." });
+		step1Content.createEl("strong", { text: "서버 설치" });
+		step1Content.createEl("p", { text: "docker-compose.yml을 다운로드하고 docker compose up -d로 서버를 시작하세요. 자세한 방법은 README를 참고하세요." });
 
 		// Step 2
 		const step2 = steps.createDiv({ cls: "meetnote-onboarding-step" });
 		step2.createEl("div", { text: "2", cls: "meetnote-onboarding-number" });
 		const step2Content = step2.createDiv();
-		step2Content.createEl("strong", { text: "백엔드 경로 설정 (필수)" });
-		step2Content.createEl("p", { text: "backend 디렉토리의 절대 경로를 입력하세요." });
-		const pathInput = step2Content.createEl("input", {
+		step2Content.createEl("strong", { text: "서버 URL 설정" });
+		step2Content.createEl("p", { text: "서버가 실행 중인 주소를 입력하세요. 로컬이면 기본값 그대로 사용합니다." });
+		const urlInput = step2Content.createEl("input", {
 			type: "text",
-			placeholder: "/path/to/meetnote/backend",
+			placeholder: "ws://localhost:8765/ws",
 			cls: "meetnote-onboarding-input",
 		});
-		pathInput.value = this.plugin.settings.backendDir;
+		urlInput.value = this.plugin.settings.serverUrl;
 
 		// Step 3
 		const step3 = steps.createDiv({ cls: "meetnote-onboarding-step" });
 		step3.createEl("div", { text: "3", cls: "meetnote-onboarding-number" });
 		const step3Content = step3.createDiv();
-		step3Content.createEl("strong", { text: "서버 시작" });
-		step3Content.createEl("p", { text: "사이드 패널(리본 메뉴)에서 '시작' 버튼으로 서버를 실행하세요." });
-
-		// Step 4
-		const step4 = steps.createDiv({ cls: "meetnote-onboarding-step" });
-		step4.createEl("div", { text: "4", cls: "meetnote-onboarding-number" });
-		const step4Content = step4.createDiv();
-		step4Content.createEl("strong", { text: "녹음 시작" });
-		step4Content.createEl("p", { text: "마크다운 문서를 열고, 리본의 마이크 아이콘을 클릭하면 녹음이 시작됩니다. 녹음 종료 후 큐 모드에서는 사이드 패널에서 '처리' 버튼을 눌러 전사 + 요약을 실행하세요." });
+		step3Content.createEl("strong", { text: "녹음 시작" });
+		step3Content.createEl("p", { text: "마크다운 문서를 열고, 리본의 마이크 아이콘을 클릭하면 녹음이 시작됩니다. 녹음 종료 후 사이드 패널에서 '처리' 버튼을 눌러 전사를 실행하세요." });
 
 		// Action buttons
 		const btnRow = contentEl.createDiv({ cls: "meetnote-onboarding-actions" });
 
 		const saveBtn = btnRow.createEl("button", { text: "저장 후 시작", cls: "mod-cta" });
 		saveBtn.addEventListener("click", async () => {
-			const path = pathInput.value.trim();
-			if (!path) {
-				new Notice("백엔드 경로를 입력하세요.");
-				pathInput.focus();
-				return;
+			const url = urlInput.value.trim();
+			if (url) {
+				this.plugin.settings.serverUrl = url;
 			}
-			this.plugin.settings.backendDir = path;
 			await this.plugin.saveSettings();
-			new Notice("설정이 저장되었습니다. 사이드 패널에서 서버를 시작하세요.");
+			new Notice("설정이 저장되었습니다.");
 			this.close();
-			// Open side panel
 			(this.app as any).commands.executeCommandById("meetnote:open-side-panel");
 		});
 
