@@ -329,6 +329,184 @@ var init_writer = __esm({
   }
 });
 
+// src/summarizer.ts
+var summarizer_exports = {};
+__export(summarizer_exports, {
+  summarize: () => summarize
+});
+function formatTranscript(segments) {
+  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
+}
+function buildPrompt(transcript) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
+}
+function isClaudeAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    const homedir = require("os").homedir();
+    const extraPaths = [
+      `${homedir}/.asdf/shims`,
+      `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+      "/usr/local/bin",
+      "/opt/homebrew/bin"
+    ];
+    const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+    execSync("which claude", { stdio: "ignore", timeout: 3e3, env });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getClaudePath() {
+  const homedir = require("os").homedir();
+  const candidates = [
+    `${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
+    `${homedir}/.asdf/shims/claude`,
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude"
+  ];
+  const fs = require("fs");
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+    }
+  }
+  return "claude";
+}
+function isOllamaAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    execSync("ollama list", { stdio: "ignore", timeout: 5e3 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function summarizeWithOllama(prompt) {
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      execFile(
+        "ollama",
+        ["run", OLLAMA_MODEL, prompt],
+        { timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Ollama failed:", error.message);
+            resolve({ success: false, summary: "", engine: "ollama" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "ollama" });
+          } else {
+            resolve({ success: false, summary: "", engine: "ollama" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Ollama:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+async function summarize(segments) {
+  const transcript = formatTranscript(segments);
+  if (!transcript) {
+    return { success: false, summary: "", engine: "none" };
+  }
+  if (!isClaudeAvailable()) {
+    console.log("[Summarizer] Claude CLI not found \u2014 trying Ollama...");
+    if (isOllamaAvailable()) {
+      const prompt2 = buildPrompt(transcript);
+      return summarizeWithOllama(prompt2);
+    }
+    console.log("[Summarizer] Ollama not found \u2014 skipping summary.");
+    return { success: false, summary: "", engine: "none" };
+  }
+  const prompt = buildPrompt(transcript);
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      const claudePath = getClaudePath();
+      const homedir = require("os").homedir();
+      const extraPaths = [
+        `${homedir}/.asdf/shims`,
+        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+        "/usr/local/bin",
+        "/opt/homebrew/bin"
+      ];
+      const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+      const child = execFile(
+        claudePath,
+        ["-p", prompt],
+        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Claude CLI failed:", error.message);
+            resolve({ success: false, summary: "", engine: "claude" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "claude" });
+          } else {
+            console.warn("[Summarizer] Claude CLI returned empty output.");
+            resolve({ success: false, summary: "", engine: "claude" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+var MAX_TRANSCRIPT_CHARS, SUMMARY_TIMEOUT_MS, SUMMARY_PROMPT, OLLAMA_MODEL, OLLAMA_TIMEOUT_MS;
+var init_summarizer = __esm({
+  "src/summarizer.ts"() {
+    MAX_TRANSCRIPT_CHARS = 5e4;
+    SUMMARY_TIMEOUT_MS = 12e4;
+    SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
+
+\uC624\uB298 \uB0A0\uC9DC: {today}
+
+## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
+
+### \uC694\uC57D
+- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
+
+### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
+
+### \uC561\uC158\uC544\uC774\uD15C
+- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
+
+### \uD0DC\uADF8
+#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
+
+## \uADDC\uCE59
+- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
+- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
+- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
+- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
+- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
+
+## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
+
+{transcript}
+`;
+    OLLAMA_MODEL = "exaone3.5:7.8b";
+    OLLAMA_TIMEOUT_MS = 18e4;
+  }
+});
+
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
@@ -918,177 +1096,7 @@ var RecorderStatusBar = class {
 
 // src/side-panel.ts
 var import_obsidian3 = require("obsidian");
-
-// src/summarizer.ts
-var MAX_TRANSCRIPT_CHARS = 5e4;
-var SUMMARY_TIMEOUT_MS = 12e4;
-var SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
-
-\uC624\uB298 \uB0A0\uC9DC: {today}
-
-## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
-
-### \uC694\uC57D
-- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
-
-### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
-- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
-
-### \uC561\uC158\uC544\uC774\uD15C
-- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
-
-### \uD0DC\uADF8
-#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
-
-## \uADDC\uCE59
-- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
-- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
-- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
-- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
-- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
-
-## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
-
-{transcript}
-`;
-function formatTranscript(segments) {
-  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
-}
-function buildPrompt(transcript) {
-  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
-}
-function isClaudeAvailable() {
-  try {
-    const { execSync } = require("child_process");
-    const homedir = require("os").homedir();
-    const extraPaths = [
-      `${homedir}/.asdf/shims`,
-      `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-      "/usr/local/bin",
-      "/opt/homebrew/bin"
-    ];
-    const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
-    execSync("which claude", { stdio: "ignore", timeout: 3e3, env });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getClaudePath() {
-  const homedir = require("os").homedir();
-  const candidates = [
-    `${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
-    `${homedir}/.asdf/shims/claude`,
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude"
-  ];
-  const fs = require("fs");
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-    }
-  }
-  return "claude";
-}
-var OLLAMA_MODEL = "exaone3.5:7.8b";
-var OLLAMA_TIMEOUT_MS = 18e4;
-function isOllamaAvailable() {
-  try {
-    const { execSync } = require("child_process");
-    execSync("ollama list", { stdio: "ignore", timeout: 5e3 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function summarizeWithOllama(prompt) {
-  return new Promise((resolve) => {
-    try {
-      const { execFile } = require("child_process");
-      execFile(
-        "ollama",
-        ["run", OLLAMA_MODEL, prompt],
-        { timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.warn("[Summarizer] Ollama failed:", error.message);
-            resolve({ success: false, summary: "", engine: "ollama" });
-            return;
-          }
-          const output = stdout.trim();
-          if (output) {
-            console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
-            resolve({ success: true, summary: output, engine: "ollama" });
-          } else {
-            resolve({ success: false, summary: "", engine: "ollama" });
-          }
-        }
-      );
-    } catch (err) {
-      console.warn("[Summarizer] Failed to execute Ollama:", err);
-      resolve({ success: false, summary: "", engine: "none" });
-    }
-  });
-}
-async function summarize(segments) {
-  const transcript = formatTranscript(segments);
-  if (!transcript) {
-    return { success: false, summary: "", engine: "none" };
-  }
-  if (!isClaudeAvailable()) {
-    console.log("[Summarizer] Claude CLI not found \u2014 trying Ollama...");
-    if (isOllamaAvailable()) {
-      const prompt2 = buildPrompt(transcript);
-      return summarizeWithOllama(prompt2);
-    }
-    console.log("[Summarizer] Ollama not found \u2014 skipping summary.");
-    return { success: false, summary: "", engine: "none" };
-  }
-  const prompt = buildPrompt(transcript);
-  return new Promise((resolve) => {
-    try {
-      const { execFile } = require("child_process");
-      const claudePath = getClaudePath();
-      const homedir = require("os").homedir();
-      const extraPaths = [
-        `${homedir}/.asdf/shims`,
-        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-        "/usr/local/bin",
-        "/opt/homebrew/bin"
-      ];
-      const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
-      const child = execFile(
-        claudePath,
-        ["-p", prompt],
-        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.warn("[Summarizer] Claude CLI failed:", error.message);
-            resolve({ success: false, summary: "", engine: "claude" });
-            return;
-          }
-          const output = stdout.trim();
-          if (output) {
-            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
-            resolve({ success: true, summary: output, engine: "claude" });
-          } else {
-            console.warn("[Summarizer] Claude CLI returned empty output.");
-            resolve({ success: false, summary: "", engine: "claude" });
-          }
-        }
-      );
-    } catch (err) {
-      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
-      resolve({ success: false, summary: "", engine: "none" });
-    }
-  });
-}
-
-// src/side-panel.ts
+init_summarizer();
 var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
@@ -2105,6 +2113,7 @@ ${partLines}
 };
 
 // src/main.ts
+init_summarizer();
 var MeetNotePlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -2189,6 +2198,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       this.statusBar.setConnectionStatus(connected);
       if (connected) {
         console.log("[MeetNote] \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        this.pickupPendingResults();
       } else {
         console.log("[MeetNote] \uC11C\uBC84 \uC5F0\uACB0\uC774 \uB04A\uC5B4\uC84C\uC2B5\uB2C8\uB2E4.");
       }
@@ -2697,6 +2707,75 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
   }
   getHttpBaseUrl() {
     return this.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /**
+   * Check for processing results that were completed while plugin was offline.
+   * Writes results to vault documents that haven't been updated yet.
+   */
+  async pickupPendingResults() {
+    try {
+      const baseUrl = this.getHttpBaseUrl();
+      const resp = await fetch(`${baseUrl}/recordings/all`);
+      const data = await resp.json();
+      const processed = (data.recordings || []).filter((r) => r.processed);
+      for (const rec of processed) {
+        const filename = rec.filename;
+        const docPath = rec.document_path;
+        if (!docPath) continue;
+        const resultsResp = await fetch(`${baseUrl}/recordings/results/${filename}`);
+        const results = await resultsResp.json();
+        if (!results.ok || !results.segments_data) continue;
+        const file = this.app.vault.getAbstractFileByPath(docPath);
+        if (!file) continue;
+        const content = await this.app.vault.cachedRead(file);
+        if (content.includes("## \uB179\uCDE8\uB85D") && !content.includes("(\uC694\uC57D \uC0DD\uC131 \uC911...)")) continue;
+        console.log(`[MeetNote] Picking up offline results for: ${docPath}`);
+        new import_obsidian4.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC\uB97C \uBC18\uC601\uD569\uB2C8\uB2E4: ${rec.document_name}`);
+        const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+        if (leaves.length > 0) {
+          const panel = leaves[0].view;
+          await panel.writeResultToVault(
+            file,
+            results.segments_data,
+            results.speaking_stats || []
+          );
+          try {
+            const { summarize: summarize2 } = await Promise.resolve().then(() => (init_summarizer(), summarizer_exports));
+            const summaryResult = await summarize2(results.segments_data);
+            if (summaryResult.success && summaryResult.summary) {
+              await this.app.vault.process(file, (c) => {
+                const summaryMatch = summaryResult.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
+                const decisionsMatch = summaryResult.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
+                const actionsMatch = summaryResult.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
+                const tagsMatch = summaryResult.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
+                let u = c;
+                if (summaryMatch) u = u.replace(/### 요약\n\n\(요약 생성 중\.\.\.\)/, `### \uC694\uC57D
+${summaryMatch[1].trimEnd()}`);
+                if (decisionsMatch) u = u.replace(/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/, `### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+${decisionsMatch[1].trimEnd()}`);
+                if (actionsMatch) u = u.replace(/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/, `### \uC561\uC158\uC544\uC774\uD15C
+${actionsMatch[1].trimEnd()}`);
+                if (tagsMatch) u = u.replace(/### 태그\n\n\(요약 생성 중\.\.\.\)/, `### \uD0DC\uADF8
+${tagsMatch[1].trimEnd()}`);
+                if (u === c) u = u.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
+                return u;
+              });
+            } else {
+              await this.app.vault.process(
+                file,
+                (c) => c.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)")
+              );
+            }
+          } catch (err) {
+            console.error("[MeetNote] Offline summary failed:", err);
+          }
+          await fetch(`${baseUrl}/recordings/results/${filename}/written`, { method: "POST" });
+          new import_obsidian4.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC \uBC18\uC601 \uC644\uB8CC: ${rec.document_name}`);
+        }
+      }
+    } catch (err) {
+      console.debug("[MeetNote] Pending results check failed:", err);
+    }
   }
   async loadSettings() {
     this.settings = Object.assign(

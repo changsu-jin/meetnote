@@ -120,6 +120,7 @@ export default class MeetNotePlugin extends Plugin {
 				this.statusBar.setConnectionStatus(connected);
 				if (connected) {
 					console.log("[MeetNote] 서버에 연결되었습니다.");
+					this.pickupPendingResults();
 				} else {
 					console.log("[MeetNote] 서버 연결이 끊어졌습니다.");
 				}
@@ -764,6 +765,87 @@ export default class MeetNotePlugin extends Plugin {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/**
+	 * Check for processing results that were completed while plugin was offline.
+	 * Writes results to vault documents that haven't been updated yet.
+	 */
+	private async pickupPendingResults(): Promise<void> {
+		try {
+			const baseUrl = this.getHttpBaseUrl();
+			const resp = await fetch(`${baseUrl}/recordings/all`);
+			const data = await resp.json();
+			const processed = (data.recordings || []).filter((r: any) => r.processed);
+
+			for (const rec of processed) {
+				const filename = rec.filename;
+				const docPath = rec.document_path;
+				if (!docPath) continue;
+
+				// Check if results are pending
+				const resultsResp = await fetch(`${baseUrl}/recordings/results/${filename}`);
+				const results = await resultsResp.json();
+				if (!results.ok || !results.segments_data) continue;
+
+				// Check if vault document needs updating
+				const file = this.app.vault.getAbstractFileByPath(docPath);
+				if (!file) continue;
+
+				const content = await this.app.vault.cachedRead(file as TFile);
+				// Skip if document already has transcript
+				if (content.includes("## 녹취록") && !content.includes("(요약 생성 중...)")) continue;
+
+				console.log(`[MeetNote] Picking up offline results for: ${docPath}`);
+				new Notice(`오프라인 처리 결과를 반영합니다: ${rec.document_name}`);
+
+				// Write results to vault using side panel's method
+				const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+				if (leaves.length > 0) {
+					const panel = leaves[0].view as MeetNoteSidePanel;
+					await (panel as any).writeResultToVault(
+						file as TFile,
+						results.segments_data,
+						results.speaking_stats || [],
+					);
+
+					// Generate summary
+					try {
+						const { summarize } = await import("./summarizer");
+						const summaryResult = await summarize(results.segments_data);
+						if (summaryResult.success && summaryResult.summary) {
+							await this.app.vault.process(file as TFile, (c) => {
+								const summaryMatch = summaryResult.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
+								const decisionsMatch = summaryResult.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
+								const actionsMatch = summaryResult.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
+								const tagsMatch = summaryResult.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
+
+								let u = c;
+								if (summaryMatch) u = u.replace(/### 요약\n\n\(요약 생성 중\.\.\.\)/, `### 요약\n${summaryMatch[1].trimEnd()}`);
+								if (decisionsMatch) u = u.replace(/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/, `### 주요 결정사항\n${decisionsMatch[1].trimEnd()}`);
+								if (actionsMatch) u = u.replace(/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/, `### 액션아이템\n${actionsMatch[1].trimEnd()}`);
+								if (tagsMatch) u = u.replace(/### 태그\n\n\(요약 생성 중\.\.\.\)/, `### 태그\n${tagsMatch[1].trimEnd()}`);
+								if (u === c) u = u.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
+								return u;
+							});
+						} else {
+							await this.app.vault.process(file as TFile, (c) =>
+								c.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)")
+							);
+						}
+					} catch (err) {
+						console.error("[MeetNote] Offline summary failed:", err);
+					}
+
+					// Mark as written
+					await fetch(`${baseUrl}/recordings/results/${filename}/written`, { method: "POST" });
+					new Notice(`오프라인 처리 결과 반영 완료: ${rec.document_name}`);
+				}
+			}
+		} catch (err) {
+			// Server might not be ready yet
+			console.debug("[MeetNote] Pending results check failed:", err);
+		}
 	}
 
 	async loadSettings() {

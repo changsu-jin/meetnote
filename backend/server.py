@@ -670,6 +670,47 @@ async def update_recording_meta(req: RecordingUpdateMetaRequest):
 # Process file endpoint
 # ---------------------------------------------------------------------------
 
+@app.get("/recordings/results/{filename}")
+async def get_recording_results(filename: str):
+    """Get saved processing results for a recording (for offline plugin pickup)."""
+    import json as _json
+    recordings_dir = Path(_app_config.recordings_path)
+    meta_path = recordings_dir / filename.replace(".wav", ".meta.json")
+
+    if not meta_path.exists():
+        return {"ok": False, "message": "Meta file not found"}
+
+    meta = _json.loads(meta_path.read_text())
+    results = meta.get("processing_results")
+    if not results:
+        return {"ok": False, "message": "No processing results"}
+
+    return {
+        "ok": True,
+        "document_name": meta.get("document_name", ""),
+        "document_path": meta.get("document_path", ""),
+        **results,
+    }
+
+
+@app.post("/recordings/results/{filename}/written")
+async def mark_results_written(filename: str):
+    """Mark processing results as written to vault (plugin confirms)."""
+    import json as _json
+    recordings_dir = Path(_app_config.recordings_path)
+    meta_path = recordings_dir / filename.replace(".wav", ".meta.json")
+
+    if not meta_path.exists():
+        return {"ok": False}
+
+    meta = _json.loads(meta_path.read_text())
+    if "processing_results" in meta:
+        del meta["processing_results"]
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+    return {"ok": True}
+
+
 class ProcessFileRequest(BaseModel):
     file_path: str
     vault_file_path: str = ""
@@ -819,6 +860,24 @@ async def process_file(req: ProcessFileRequest):
                     meta_path.write_text(_json_meta.dumps(meta, ensure_ascii=False))
             except Exception as write_exc:
                 logger.warning("Failed to write to vault: %s", write_exc)
+
+        # Save processing results to meta.json (for offline plugin pickup)
+        import json as _json_results
+        meta_path = Path(req.file_path).with_suffix(".meta.json")
+        try:
+            meta = _json_results.loads(meta_path.read_text()) if meta_path.exists() else {}
+            meta["processing_results"] = {
+                "segments_data": final_segments,
+                "speaking_stats": speaking_stats,
+                "speaker_map": speaker_map,
+                "processed_at": __import__('datetime').datetime.now().isoformat(),
+            }
+            if req.vault_file_path:
+                meta["vault_file_path"] = req.vault_file_path
+            meta_path.write_text(_json_results.dumps(meta, ensure_ascii=False))
+            logger.info("Processing results saved to meta: %s", meta_path)
+        except Exception as meta_exc:
+            logger.warning("Failed to save results to meta: %s", meta_exc)
 
         # Mark as processed
         done_marker = Path(req.file_path).with_suffix(".done")
