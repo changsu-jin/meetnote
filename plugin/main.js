@@ -341,7 +341,7 @@ var import_obsidian4 = require("obsidian");
 var import_obsidian = require("obsidian");
 
 // src/audio-capture.ts
-var CHUNK_DURATION_SECONDS = 10;
+var CHUNK_DURATION_SECONDS = 5;
 var TARGET_SAMPLE_RATE = 16e3;
 var AudioCapture = class {
   constructor(callbacks) {

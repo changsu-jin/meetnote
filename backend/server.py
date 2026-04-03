@@ -902,14 +902,22 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
     # Accumulate raw PCM for final WAV
     state.audio_buffer.extend(pcm_data)
 
-    chunk_duration = 10  # seconds per chunk
-    time_offset = state.chunk_index * chunk_duration
-    state.chunk_index += 1
-
     # Convert PCM to numpy array for transcription
     audio_array = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
 
-    loop = asyncio.get_event_loop()
+    # Calculate time offset from actual audio data (16kHz, 16bit = 2 bytes/sample)
+    sample_rate = 16000
+    chunk_duration = len(audio_array) / sample_rate
+    time_offset = (len(state.audio_buffer) - len(pcm_data)) / (sample_rate * 2)
+
+    state.chunk_index += 1
+    logger.info("Audio chunk #%d received: %.1fs at offset %.1fs", state.chunk_index, chunk_duration, time_offset)
+
+    # Skip transcription if previous chunk is still processing
+    if not state.transcriber_lock.acquire(blocking=False):
+        logger.info("Chunk #%d skipped — transcriber busy.", state.chunk_index)
+        return
+    state.transcriber_lock.release()
 
     def transcribe_chunk():
         if state.stopping:

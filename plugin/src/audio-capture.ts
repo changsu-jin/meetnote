@@ -6,7 +6,7 @@
  */
 
 /** Duration of each audio chunk in seconds. */
-const CHUNK_DURATION_SECONDS = 10;
+const CHUNK_DURATION_SECONDS = 5;
 
 /** Target sample rate for the server. */
 const TARGET_SAMPLE_RATE = 16000;
