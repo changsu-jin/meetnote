@@ -435,6 +435,15 @@ async def health_check():
     }
 
 
+@app.post("/shutdown")
+async def shutdown_server():
+    """Gracefully shut down the server."""
+    import os, signal
+    logger.info("Shutdown requested via API.")
+    asyncio.get_event_loop().call_later(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    return {"ok": True, "message": "Shutting down..."}
+
+
 @app.get("/status")
 async def get_status():
     """Return current recording / processing state."""
