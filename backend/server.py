@@ -522,7 +522,7 @@ async def get_processing_progress():
 # ---------------------------------------------------------------------------
 
 @app.get("/recordings/pending")
-async def get_pending_recordings():
+async def get_pending_recordings(user_id: str = ""):
     """List WAV recordings that haven't been processed yet."""
     import json as _json
 
@@ -541,13 +541,19 @@ async def get_pending_recordings():
         meta_path = f.with_suffix(".meta.json")
         document_name = ""
         document_path = ""
+        meta_user_id = ""
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 document_name = meta.get("document_name", "")
                 document_path = meta.get("document_path", "")
+                meta_user_id = meta.get("user_id", "")
             except Exception:
                 pass
+
+        # Filter by user_id if provided
+        if user_id and meta_user_id and meta_user_id != user_id:
+            continue
 
         pending.append({
             "filename": f.name,
@@ -563,7 +569,7 @@ async def get_pending_recordings():
 
 
 @app.get("/recordings/all")
-async def get_all_recordings():
+async def get_all_recordings(user_id: str = ""):
     """List all recordings with their processing status."""
     import json as _json
 
@@ -580,12 +586,14 @@ async def get_all_recordings():
         meta_path = f.with_suffix(".meta.json")
         document_name = ""
         document_path = ""
+        meta_user_id = ""
         unregistered_speakers = 0
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 document_name = meta.get("document_name", "")
                 document_path = meta.get("document_path", "")
+                meta_user_id = meta.get("user_id", "")
                 sp_map = meta.get("speaker_map", {})
                 embs = meta.get("embeddings", {})
                 if sp_map:
@@ -597,6 +605,10 @@ async def get_all_recordings():
                     unregistered_speakers = len(embs)
             except Exception:
                 pass
+
+        # Filter by user_id if provided
+        if user_id and meta_user_id and meta_user_id != user_id:
+            continue
 
         all_recs.append({
             "filename": f.name,

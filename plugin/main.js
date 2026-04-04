@@ -1181,7 +1181,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     refreshBtn.addEventListener("click", () => this.render());
     let pendingCount = 0;
     try {
-      const resp = await this.api("/recordings/pending");
+      const resp = await this.api(`/recordings/pending?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
       const recordings = (resp.recordings || []).sort((a, b) => b.created - a.created);
       pendingCount = recordings.length;
       const pendingContent = this.createCollapsibleSection(container, "pending", "\uB300\uAE30 \uC911", pendingCount > 0 ? `${pendingCount}` : void 0);
@@ -1248,7 +1248,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
       container.createEl("p", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-error" });
     }
     try {
-      const allResp = await this.api("/recordings/all");
+      const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
       const allRecs = allResp.recordings || [];
       const completed = allRecs.filter((r) => r.processed).sort((a, b) => b.created - a.created).slice(0, 10);
       if (completed.length > 0) {
@@ -2085,7 +2085,7 @@ ${partLines}
     if (!this.selectedWavPath) return "";
     try {
       const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
-      const allResp = await this.api("/recordings/all");
+      const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
       const rec = (allResp.recordings || []).find((r) => r.path === this.selectedWavPath);
       return rec?.document_path || "";
     } catch {
@@ -2738,7 +2738,8 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
   async pickupPendingResults() {
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await fetch(`${baseUrl}/recordings/all`);
+      const userId = encodeURIComponent(this.settings.emailFromAddress || "");
+      const resp = await fetch(`${baseUrl}/recordings/all?user_id=${userId}`);
       const data = await resp.json();
       const processed = (data.recordings || []).filter((r) => r.processed);
       for (const rec of processed) {

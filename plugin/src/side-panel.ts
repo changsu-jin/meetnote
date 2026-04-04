@@ -138,7 +138,7 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Recording Queue Section ──
 		let pendingCount = 0;
 		try {
-			const resp = await this.api("/recordings/pending");
+			const resp = await this.api(`/recordings/pending?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
 			const recordings: PendingRecording[] = (resp.recordings || [])
 				.sort((a: PendingRecording, b: PendingRecording) => b.created - a.created);
 			pendingCount = recordings.length;
@@ -208,7 +208,7 @@ export class MeetNoteSidePanel extends ItemView {
 
 		// ── Completed Recordings Section ──
 		try {
-			const allResp = await this.api("/recordings/all");
+			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
 			const allRecs: PendingRecording[] = allResp.recordings || [];
 			const completed = allRecs
 				.filter((r) => r.processed)
@@ -1149,7 +1149,7 @@ export class MeetNoteSidePanel extends ItemView {
 		try {
 			const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
 			// Get doc path from pending/all recordings
-			const allResp = await this.api("/recordings/all");
+			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
 			const rec = (allResp.recordings || []).find((r: any) => r.path === this.selectedWavPath);
 			return rec?.document_path || "";
 		} catch {

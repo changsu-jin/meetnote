@@ -775,7 +775,8 @@ export default class MeetNotePlugin extends Plugin {
 	private async pickupPendingResults(): Promise<void> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
-			const resp = await fetch(`${baseUrl}/recordings/all`);
+			const userId = encodeURIComponent(this.settings.emailFromAddress || "");
+			const resp = await fetch(`${baseUrl}/recordings/all?user_id=${userId}`);
 			const data = await resp.json();
 			const processed = (data.recordings || []).filter((r: any) => r.processed);
 
