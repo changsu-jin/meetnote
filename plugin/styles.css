@@ -21,6 +21,18 @@
 	opacity: 0.6;
 }
 
+.meetnote-logo-icon {
+	display: inline-flex;
+	align-items: center;
+	margin-right: 2px;
+	color: var(--interactive-accent);
+}
+
+.meetnote-logo-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
 .meetnote-header-actions {
 	display: flex;
 	align-items: center;

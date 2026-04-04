@@ -82,7 +82,10 @@ def _markdown_to_html(md: str) -> str:
 
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333;">
-        <div style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);padding:16px 24px;border-radius:8px 8px 0 0;">
+        <div style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);padding:16px 24px;border-radius:8px 8px 0 0;display:flex;align-items:center;">
+            <div style="background:white;border-radius:50%;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;margin-right:12px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+            </div>
             <h1 style="color:white;margin:0;font-size:1.2em;">MeetNote</h1>
         </div>
         <div style="border:1px solid #eee;border-top:none;padding:20px;border-radius:0 0 8px 8px;">
