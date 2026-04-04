@@ -41,49 +41,49 @@ def _smtp_config() -> dict:
     }
 
 
-def _markdown_to_html(md: str) -> str:
+def _markdown_to_html(md: str, subject: str = "") -> str:
     """Convert simple markdown to styled HTML email."""
     lines = md.split("\n")
     html_lines = []
+
+    def bold(text: str) -> str:
+        return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
 
     for line in lines:
         stripped = line.strip()
         if not stripped:
             html_lines.append("<br>")
         elif stripped.startswith("## "):
-            html_lines.append(f'<h2 style="color:#333;border-bottom:1px solid #ddd;padding-bottom:6px;">{stripped[3:]}</h2>')
+            html_lines.append(f'<h2 style="color:#333;border-bottom:1px solid #ddd;padding-bottom:6px;">{bold(stripped[3:])}</h2>')
         elif stripped.startswith("### "):
-            html_lines.append(f'<h3 style="color:#555;margin-top:16px;">{stripped[4:]}</h3>')
+            html_lines.append(f'<h3 style="color:#555;margin-top:16px;">{bold(stripped[4:])}</h3>')
         elif stripped.startswith("> "):
-            content = stripped[2:]
-            html_lines.append(f'<div style="border-left:3px solid #6c5ce7;padding:4px 12px;margin:4px 0;color:#555;background:#f8f8ff;">{content}</div>')
+            html_lines.append(f'<div style="border-left:3px solid #6c5ce7;padding:4px 12px;margin:4px 0;color:#555;background:#f8f8ff;">{bold(stripped[2:])}</div>')
         elif stripped.startswith("- [ ] "):
-            html_lines.append(f'<div style="margin:2px 0;">&#9744; {stripped[6:]}</div>')
+            html_lines.append(f'<div style="margin:2px 0;">&#9744; {bold(stripped[6:])}</div>')
         elif stripped.startswith("- [x] "):
-            html_lines.append(f'<div style="margin:2px 0;">&#9745; {stripped[6:]}</div>')
+            html_lines.append(f'<div style="margin:2px 0;">&#9745; {bold(stripped[6:])}</div>')
         elif stripped.startswith("- "):
-            html_lines.append(f'<div style="margin:2px 0;padding-left:12px;">&bull; {stripped[2:]}</div>')
+            html_lines.append(f'<div style="margin:2px 0;padding-left:12px;">&bull; {bold(stripped[2:])}</div>')
         elif stripped.startswith("---"):
             html_lines.append('<hr style="border:none;border-top:1px solid #eee;margin:16px 0;">')
         elif stripped.startswith("#"):
-            # Tags
             tags = re.findall(r'#([\w가-힣]+)', stripped)
             if tags:
                 tag_html = " ".join(f'<span style="background:#e8e4f0;color:#6c5ce7;padding:2px 8px;border-radius:12px;font-size:0.85em;margin-right:4px;">#{t}</span>' for t in tags)
                 html_lines.append(f'<div style="margin:8px 0;">{tag_html}</div>')
             else:
-                html_lines.append(f"<p>{stripped}</p>")
+                html_lines.append(f"<p>{bold(stripped)}</p>")
         else:
-            # Bold
-            formatted = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', stripped)
-            html_lines.append(f"<p style='margin:4px 0;'>{formatted}</p>")
+            html_lines.append(f"<p style='margin:4px 0;'>{bold(stripped)}</p>")
 
     body_html = "\n".join(html_lines)
 
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333;">
         <div style="background:linear-gradient(135deg,#6c5ce7,#a29bfe);padding:16px 24px;border-radius:8px 8px 0 0;">
-            <h1 style="color:white;margin:0;font-size:1.3em;">&#127908; MeetNote</h1>
+            <h1 style="color:white;margin:0;font-size:1.3em;letter-spacing:0.5px;"><span style="font-weight:300;">Meet</span><span style="font-weight:700;">Note</span></h1>
+            <p style="color:rgba(255,255,255,0.8);margin:4px 0 0 0;font-size:0.85em;">{subject}</p>
         </div>
         <div style="border:1px solid #eee;border-top:none;padding:20px;border-radius:0 0 8px 8px;">
             {body_html}
@@ -99,7 +99,7 @@ def _send_via_smtp(to: str, subject: str, body: str, from_address: str) -> None:
     """Send a single HTML email via SMTP."""
     cfg = _smtp_config()
 
-    html_body = _markdown_to_html(body)
+    html_body = _markdown_to_html(body, subject)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
