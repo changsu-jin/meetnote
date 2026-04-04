@@ -308,34 +308,24 @@ def _save_pcm_as_wav(pcm_data: bytes, path: str, sample_rate: int = 16000) -> No
 # Application state
 # ---------------------------------------------------------------------------
 
-class AppState:
-    """Mutable singleton holding processing state."""
+class RecordingSession:
+    """Per-WebSocket recording session state."""
 
-    def __init__(self) -> None:
+    def __init__(self, ws: WebSocket) -> None:
+        self.ws: WebSocket = ws
         self.recording: bool = False
         self.processing: bool = False
-        self.transcriber: Transcriber | None = None
-        self.diarizer: Diarizer | None = None
-        self.speaker_db: SpeakerDB | None = None
-        self.crypto: RecordingCrypto | None = None
-        self.searcher: MeetingSearcher | None = None
-        self.active_ws: WebSocket | None = None
-        self.transcriber_lock = threading.Lock()
         self.stopping: bool = False
-        # Accumulated audio chunks (raw PCM bytes)
         self.audio_buffer: bytearray = bytearray()
-        # Chunk transcription results for real-time display
         self.chunk_segments: list = []
         self.chunk_index: int = 0
-        # Speaker data from last meeting
         self.last_meeting_embeddings: dict = {}
         self.last_meeting_speaker_map: dict[str, str] = {}
-        # Processing progress
         self.process_progress: dict = {"stage": "", "percent": 0, "wav_path": ""}
-        # Document metadata (sent by plugin at start)
         self._document_name: str = ""
         self._document_path: str = ""
         self._user_id: str = ""
+        self._processing_lock = asyncio.Lock()
 
     def reset(self) -> None:
         self.recording = False
@@ -346,8 +336,29 @@ class AppState:
         self.audio_buffer = bytearray()
 
 
+class AppState:
+    """Shared resources across all sessions."""
+
+    def __init__(self) -> None:
+        self.transcriber: Transcriber | None = None
+        self.diarizer: Diarizer | None = None
+        self.speaker_db: SpeakerDB | None = None
+        self.crypto: RecordingCrypto | None = None
+        self.searcher: MeetingSearcher | None = None
+        self.transcriber_lock = threading.Lock()
+        # Active sessions (WebSocket → RecordingSession)
+        self.sessions: dict[WebSocket, RecordingSession] = {}
+
+    def get_session(self, ws: WebSocket) -> RecordingSession:
+        if ws not in self.sessions:
+            self.sessions[ws] = RecordingSession(ws)
+        return self.sessions[ws]
+
+    def remove_session(self, ws: WebSocket) -> None:
+        self.sessions.pop(ws, None)
+
+
 state = AppState()
-_processing_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -459,11 +470,13 @@ app.include_router(config_router)
 @app.get("/health")
 async def health_check():
     """Health check with API version."""
+    active_recordings = sum(1 for s in state.sessions.values() if s.recording)
+    active_processing = sum(1 for s in state.sessions.values() if s.processing)
     return {
         "ok": True,
         "api_version": _app_config.API_VERSION,
-        "recording": state.recording,
-        "processing": state.processing,
+        "active_recordings": active_recordings,
+        "active_processing": active_processing,
         "transcriber": state.transcriber is not None,
         "diarizer": state.diarizer is not None,
         "speaker_db_count": len(state.speaker_db.list_speakers()) if state.speaker_db else 0,
@@ -484,18 +497,24 @@ async def shutdown_server():
 @app.get("/status")
 async def get_status():
     """Return current recording / processing state."""
-    return {"recording": state.recording, "processing": state.processing}
+    active_recordings = sum(1 for s in state.sessions.values() if s.recording)
+    active_processing = sum(1 for s in state.sessions.values() if s.processing)
+    return {"recording": active_recordings > 0, "processing": active_processing > 0}
 
 
 @app.get("/recordings/progress")
 async def get_processing_progress():
     """Return current processing progress for side panel polling."""
-    return {
-        "processing": state.processing,
-        "stage": state.process_progress["stage"],
-        "percent": state.process_progress["percent"],
-        "wav_path": state.process_progress["wav_path"],
-    }
+    # Find any active processing session
+    for s in state.sessions.values():
+        if s.processing:
+            return {
+                "processing": True,
+                "stage": s.process_progress["stage"],
+                "percent": s.process_progress["percent"],
+                "wav_path": s.process_progress["wav_path"],
+            }
+    return {"processing": False, "stage": "", "percent": 0, "wav_path": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -740,17 +759,22 @@ async def process_file(req: ProcessFileRequest):
     if not Path(wav_path).exists():
         return {"ok": False, "message": f"File not found: {wav_path}"}
 
-    ws = state.active_ws
-    if not ws:
+    # Find the requesting session (use the first connected session)
+    ws = None
+    session = None
+    for s in state.sessions.values():
+        ws = s.ws
+        session = s
+        break
+    if not ws or not session:
         return {"ok": False, "message": "No WebSocket client connected."}
 
-    if not _processing_lock.locked():
-        await _processing_lock.acquire()
-    else:
+    if session._processing_lock.locked():
         return {"ok": False, "message": "Already processing"}
+    await session._processing_lock.acquire()
 
-    state.processing = True
-    state.process_progress = {"stage": "준비 중", "percent": 0, "wav_path": wav_path}
+    session.processing = True
+    session.process_progress = {"stage": "준비 중", "percent": 0, "wav_path": wav_path}
     await send_status(ws)
 
     stage_labels = {
@@ -762,7 +786,7 @@ async def process_file(req: ProcessFileRequest):
     }
 
     async def progress(stage: str, percent: float) -> None:
-        state.process_progress = {
+        session.process_progress = {
             "stage": stage_labels.get(stage, stage),
             "percent": percent,
             "wav_path": wav_path,
@@ -810,8 +834,8 @@ async def process_file(req: ProcessFileRequest):
                     unknown_idx += 1
                     speaker_map[label] = f"화자{unknown_idx}"
 
-        state.last_meeting_embeddings = speaker_embeddings
-        state.last_meeting_speaker_map = speaker_map
+        session.last_meeting_embeddings = speaker_embeddings
+        session.last_meeting_speaker_map = speaker_map
 
         if speaker_embeddings:
             _save_embeddings_to_meta(req.file_path, speaker_embeddings, speaker_map)
@@ -916,10 +940,10 @@ async def process_file(req: ProcessFileRequest):
         return {"ok": False, "message": str(exc)}
 
     finally:
-        state.processing = False
-        state.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
-        if _processing_lock.locked():
-            _processing_lock.release()
+        session.processing = False
+        session.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
+        if session._processing_lock.locked():
+            session._processing_lock.release()
         await send_status(ws)
 
 
@@ -936,10 +960,19 @@ async def ws_send(ws: WebSocket, msg: dict[str, Any]) -> None:
 
 
 async def send_status(ws: WebSocket) -> None:
+    session = state.sessions.get(ws)
     await ws_send(ws, {
         "type": "status",
-        "recording": state.recording,
-        "processing": state.processing,
+        "recording": session.recording if session else False,
+        "processing": session.processing if session else False,
+    })
+
+
+async def send_session_status(session: RecordingSession) -> None:
+    await ws_send(session.ws, {
+        "type": "status",
+        "recording": session.recording,
+        "processing": session.processing,
     })
 
 
@@ -949,40 +982,42 @@ async def send_status(ws: WebSocket) -> None:
 
 async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = None):
     """Prepare for receiving audio chunks from the plugin."""
-    if state.recording:
+    session = state.get_session(ws)
+
+    if session.recording:
         await ws_send(ws, {"type": "error", "message": "Recording already in progress"})
         return
 
-    # Extract document info and user_id for metadata
-    state._document_name = ""
-    state._document_path = ""
-    state._user_id = ""
+    session._document_name = ""
+    session._document_path = ""
+    session._user_id = ""
     if config_overrides:
-        state._document_name = config_overrides.pop("document_name", "")
-        state._document_path = config_overrides.pop("document_path", "")
-        state._user_id = config_overrides.pop("user_id", "")
+        session._document_name = config_overrides.pop("document_name", "")
+        session._document_path = config_overrides.pop("document_path", "")
+        session._user_id = config_overrides.pop("user_id", "")
 
-    state.recording = True
-    state.active_ws = ws
-    state.audio_buffer = bytearray()
-    state.chunk_segments = []
-    state.chunk_index = 0
-    state.stopping = False
+    session.recording = True
+    session.audio_buffer = bytearray()
+    session.chunk_segments = []
+    session.chunk_index = 0
+    session.stopping = False
 
     if state.crypto:
-        state.crypto.audit.log("recording_started", {"mode": "remote"})
+        state.crypto.audit.log("recording_started", {"mode": "remote", "user_id": session._user_id})
 
-    await send_status(ws)
-    logger.info("Recording session started — waiting for audio chunks from plugin.")
+    await send_session_status(session)
+    logger.info("Recording session started for user '%s'.", session._user_id)
 
 
 async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
     """Process a binary audio chunk received from the plugin."""
-    if not state.recording:
+    session = state.get_session(ws)
+
+    if not session.recording:
         return
 
     # Accumulate raw PCM for final WAV
-    state.audio_buffer.extend(pcm_data)
+    session.audio_buffer.extend(pcm_data)
 
     # Convert PCM to numpy array for transcription
     audio_array = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -990,22 +1025,22 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
     # Calculate time offset from actual audio data (16kHz, 16bit = 2 bytes/sample)
     sample_rate = 16000
     chunk_duration = len(audio_array) / sample_rate
-    time_offset = (len(state.audio_buffer) - len(pcm_data)) / (sample_rate * 2)
+    time_offset = (len(session.audio_buffer) - len(pcm_data)) / (sample_rate * 2)
 
-    state.chunk_index += 1
-    logger.info("Audio chunk #%d received: %.1fs at offset %.1fs", state.chunk_index, chunk_duration, time_offset)
+    session.chunk_index += 1
+    logger.info("Audio chunk #%d received: %.1fs at offset %.1fs", session.chunk_index, chunk_duration, time_offset)
 
     # Skip transcription if previous chunk is still processing
     if not state.transcriber_lock.acquire(blocking=False):
-        logger.info("Chunk #%d skipped — transcriber busy.", state.chunk_index)
+        logger.info("Chunk #%d skipped — transcriber busy.", session.chunk_index)
         return
     state.transcriber_lock.release()
 
     def transcribe_chunk():
-        if state.stopping:
+        if session.stopping:
             return None
         with state.transcriber_lock:
-            if state.stopping:
+            if session.stopping:
                 return None
             return state.transcriber.transcribe_chunk(audio_array, time_offset=time_offset)
 
@@ -1014,7 +1049,7 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
         if segments is None:
             return
 
-        state.chunk_segments.extend(segments)
+        session.chunk_segments.extend(segments)
         await ws_send(ws, {
             "type": "chunk",
             "segments": [
@@ -1029,11 +1064,13 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
 
 async def handle_stop(ws: WebSocket):
     """Stop recording and run post-processing pipeline (queue mode only — save WAV)."""
-    if not state.recording:
+    session = state.get_session(ws)
+
+    if not session.recording:
         await ws_send(ws, {"type": "error", "message": "No recording in progress"})
         return
 
-    state.stopping = True
+    session.stopping = True
     await ws_send(ws, {"type": "progress", "stage": "stopping_recording", "percent": 0.0})
 
     # Wait for in-progress chunk transcription
@@ -1041,38 +1078,38 @@ async def handle_stop(ws: WebSocket):
     state.transcriber_lock.release()
 
     # Save accumulated audio as WAV
-    if len(state.audio_buffer) == 0:
+    if len(session.audio_buffer) == 0:
         await ws_send(ws, {"type": "error", "message": "No audio was received"})
-        state.reset()
+        session.reset()
         return
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    user_slug = state._user_id.split("@")[0].replace(".", "_") if state._user_id else "unknown"
+    user_slug = session._user_id.split("@")[0].replace(".", "_") if session._user_id else "unknown"
     wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
-    await asyncio.to_thread(_save_pcm_as_wav, bytes(state.audio_buffer), wav_path)
+    await asyncio.to_thread(_save_pcm_as_wav, bytes(session.audio_buffer), wav_path)
 
     logger.info("Recording saved to %s (%.1f MB)",
-                wav_path, len(state.audio_buffer) / 1024 / 1024)
+                wav_path, len(session.audio_buffer) / 1024 / 1024)
 
     if state.crypto:
-        state.crypto.audit.log("recording_stopped", {"file": wav_path})
+        state.crypto.audit.log("recording_stopped", {"file": wav_path, "user_id": session._user_id})
 
     # Save metadata
     import json as _json
     meta_path = Path(wav_path).with_suffix(".meta.json")
     meta = {
-        "user_id": state._user_id,
-        "document_name": state._document_name,
-        "document_path": state._document_path,
+        "user_id": session._user_id,
+        "document_name": session._document_name,
+        "document_path": session._document_path,
         "started_at": datetime.now().isoformat(),
     }
     meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Queue mode: save WAV only, skip post-processing
-    state.recording = False
+    session.recording = False
     await ws_send(ws, {"type": "status", "recording": False, "processing": False})
-    state.reset()
+    session.reset()
     logger.info("Recording saved for later processing (queue mode).")
 
 
@@ -1083,15 +1120,12 @@ async def handle_stop(ws: WebSocket):
 @app.post("/stop")
 async def http_stop():
     """HTTP fallback to stop recording when WebSocket is unavailable."""
-    if not state.recording:
-        return {"ok": False, "message": "No recording in progress"}
-
-    ws = state.active_ws
-    if ws:
-        await handle_stop(ws)
-    else:
-        state.reset()
-    return {"ok": True}
+    # Find any active recording session
+    for session in state.sessions.values():
+        if session.recording:
+            await handle_stop(session.ws)
+            return {"ok": True}
+    return {"ok": False, "message": "No recording in progress"}
 
 
 # ---------------------------------------------------------------------------
@@ -1120,9 +1154,8 @@ async def websocket_endpoint(ws: WebSocket):
             return
 
     await ws.accept()
-    state.active_ws = ws
-    logger.info("WebSocket client connected.")
-    await send_status(ws)
+    session = state.get_session(ws)
+    logger.info("WebSocket client connected. Active sessions: %d", len(state.sessions))
 
     ping_task = asyncio.create_task(_ping_loop(ws))
 
@@ -1181,9 +1214,12 @@ async def websocket_endpoint(ws: WebSocket):
             pass
     finally:
         ping_task.cancel()
-        if state.recording:
-            state.reset()
-            logger.info("Recording state reset on WebSocket close.")
+        session = state.sessions.get(ws)
+        if session and session.recording:
+            session.reset()
+            logger.info("Recording session reset on WebSocket close.")
+        state.remove_session(ws)
+        logger.info("Session removed. Active sessions: %d", len(state.sessions))
 
 
 # ---------------------------------------------------------------------------
