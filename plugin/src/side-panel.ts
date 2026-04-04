@@ -476,8 +476,15 @@ export class MeetNoteSidePanel extends ItemView {
 						const docPath = await this.getSelectedDocPath();
 						if (!docPath) { new Notice("문서 경로를 찾을 수 없습니다."); return; }
 
-						const adapter = this.app.vault.adapter as any;
-						const vaultFilePath = adapter.getBasePath() + "/" + docPath;
+						// Read document content from vault (plugin side)
+						const file = this.app.vault.getAbstractFileByPath(docPath);
+						if (!file) { new Notice("문서를 찾을 수 없습니다."); return; }
+						const content = await this.app.vault.read(file as TFile);
+
+						// Extract summary section for email body
+						const meetnoteMatch = content.match(/<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|<!-- meetnote-end -->)/);
+						const emailBody = meetnoteMatch ? meetnoteMatch[1].trim() : content.slice(0, 3000);
+						const docName = (file as TFile).basename;
 
 						emailBtn.setText("전송 중...");
 						emailBtn.setAttribute("disabled", "true");
@@ -488,8 +495,8 @@ export class MeetNoteSidePanel extends ItemView {
 								body: {
 									recipients: selected,
 									from_address: fromAddress,
-									vault_file_path: vaultFilePath,
-									include_gitlab_link: this.plugin.settings.gitlabLinkEnabled,
+									subject: `[MeetNote] ${docName}`,
+									body: emailBody,
 								},
 							});
 							if (resp.ok) {

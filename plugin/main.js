@@ -1494,8 +1494,15 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
               new import_obsidian3.Notice("\uBB38\uC11C \uACBD\uB85C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
               return;
             }
-            const adapter = this.app.vault.adapter;
-            const vaultFilePath = adapter.getBasePath() + "/" + docPath;
+            const file = this.app.vault.getAbstractFileByPath(docPath);
+            if (!file) {
+              new import_obsidian3.Notice("\uBB38\uC11C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+              return;
+            }
+            const content = await this.app.vault.read(file);
+            const meetnoteMatch = content.match(/<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|<!-- meetnote-end -->)/);
+            const emailBody = meetnoteMatch ? meetnoteMatch[1].trim() : content.slice(0, 3e3);
+            const docName = file.basename;
             emailBtn.setText("\uC804\uC1A1 \uC911...");
             emailBtn.setAttribute("disabled", "true");
             try {
@@ -1504,8 +1511,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
                 body: {
                   recipients: selected,
                   from_address: fromAddress,
-                  vault_file_path: vaultFilePath,
-                  include_gitlab_link: this.plugin.settings.gitlabLinkEnabled
+                  subject: `[MeetNote] ${docName}`,
+                  body: emailBody
                 }
               });
               if (resp.ok) {

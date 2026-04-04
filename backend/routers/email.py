@@ -64,7 +64,10 @@ def _send_via_smtp(to: str, subject: str, body: str, from_address: str) -> None:
 class EmailSendRequest(BaseModel):
     recipients: list[str]
     from_address: str  # 플러그인 설정의 emailFromAddress
-    vault_file_path: str
+    subject: str = ""
+    body: str = ""
+    # Legacy fields (Docker에서는 vault 접근 불가)
+    vault_file_path: str = ""
     include_gitlab_link: bool = True
 
 
@@ -73,27 +76,31 @@ async def send_email(req: EmailSendRequest):
     if not req.from_address:
         return {"ok": False, "message": "발신자 이메일이 설정되지 않았습니다. 플러그인 설정을 확인하세요."}
 
-    vault_path = Path(req.vault_file_path)
-    if not vault_path.exists():
-        return {"ok": False, "message": "Document not found"}
+    # 플러그인이 subject/body를 직접 보낸 경우 (Docker 호환)
+    if req.body:
+        subject = req.subject or "[MeetNote] 회의록"
+        email_body = req.body
+    # Legacy: 서버가 vault 파일을 읽는 경우 (로컬 서버)
+    elif req.vault_file_path:
+        vault_path = Path(req.vault_file_path)
+        if not vault_path.exists():
+            return {"ok": False, "message": "Document not found"}
 
-    content = vault_path.read_text(encoding="utf-8")
+        content = vault_path.read_text(encoding="utf-8")
+        summary_match = re.search(
+            r'<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|$)', content
+        )
+        email_body = summary_match.group(1).strip() if summary_match else content[:3000]
 
-    summary_match = re.search(
-        r'<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|$)', content
-    )
-    body_text = summary_match.group(1).strip() if summary_match else content[:3000]
+        gitlab_url = ""
+        if req.include_gitlab_link:
+            gitlab_url = await asyncio.to_thread(_get_gitlab_url, str(vault_path))
+        if gitlab_url:
+            email_body += f"\n\n---\n📎 문서 링크: {gitlab_url}\n"
 
-    gitlab_url = ""
-    if req.include_gitlab_link:
-        gitlab_url = await asyncio.to_thread(_get_gitlab_url, str(vault_path))
-
-    doc_name = vault_path.stem
-    subject = f"[MeetNote] {doc_name}"
-
-    email_body = body_text
-    if gitlab_url:
-        email_body += f"\n\n---\n📎 문서 링크: {gitlab_url}\n"
+        subject = f"[MeetNote] {vault_path.stem}"
+    else:
+        return {"ok": False, "message": "body 또는 vault_file_path가 필요합니다."}
 
     sent = []
     failed = []
