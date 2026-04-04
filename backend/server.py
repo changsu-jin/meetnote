@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import struct
 import threading
 import wave
@@ -346,6 +347,7 @@ class AppState:
 
 
 state = AppState()
+_processing_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +415,10 @@ app = FastAPI(title="MeetNote Backend", lifespan=lifespan)
 # API Key middleware
 app.add_middleware(APIKeyMiddleware)
 
+_cors_origins = os.environ.get("CORS_ORIGINS", "app://obsidian.md,http://localhost,http://127.0.0.1").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -591,6 +594,16 @@ async def get_all_recordings():
     return {"recordings": all_recs}
 
 
+def _validate_recording_path(wav_path: str) -> Path:
+    """Validate that a recording path is within the recordings directory.
+    Raises HTTPException if path traversal is detected."""
+    resolved = Path(wav_path).resolve()
+    recordings_dir = Path(_app_config.recordings_path).resolve()
+    if not str(resolved).startswith(str(recordings_dir)):
+        raise HTTPException(status_code=403, detail="Invalid recording path")
+    return resolved
+
+
 class RecordingDeleteRequest(BaseModel):
     wav_path: str
 
@@ -598,6 +611,7 @@ class RecordingDeleteRequest(BaseModel):
 @app.post("/recordings/delete")
 async def delete_recording(req: RecordingDeleteRequest):
     """Delete WAV + meta + done marker files."""
+    _validate_recording_path(req.wav_path)
     deleted = []
     for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
         p = Path(req.wav_path).with_suffix(suffix)
@@ -616,6 +630,7 @@ class RecordingRequeueRequest(BaseModel):
 @app.post("/recordings/requeue")
 async def requeue_recording(req: RecordingRequeueRequest):
     """Move a completed recording back to pending."""
+    _validate_recording_path(req.wav_path)
     import json as _json
 
     done_marker = Path(req.wav_path).with_suffix(".done")
@@ -720,6 +735,7 @@ class ProcessFileRequest(BaseModel):
 @app.post("/process-file")
 async def process_file(req: ProcessFileRequest):
     """Process an existing WAV file through the full pipeline."""
+    _validate_recording_path(req.file_path)
     wav_path = req.file_path
     if not Path(wav_path).exists():
         return {"ok": False, "message": f"File not found: {wav_path}"}
@@ -728,7 +744,9 @@ async def process_file(req: ProcessFileRequest):
     if not ws:
         return {"ok": False, "message": "No WebSocket client connected."}
 
-    if state.processing:
+    if not _processing_lock.locked():
+        await _processing_lock.acquire()
+    else:
         return {"ok": False, "message": "Already processing"}
 
     state.processing = True
@@ -900,6 +918,8 @@ async def process_file(req: ProcessFileRequest):
     finally:
         state.processing = False
         state.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
+        if _processing_lock.locked():
+            _processing_lock.release()
         await send_status(ws)
 
 
@@ -1123,7 +1143,15 @@ async def websocket_endpoint(ws: WebSocket):
                 # Text message = JSON command
                 elif "text" in message and message["text"]:
                     import json
-                    data = json.loads(message["text"])
+                    raw_text = message["text"]
+                    if len(raw_text) > 1_000_000:  # 1MB limit
+                        await ws_send(ws, {"type": "error", "message": "Message too large"})
+                        continue
+                    try:
+                        data = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        await ws_send(ws, {"type": "error", "message": "Invalid JSON"})
+                        continue
                     msg_type = data.get("type")
 
                     if msg_type == "start":

@@ -37,7 +37,7 @@ jobs:
           file: backend/Dockerfile.base
           push: true
           platforms: linux/amd64
-          build-args: |
+          secrets: |
             HF_TOKEN=${{ secrets.HF_TOKEN }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/meetnote-server-base:latest

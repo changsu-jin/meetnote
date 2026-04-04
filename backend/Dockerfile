@@ -21,7 +21,11 @@ ENV SMTP_HOST=smtp.gmail.com
 ENV SMTP_PORT=587
 ENV SMTP_USE_TLS=true
 
-RUN mkdir -p /app/data/recordings
+RUN useradd -m appuser && \
+    mkdir -p /app/data/recordings && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8765
 
