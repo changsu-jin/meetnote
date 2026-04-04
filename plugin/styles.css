@@ -26,6 +26,9 @@
 	align-items: center;
 	margin-right: 2px;
 	color: var(--interactive-accent);
+	vertical-align: middle;
+	position: relative;
+	top: 0.5px;
 }
 
 .meetnote-logo-icon svg {
