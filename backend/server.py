@@ -334,6 +334,7 @@ class AppState:
         # Document metadata (sent by plugin at start)
         self._document_name: str = ""
         self._document_path: str = ""
+        self._user_id: str = ""
 
     def reset(self) -> None:
         self.recording = False
@@ -932,12 +933,14 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
         await ws_send(ws, {"type": "error", "message": "Recording already in progress"})
         return
 
-    # Extract document info for metadata
+    # Extract document info and user_id for metadata
     state._document_name = ""
     state._document_path = ""
+    state._user_id = ""
     if config_overrides:
         state._document_name = config_overrides.pop("document_name", "")
         state._document_path = config_overrides.pop("document_path", "")
+        state._user_id = config_overrides.pop("user_id", "")
 
     state.recording = True
     state.active_ws = ws
@@ -1025,7 +1028,8 @@ async def handle_stop(ws: WebSocket):
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    wav_path = str(Path(_app_config.recordings_path) / f"meeting_{timestamp}.wav")
+    user_slug = state._user_id.split("@")[0].replace(".", "_") if state._user_id else "unknown"
+    wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
     await asyncio.to_thread(_save_pcm_as_wav, bytes(state.audio_buffer), wav_path)
 
     logger.info("Recording saved to %s (%.1f MB)",
@@ -1038,6 +1042,7 @@ async def handle_stop(ws: WebSocket):
     import json as _json
     meta_path = Path(wav_path).with_suffix(".meta.json")
     meta = {
+        "user_id": state._user_id,
         "document_name": state._document_name,
         "document_path": state._document_path,
         "started_at": datetime.now().isoformat(),

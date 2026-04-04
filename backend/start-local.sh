@@ -7,11 +7,15 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# .env 로드
+# .env 로드 (값에 공백이 있을 수 있으므로 라인 단위 파싱)
 if [ -f ".env" ]; then
-    set -a
-    source .env
-    set +a
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"  # 주석 제거
+        line="${line// /}"  # 앞뒤 공백은 유지하되 빈 줄 스킵
+        if [[ -n "$line" && "$line" == *"="* ]]; then
+            export "$line"
+        fi
+    done < .env
 fi
 
 source venv/bin/activate

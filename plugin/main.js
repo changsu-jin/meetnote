@@ -2341,7 +2341,8 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.statusBar.startRecording();
     this.backendClient.sendStart({
       document_name: activeFile.basename,
-      document_path: activeFile.path
+      document_path: activeFile.path,
+      user_id: this.settings.emailFromAddress || require("os").userInfo().username
     });
     this.audioCapture = new AudioCapture({
       onChunk: (pcmData) => {

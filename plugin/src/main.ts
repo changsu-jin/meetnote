@@ -274,6 +274,7 @@ export default class MeetNotePlugin extends Plugin {
 		this.backendClient.sendStart({
 			document_name: activeFile.basename,
 			document_path: activeFile.path,
+			user_id: this.settings.emailFromAddress || require("os").userInfo().username,
 		});
 
 		// Start audio capture from local microphone
