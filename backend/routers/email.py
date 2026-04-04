@@ -112,8 +112,9 @@ async def send_email(req: EmailSendRequest):
             failed.append(recipient)
             logger.warning("Email send failed for %s: %s", recipient, exc)
 
+    smtp_cfg = _smtp_config()
     logger.info("Email sent to %d/%d recipients via SMTP (%s).",
-                len(sent), len(req.recipients), cfg["host"])
+                len(sent), len(req.recipients), smtp_cfg["host"])
     return {"ok": len(failed) == 0, "sent": sent, "failed": failed}
 
 

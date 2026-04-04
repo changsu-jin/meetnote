@@ -1147,7 +1147,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     container.addClass("meetnote-side-panel");
     const headerSection = container.createDiv({ cls: "meetnote-header-section" });
     const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
-    headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
+    const version = this.plugin.manifest.version;
+    headerRow.createEl("span", { text: `MeetNote v${version}`, cls: "meetnote-panel-title" });
     const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
     const serverOnline = await this.checkServerHealth();
     const statusLabel = serverOnline ? `\u25CF ${this.getServerLabel()}` : "\u25CF \uC624\uD504\uB77C\uC778";
