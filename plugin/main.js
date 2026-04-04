@@ -1147,8 +1147,9 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     container.addClass("meetnote-side-panel");
     const headerSection = container.createDiv({ cls: "meetnote-header-section" });
     const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
-    const version = this.plugin.manifest.version;
-    headerRow.createEl("span", { text: `MeetNote v${version}`, cls: "meetnote-panel-title" });
+    const titleEl = headerRow.createEl("span", { cls: "meetnote-panel-title" });
+    titleEl.createEl("span", { text: "MeetNote " });
+    titleEl.createEl("span", { text: `v${this.plugin.manifest.version}`, cls: "meetnote-version" });
     const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
     const serverOnline = await this.checkServerHealth();
     const statusLabel = serverOnline ? `\u25CF ${this.getServerLabel()}` : "\u25CF \uC624\uD504\uB77C\uC778";
@@ -1190,8 +1191,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
           if (rec.document_name) {
-            const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
-            titleEl.addEventListener("click", async (e) => {
+            const titleEl2 = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+            titleEl2.addEventListener("click", async (e) => {
               e.preventDefault();
               const docPath = rec.document_path || "";
               if (docPath) {
@@ -1255,8 +1256,8 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
           const info = item.createDiv({ cls: "meetnote-recording-info" });
           if (rec.document_name) {
-            const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
-            titleEl.addEventListener("click", async (e) => {
+            const titleEl2 = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+            titleEl2.addEventListener("click", async (e) => {
               e.preventDefault();
               const docPath = rec.document_path || "";
               if (docPath) {

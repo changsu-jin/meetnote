@@ -95,8 +95,9 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Header: title + server status + actions ──
 		const headerSection = container.createDiv({ cls: "meetnote-header-section" });
 		const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
-		const version = this.plugin.manifest.version;
-		headerRow.createEl("span", { text: `MeetNote v${version}`, cls: "meetnote-panel-title" });
+		const titleEl = headerRow.createEl("span", { cls: "meetnote-panel-title" });
+		titleEl.createEl("span", { text: "MeetNote " });
+		titleEl.createEl("span", { text: `v${this.plugin.manifest.version}`, cls: "meetnote-version" });
 
 		const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
 
