@@ -7,8 +7,9 @@
  * - Speaker mapping UI (register/edit/delete)
  */
 
-import { ItemView, Notice, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, TFile, requestUrl, setIcon } from "obsidian";
 import type MeetNotePlugin from "./main";
+import { summarize } from "./summarizer";
 
 export const SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 
@@ -94,13 +95,18 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Header: title + server status + actions ──
 		const headerSection = container.createDiv({ cls: "meetnote-header-section" });
 		const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
-		headerRow.createEl("span", { text: "MeetNote", cls: "meetnote-panel-title" });
+		const titleEl = headerRow.createEl("span", { cls: "meetnote-panel-title" });
+		const logoIcon = titleEl.createEl("span", { cls: "meetnote-logo-icon" });
+		setIcon(logoIcon, "mic");
+		titleEl.createEl("span", { text: " MeetNote " });
+		titleEl.createEl("span", { text: `v${this.plugin.manifest.version}`, cls: "meetnote-version" });
 
 		const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
 
 		const serverOnline = await this.checkServerHealth();
+		const statusLabel = serverOnline ? `● ${this.getServerLabel()}` : "● 오프라인";
 		headerActions.createEl("span", {
-			text: serverOnline ? "●" : "●",
+			text: statusLabel,
 			cls: serverOnline ? "meetnote-status-dot-online" : "meetnote-status-dot-offline",
 		});
 
@@ -119,11 +125,6 @@ export class MeetNoteSidePanel extends ItemView {
 				setTimeout(() => this.render(), 1000);
 			});
 
-			const stopBtn = headerActions.createEl("button", { text: "중지", cls: "meetnote-header-btn", attr: { title: "서버 중지" } });
-			stopBtn.addEventListener("click", async () => { await this.stopServer(); setTimeout(() => this.render(), 1500); });
-		} else {
-			const startBtn = headerActions.createEl("button", { text: "시작", cls: "meetnote-header-btn", attr: { title: "서버 시작" } });
-			startBtn.addEventListener("click", async () => { await this.startServer(); setTimeout(() => this.render(), 12000); });
 		}
 
 		const dashBtn = headerActions.createEl("button", { text: "📊", cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
@@ -137,8 +138,9 @@ export class MeetNoteSidePanel extends ItemView {
 		// ── Recording Queue Section ──
 		let pendingCount = 0;
 		try {
-			const resp = await this.api("/recordings/pending");
-			const recordings: PendingRecording[] = resp.recordings || [];
+			const resp = await this.api(`/recordings/pending?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
+			const recordings: PendingRecording[] = (resp.recordings || [])
+				.sort((a: PendingRecording, b: PendingRecording) => b.created - a.created);
 			pendingCount = recordings.length;
 
 			const pendingContent = this.createCollapsibleSection(container, "pending", "대기 중", pendingCount > 0 ? `${pendingCount}` : undefined);
@@ -206,9 +208,12 @@ export class MeetNoteSidePanel extends ItemView {
 
 		// ── Completed Recordings Section ──
 		try {
-			const allResp = await this.api("/recordings/all");
+			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
 			const allRecs: PendingRecording[] = allResp.recordings || [];
-			const completed = allRecs.filter((r) => r.processed).slice(0, 10);
+			const completed = allRecs
+				.filter((r) => r.processed)
+				.sort((a, b) => b.created - a.created)
+				.slice(0, 10);
 
 			if (completed.length > 0) {
 				const completedContent = this.createCollapsibleSection(container, "completed", "최근 회의", `${completed.length}`);
@@ -475,8 +480,15 @@ export class MeetNoteSidePanel extends ItemView {
 						const docPath = await this.getSelectedDocPath();
 						if (!docPath) { new Notice("문서 경로를 찾을 수 없습니다."); return; }
 
-						const adapter = this.app.vault.adapter as any;
-						const vaultFilePath = adapter.getBasePath() + "/" + docPath;
+						// Read document content from vault (plugin side)
+						const file = this.app.vault.getAbstractFileByPath(docPath);
+						if (!file) { new Notice("문서를 찾을 수 없습니다."); return; }
+						const content = await this.app.vault.read(file as TFile);
+
+						// Extract summary section for email body
+						const meetnoteMatch = content.match(/<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|<!-- meetnote-end -->)/);
+						const emailBody = meetnoteMatch ? meetnoteMatch[1].trim() : content.slice(0, 3000);
+						const docName = (file as TFile).basename;
 
 						emailBtn.setText("전송 중...");
 						emailBtn.setAttribute("disabled", "true");
@@ -487,8 +499,8 @@ export class MeetNoteSidePanel extends ItemView {
 								body: {
 									recipients: selected,
 									from_address: fromAddress,
-									vault_file_path: vaultFilePath,
-									include_gitlab_link: this.plugin.settings.gitlabLinkEnabled,
+									subject: `[MeetNote] ${docName}`,
+									body: emailBody,
 								},
 							});
 							if (resp.ok) {
@@ -704,16 +716,95 @@ export class MeetNoteSidePanel extends ItemView {
 				const elapsed = Math.round((Date.now() - startTime) / 1000);
 				const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}분 ${elapsed % 60}초` : `${elapsed}초`;
 
-				// Run tag extraction + related meeting links
 				const docPath = rec.document_path || "";
 				let linkedCount = 0;
+				let hasSummary = false;
+				const finalSegments = resp.segments_data || [];
+
 				if (docPath) {
 					const file = this.app.vault.getAbstractFileByPath(docPath);
 					if (file) {
+						// Write transcript to vault from plugin (Docker can't access vault)
+						if (finalSegments.length > 0) {
+							await this.writeResultToVault(file as TFile, finalSegments, resp.speaking_stats || []);
+						}
+
+						// Generate summary via Claude CLI
+						try {
+							this.plugin.statusBar.setProgress("요약 생성 중", 95);
+							if (finalSegments.length > 0) {
+								const result = await summarize(finalSegments);
+								if (result.success && result.summary) {
+									// Replace placeholder sections with actual summary
+									await this.app.vault.process(file as TFile, (content) => {
+										// Extract sections from Claude output
+										const summaryMatch = result.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
+										const decisionsMatch = result.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
+										const actionsMatch = result.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
+										const tagsMatch = result.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
+
+										let updated = content;
+
+										// Replace each placeholder section
+										if (summaryMatch) {
+											updated = updated.replace(
+												/### 요약\n\n\(요약 생성 중\.\.\.\)/,
+												`### 요약\n${summaryMatch[1].trimEnd()}`
+											);
+										}
+										if (decisionsMatch) {
+											updated = updated.replace(
+												/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/,
+												`### 주요 결정사항\n${decisionsMatch[1].trimEnd()}`
+											);
+										}
+										if (actionsMatch) {
+											updated = updated.replace(
+												/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/,
+												`### 액션아이템\n${actionsMatch[1].trimEnd()}`
+											);
+										}
+										if (tagsMatch) {
+											updated = updated.replace(
+												/### 태그\n\n\(요약 생성 중\.\.\.\)/,
+												`### 태그\n${tagsMatch[1].trimEnd()}`
+											);
+										}
+
+										// If no section matches (Claude output format different), replace all placeholders
+										if (updated === content) {
+											updated = updated.replace(
+												/### 요약\n\n\(요약 생성 중\.\.\.\)\n\n### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)\n\n### 액션아이템\n\n\(요약 생성 중\.\.\.\)\n\n### 태그\n\n\(요약 생성 중\.\.\.\)/,
+												result.summary.trim()
+											);
+										}
+
+										return updated;
+									});
+									hasSummary = true;
+								} else if (result.engine === "none") {
+									// Replace placeholders with (없음)
+									await this.app.vault.process(file as TFile, (content) => {
+										return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
+									});
+									new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+								}
+							}
+						} catch (err) {
+							console.error("[MeetNote] Summary generation failed:", err);
+							// Replace placeholders with (없음) on error
+							try {
+								await this.app.vault.process(file as TFile, (content) => {
+									return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
+								});
+							} catch { /* ignore */ }
+						}
+
+						// Run tag extraction + related meeting links
 						try {
 							const { MeetingWriter } = await import("./writer");
 							const writer = new MeetingWriter(this.app);
-							const content = await this.app.vault.read(file as any);
+							const content = await this.app.vault.read(file as TFile);
 							const tagMatch = content.match(/### 태그\s*\n([\s\S]*?)(?=\n###|\n##|$)/);
 							if (tagMatch) {
 								const tags = (tagMatch[1].match(/#[\w가-힣]+/g) || []).map((t: string) => t.slice(1));
@@ -730,12 +821,13 @@ export class MeetNoteSidePanel extends ItemView {
 						}
 
 						// Auto-open the processed document
-						await this.app.workspace.getLeaf().openFile(file as any);
+						await this.app.workspace.getLeaf().openFile(file as TFile);
 					}
 				}
 
-				// Enhanced completion notice (longer display duration)
+				// Enhanced completion notice
 				const parts = [`처리 완료! (${elapsedStr})`, `${resp.segments}개 세그먼트`];
+				if (hasSummary) parts.push("요약 포함");
 				if (linkedCount > 0) parts.push(`${linkedCount}개 연관 회의 링크`);
 				new Notice(parts.join("\n"), 8000);
 
@@ -756,36 +848,7 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 	}
 
-	// ── Server Management ──
-
-	private async renderServerSection(container: HTMLElement): Promise<void> {
-		const section = container.createDiv({ cls: "meetnote-server-section" });
-		const header = section.createDiv({ cls: "meetnote-server-header" });
-		header.createEl("h4", { text: "서버" });
-
-		const serverOnline = await this.checkServerHealth();
-
-		const statusRow = section.createDiv({ cls: "meetnote-server-status" });
-
-		if (serverOnline) {
-			statusRow.createEl("span", { text: "● 실행 중", cls: "meetnote-status-online" });
-
-			const stopBtn = statusRow.createEl("button", { text: "중지", cls: "meetnote-server-btn" });
-			stopBtn.addEventListener("click", async () => {
-				await this.stopServer();
-				setTimeout(() => this.render(), 1500);
-			});
-		} else {
-			statusRow.createEl("span", { text: "● 중지됨", cls: "meetnote-status-offline" });
-
-			const startBtn = statusRow.createEl("button", { text: "시작", cls: "meetnote-server-btn" });
-			startBtn.addEventListener("click", async () => {
-				await this.startServer();
-				// Wait for server to start
-				setTimeout(() => this.render(), 5000);
-			});
-		}
-	}
+	private lastHealthData: { ok: boolean; device?: string; model?: string } | null = null;
 
 	private async checkServerHealth(): Promise<boolean> {
 		try {
@@ -795,67 +858,163 @@ export class MeetNoteSidePanel extends ItemView {
 			const resp = await fetch(`${baseUrl}/health`, { signal: controller.signal });
 			clearTimeout(timeout);
 			const data = await resp.json();
+			this.lastHealthData = data;
 			return data?.ok === true;
 		} catch {
+			this.lastHealthData = null;
 			return false;
 		}
 	}
 
-	private async startServer(): Promise<void> {
-		try {
-			const { spawn } = require("child_process");
-			const backendDir = this.plugin.settings.backendDir || "";
-			if (!backendDir) {
-				new Notice("설정에서 백엔드 경로를 지정해주세요.");
-				return;
-			}
-
-			const pythonPath = `${backendDir}/venv/bin/python3`;
-			const serverPath = `${backendDir}/server.py`;
-
-			// Inherit PATH — include common tool locations for Claude CLI, asdf, homebrew
-			const homedir = require("os").homedir();
-			const extraPaths = [
-				`${backendDir}/venv/bin`,
-				`${homedir}/.asdf/shims`,
-				`${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-				"/usr/local/bin",
-				"/opt/homebrew/bin",
-			];
-			const env = Object.assign({}, process.env, {
-				PATH: [...extraPaths, process.env.PATH || ""].join(":"),
-			});
-
-			const child = spawn(pythonPath, [serverPath], {
-				cwd: backendDir,
-				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
-				env,
-			});
-
-			// Write logs
-			const fs = require("fs");
-			const logStream = fs.createWriteStream("/tmp/meetnote_server.log");
-			child.stdout?.pipe(logStream);
-			child.stderr?.pipe(logStream);
-			child.unref();
-
-			new Notice("서버를 시작합니다... (약 10초 소요)");
-			// Refresh after delay
-			setTimeout(() => this.render(), 12000);
-		} catch (err) {
-			new Notice(`서버 시작 실패: ${err}`);
-			console.error("[MeetNote] Server start failed:", err);
-		}
+	private getServerLabel(): string {
+		const url = this.plugin.settings.serverUrl;
+		const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
+		const type = isLocal ? "로컬" : "원격";
+		const device = this.lastHealthData?.device || "";
+		return device ? `${type} (${device})` : type;
 	}
 
-	private async stopServer(): Promise<void> {
-		try {
-			await this.api("/shutdown", { method: "POST" });
-			new Notice("서버를 중지합니다.");
-		} catch {
-			new Notice("서버 중지 실패");
+	/** Write processing result to vault document from plugin side (works with Docker) */
+	private async writeResultToVault(
+		file: TFile,
+		segments: Array<{ timestamp: number; speaker: string; text: string }>,
+		speakingStats: Array<{ speaker: string; total_seconds: number; ratio: number }>,
+	): Promise<void> {
+		const speakers = [...new Set(segments.map((s) => s.speaker))];
+
+		const fmt = (ts: number) => {
+			const h = Math.floor(ts / 3600);
+			const m = Math.floor((ts % 3600) / 60);
+			const s = Math.floor(ts % 60);
+			return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+		};
+
+		const lines: string[] = [];
+
+		lines.push("## 회의 녹취록");
+		lines.push("");
+		lines.push(`> 참석자: ${speakers.join(", ")} (자동 감지 ${speakers.length}명)`);
+		lines.push("");
+
+		// Speaking stats
+		lines.push("### 발언 비율");
+		lines.push("");
+		if (speakingStats.length > 0) {
+			for (const stat of speakingStats) {
+				const pct = Math.round(stat.ratio * 100);
+				const mins = Math.floor(stat.total_seconds / 60);
+				const secs = Math.floor(stat.total_seconds % 60);
+				const filled = Math.round(stat.ratio * 20);
+				const bar = "\u25A0".repeat(filled) + "\u25A1".repeat(20 - filled);
+				lines.push(`> ${stat.speaker} ${pct}% ${bar} (${mins}분 ${secs}초)`);
+			}
+		} else {
+			lines.push("(없음)");
 		}
+		lines.push("");
+
+		// Summary placeholders
+		lines.push("### 요약");
+		lines.push("");
+		lines.push("(요약 생성 중...)");
+		lines.push("");
+		lines.push("### 주요 결정사항");
+		lines.push("");
+		lines.push("(요약 생성 중...)");
+		lines.push("");
+		lines.push("### 액션아이템");
+		lines.push("");
+		lines.push("(요약 생성 중...)");
+		lines.push("");
+		lines.push("### 태그");
+		lines.push("");
+		lines.push("(요약 생성 중...)");
+		lines.push("");
+		lines.push("---");
+		lines.push("");
+
+		// Transcript
+		lines.push("## 녹취록");
+		lines.push("");
+		let i = 0;
+		while (i < segments.length) {
+			const seg = segments[i];
+			const speaker = seg.speaker;
+			const texts = [seg.text.trim()];
+			const startTs = seg.timestamp;
+			let lastTs = startTs;
+
+			while (i + 1 < segments.length && segments[i + 1].speaker === speaker) {
+				i++;
+				texts.push(segments[i].text.trim());
+				lastTs = segments[i].timestamp;
+			}
+
+			if (texts.length > 1) {
+				lines.push(`### ${fmt(startTs)} ~ ${fmt(lastTs)}`);
+			} else {
+				lines.push(`### ${fmt(startTs)}`);
+			}
+			lines.push(`**${speaker}**: ${texts.join(" ")}`);
+			lines.push("");
+			i++;
+		}
+
+		lines.push("");
+		lines.push("### 연관 회의");
+		lines.push("");
+		lines.push("(없음)");
+		lines.push("");
+
+		const content = lines.join("\n");
+
+		// Build frontmatter
+		const today = new Date().toISOString().slice(0, 10);
+		const fmLines = [
+			"---",
+			"type: meeting",
+			"tags:",
+			"  - 회의",
+			`date: ${today}`,
+		];
+		if (speakers.length > 0) {
+			fmLines.push("participants:");
+			for (const s of speakers) {
+				fmLines.push(`  - ${s}`);
+			}
+		}
+		fmLines.push("---");
+		fmLines.push("");
+		const frontmatter = fmLines.join("\n");
+
+		const startMarker = "<!-- meetnote-start -->";
+		const endMarker = "<!-- meetnote-end -->";
+
+		await this.app.vault.process(file, (existing) => {
+			const startIdx = existing.indexOf(startMarker);
+			const endIdx = existing.indexOf(endMarker);
+
+			let newContent: string;
+			if (startIdx !== -1 && endIdx !== -1) {
+				const endIdxFull = endIdx + endMarker.length;
+				newContent = existing.slice(0, startIdx)
+					+ startMarker + "\n\n" + content + "\n" + endMarker + "\n"
+					+ existing.slice(endIdxFull);
+			} else {
+				newContent = existing + "\n\n" + startMarker + "\n\n" + content + "\n" + endMarker + "\n";
+			}
+
+			// Clean up live section
+			newContent = newContent.replace(/<!-- meetnote-live-start -->[\s\S]*?<!-- meetnote-live-end -->\s*/g, "");
+			newContent = newContent.replace(/<!-- meetnote-start -->\s*## 회의 녹취록\s*<!-- meetnote-end -->\s*/g, "");
+			newContent = newContent.replace(/\n{4,}/g, "\n\n\n");
+
+			// Update frontmatter
+			if (newContent.startsWith("---\n")) {
+				newContent = newContent.replace(/^---\n[\s\S]*?\n---\n*/, "");
+			}
+			return frontmatter + newContent;
+		});
 	}
 
 	private getHttpBaseUrl(): string {
@@ -990,7 +1149,7 @@ export class MeetNoteSidePanel extends ItemView {
 		try {
 			const resp = await this.api(`/speakers/last-meeting?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
 			// Get doc path from pending/all recordings
-			const allResp = await this.api("/recordings/all");
+			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
 			const rec = (allResp.recordings || []).find((r: any) => r.path === this.selectedWavPath);
 			return rec?.document_path || "";
 		} catch {
@@ -1000,7 +1159,8 @@ export class MeetNoteSidePanel extends ItemView {
 
 	/** Load names and emails from vault folder for auto-suggest */
 	private async loadSuggestNames(): Promise<string[]> {
-		const folderPath = this.plugin.settings.participantSuggestPath || "TEAM-TF/io-second-brain/내부 사용자";
+		const folderPath = this.plugin.settings.participantSuggestPath;
+		if (!folderPath) return [];
 		const folder = this.app.vault.getAbstractFileByPath(folderPath);
 		if (!folder) return [];
 

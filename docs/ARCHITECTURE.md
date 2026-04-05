@@ -3,108 +3,173 @@
 ## 시스템 구성
 
 ```
-┌─ Obsidian Plugin (TypeScript) ──────────────────────────────────────┐
-│                                                                      │
-│  main.ts ──► backend-client.ts ◄──WebSocket──► server.py (FastAPI)  │
-│    │              │                                │                  │
-│    ▼              ▼                                ▼                  │
-│  writer.ts    settings.ts              ┌─── recorder/ ───────────┐  │
-│  (문서 기록)   (설정 UI)                │                          │  │
-│  - frontmatter                         │  audio.py (녹음)         │  │
-│  - 태그/링크                           │  transcriber.py (STT)    │  │
-│  - 대시보드                            │  diarizer.py (화자구분)  │  │
-│                                        │  merger.py (병합)        │  │
-│                                        │  speaker_db.py (화자DB)  │  │
-│                                        │  summarizer.py (요약)    │  │
-│                                        │  transcript_corrector.py │  │
-│                                        │  analytics.py (통계)     │  │
-│                                        │  slack_sender.py         │  │
-│                                        │  crypto.py (암호화)      │  │
-│                                        │  meeting_search.py (RAG) │  │
-│                                        └──────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ Obsidian Plugin (TypeScript) ─────────────────────────────────────────┐
+│                                                                         │
+│  main.ts                                                                │
+│    ├── backend-client.ts ◄── WebSocket (binary+JSON) ──► server.py     │
+│    ├── audio-capture.ts  (Web Audio API 마이크 캡처)                    │
+│    ├── summarizer.ts     (Claude CLI / Ollama 요약)                    │
+│    ├── writer.ts         (Vault 문서 기록)                              │
+│    ├── settings.ts       (설정 UI — 7개 항목)                          │
+│    ├── side-panel.ts     (사이드 패널)                                  │
+│    └── recorder-view.ts  (상태바 — 녹음 시간 + 청크 카운터)            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+                            │
+                    WebSocket (WS/WSS)
+                    오디오 바이너리 ↑ ↓ JSON 결과
+                            │
+┌─ Server (Python FastAPI) ──────────────────────────────────────────────┐
+│                                                                         │
+│  server.py                                                              │
+│    ├── config_env.py       (환경변수 기반 설정)                         │
+│    ├── APIKeyMiddleware    (인증)                                       │
+│    ├── RecordingSession    (세션별 상태 — 동시 녹음 지원)               │
+│    └── AppState            (공유 자원 — transcriber, diarizer 등)       │
+│                                                                         │
+│  recorder/                                                              │
+│    ├── transcriber.py      (Whisper STT — MLX/faster-whisper)          │
+│    ├── diarizer.py         (pyannote 화자구분)                         │
+│    ├── merger.py           (전사+화자 병합)                             │
+│    ├── speaker_db.py       (화자 embedding DB)                         │
+│    ├── transcript_corrector.py (LLM 전사 교정)                        │
+│    ├── analytics.py        (발언 비율 통계)                            │
+│    ├── crypto.py           (AES 암호화 + 감사 로그)                    │
+│    └── meeting_search.py   (TF-IDF RAG 검색)                          │
+│                                                                         │
+│  routers/                                                               │
+│    ├── speakers.py         (화자 등록/수정/삭제/매칭)                   │
+│    ├── email.py            (SMTP 이메일 전송 — HTML 템플릿)            │
+│    └── config.py           (회의 검색 API)                             │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 역할 분리
+
+| 계층 | 역할 | 핵심 모듈 |
+|------|------|-----------|
+| **Plugin** | 오디오 캡처, 요약, Vault 문서 작성, 이메일 본문 구성 | `audio-capture.ts`, `summarizer.ts`, `writer.ts` |
+| **Server** | STT, 화자구분, 병합, 화자 DB, 암호화 | `transcriber.py`, `diarizer.py`, `merger.py` |
+
+---
 
 ## 데이터 흐름
 
-### 녹음 → 문서 완성 파이프라인
-
 ```
 1. 녹음 시작
-   Plugin: startRecording() → sendStart(config + previous_context)
-   Server: handle_start() → AudioRecorder.start()
+   Plugin: audio-capture.ts → Web Audio API로 마이크 캡처
+   Plugin: backend-client.ts → WebSocket 연결 + start (user_id 포함)
+   Server: RecordingSession 생성
 
-2. 준실시간 전사 (녹음 중, 30초마다)
-   Server: on_chunk() → transcriber.transcribe_chunk() → WS "chunk"
-   Plugin: onChunk() → writer.appendChunk()
+2. 실시간 전사 (녹음 중, 5초마다)
+   Plugin: 오디오 청크 → WebSocket binary 전송
+   Server: transcribe_chunk() → WS "chunk" 응답
+   Plugin: writer.appendChunk() → 문서에 실시간 표시
 
 3. 녹음 중지
-   Plugin: sendStop() → HTTP POST /stop
-   Server: handle_stop()
+   Plugin: sendStop() + 오디오 캡처 종료
+   Server: handle_stop() → WAV 저장 (파일명에 user_id slug 포함)
 
-4. 후처리 파이프라인
-   ┌─ 전사 결과 재활용 (chunk segments)
-   │
-   ├─ 화자구분 (pyannote, MPS 가속)
-   │   └─ embedding 추출 (wespeaker)
-   │       └─ Speaker DB 매칭
-   │
-   ├─ 발언 비율 계산 (analytics)
-   │
-   ├─ 전사 + 화자 병합 (merger, 5초 갭 조건)
-   │
-   ├─ LLM 전사 교정 (transcript_corrector, Claude/Ollama)
-   │
-   ├─ LLM 요약 생성 (summarizer, 이전 컨텍스트 포함)
-   │
-   ├─ Slack 전송 (slack_sender, Block Kit)
-   │
-   └─ 녹음 파일 암호화 (crypto, 선택)
+4. 후처리 (사이드패널 "처리" 버튼)
+   Server:
+   ├─ 전사 (chunk 재활용 + 잔여 구간)
+   ├─ 화자구분 (pyannote, GPU 자동 감지)
+   │   └─ speaker embedding 추출 → Speaker DB 매칭
+   ├─ 발언 비율 계산
+   ├─ 전사+화자 병합
+   ├─ LLM 전사 교정
+   ├─ 결과를 meta.json에 저장 (오프라인 픽업용)
+   └─ WS "final" → segments + speaker_map + stats
 
-5. 결과 전송
-   Server: WS "final" → segments + speaker_map + summary + stats
-   Plugin: onFinal() → writer.writeFinal()
-                     → writer.linkRelatedMeetings()
+   Plugin:
+   ├─ 문서 작성 (writeResultToVault)
+   ├─ Claude CLI / Ollama 요약 생성
+   ├─ 요약을 문서에 삽입
+   └─ 연관 회의 링크
+
+5. 오프라인 픽업 (플러그인 미연결 시)
+   Server: 결과를 meta.json의 processing_results에 저장
+   Plugin: 재연결 시 pickupPendingResults() → 자동 문서 작성
 ```
 
-## 스레딩 모델
+---
+
+## 세션 모델
 
 ```
-Main Thread (asyncio event loop)
-├── FastAPI/Uvicorn HTTP 처리
-├── WebSocket 메시지 수신/송신
-└── asyncio.to_thread() 호출 ───────► Thread Pool
-                                       ├── AudioRecorder (sounddevice callback)
-                                       ├── Transcriber (MLX/faster-whisper)
-                                       ├── Diarizer (pyannote, GPU)
-                                       ├── Summarizer (subprocess: claude/ollama)
-                                       └── SlackSender (HTTP requests)
+AppState (공유 — 서버 전체)
+├── transcriber (Whisper 모델 — 싱글톤)
+├── diarizer (pyannote 모델 — 싱글톤)
+├── speaker_db (화자 DB — 공유)
+├── transcriber_lock (동시 접근 방지)
+└── sessions: dict[WebSocket → RecordingSession]
+
+RecordingSession (세션별 — WebSocket 연결당 1개)
+├── recording, processing, stopping (상태)
+├── audio_buffer (PCM 누적)
+├── chunk_segments (실시간 전사 결과)
+├── _user_id, _document_name, _document_path (메타데이터)
+├── _processing_lock (처리 중 중복 방지)
+└── last_meeting_embeddings (화자 매칭 결과)
 ```
 
-- `transcriber_lock`: chunk 전사와 stop 처리 간 동시 접근 방지
-- `stopping` 플래그: stop 시 진행 중인 chunk 전사 스킵
-- `stream.abort()`: sounddevice 스트림 즉시 종료 (hang 방지)
+여러 사용자가 동시에 녹음/처리 가능. 공유 자원(transcriber, diarizer)은 `transcriber_lock`으로 동시 접근 방지.
+
+---
 
 ## 데이터 저장
 
 | 데이터 | 위치 | 형식 |
 |--------|------|------|
-| 녹음 파일 | `backend/recordings/` | WAV (또는 .wav.enc) |
-| 화자 DB | `backend/speakers.json` | JSON |
-| 암호화 키 | `backend/meetnote.key` | Fernet key (owner-only) |
-| 감사 로그 | `backend/audit.log` | JSONL |
+| 녹음 파일 | `./data/recordings/meeting_{user}_{timestamp}.wav` | WAV |
+| 메타데이터 | `./data/recordings/*.meta.json` | JSON (user_id, 문서 경로, 처리 결과) |
+| 화자 DB | `./data/speakers.json` | JSON (이름, 이메일, embedding) |
+| 암호화 키 | `./data/meetnote.key` | Fernet key |
+| 감사 로그 | `./data/audit.log` | JSONL |
 | 회의록 | Obsidian vault | Markdown + YAML frontmatter |
-| 설정 | `backend/config.yaml` | YAML |
-| 플러그인 설정 | vault `.obsidian/plugins/meetnote/data.json` | JSON |
+| 서버 설정 | `.env` → `config_env.py` | 환경변수 |
+| 플러그인 설정 | `.obsidian/plugins/meetnote/data.json` | JSON |
 
-## 모델 캐시
+---
 
-최초 실행 시 HuggingFace에서 다운로드, 이후 로컬 캐시:
+## Docker 배포
 
-| 모델 | 크기 | 용도 |
-|------|------|------|
-| mlx-community/whisper-large-v3-turbo | ~1.5GB | 전사 |
-| pyannote/speaker-diarization-3.1 | ~300MB | 화자구분 |
-| pyannote/wespeaker-voxceleb-resnet34-LM | ~50MB | 화자 embedding |
+```
+┌─ Docker Image (base + app) ────────────────────────┐
+│                                                      │
+│  ghcr.io/changsu-jin/meetnote-server-base:latest    │
+│  ├── Python 3.11 + pip packages                     │
+│  └── 모델 (사전 포함, ~6GB)                          │
+│       ├── whisper-large-v3-turbo (~1.5GB)            │
+│       ├── speaker-diarization-3.1 (~300MB)           │
+│       └── wespeaker-voxceleb (~50MB)                 │
+│                                                      │
+│  ghcr.io/changsu-jin/meetnote-server:latest         │
+│  └── 서버 코드 (~50MB)                               │
+│                                                      │
+│  Volume: ./data/ ←→ /app/data/                      │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
 
-캐시 위치: `~/.cache/huggingface/hub/`
+- **base 이미지**: pip + 모델 포함. 거의 안 바뀜
+- **app 이미지**: `FROM base` + 코드. 매 릴리즈 ~2분 빌드
+- **Volume**: `./data/`에 녹음/화자DB/로그 영속화
+
+---
+
+## GPU 자동 감지
+
+```python
+# config_env.py
+CUDA 사용 가능 → "cuda"
+MPS 사용 가능  → "mps"  (Apple Silicon)
+그 외          → "cpu"
+```
+
+| 환경 | 디바이스 | 60분 회의 처리 |
+|------|---------|-------------|
+| NVIDIA GPU (Docker) | cuda | ~5분 |
+| Apple Silicon (venv) | mps | ~5분 |
+| CPU only | cpu | ~40분 |

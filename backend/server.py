@@ -1,4 +1,7 @@
-"""FastAPI + WebSocket server bridging the Obsidian plugin and audio processing modules.
+"""FastAPI + WebSocket server — pure audio processing engine.
+
+Receives audio chunks from the Obsidian plugin via WebSocket,
+performs STT + speaker diarization + merging, and returns results.
 
 Run with:  python server.py
 """
@@ -6,29 +9,32 @@ Run with:  python server.py
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import os
+import struct
 import threading
+import wave
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import uvicorn
-import yaml
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from recorder.analytics import SpeakerStats, compute_speaking_stats
-from recorder.audio import AudioConfig, AudioRecorder, RecordingMode, list_devices
-from recorder.crypto import RecordingCrypto, SecurityConfig
+from config_env import AppConfig, load_config, config_to_transcriber_dict
+from recorder.analytics import compute_speaking_stats
+from recorder.crypto import RecordingCrypto, SecurityConfig as CryptoSecurityConfig
 from recorder.meeting_search import MeetingSearcher
 from recorder.diarizer import Diarizer
 from recorder.merger import merge
-from recorder.slack_sender import SlackConfig, SlackSender
 from recorder.transcript_corrector import correct_transcript, apply_correction
 from recorder.speaker_db import SpeakerDB
-from recorder.summarizer import Summarizer
 from recorder.transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
@@ -37,71 +43,50 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+_app_config: AppConfig = load_config()
 
 
 # ---------------------------------------------------------------------------
-# Config helpers
+# API Key middleware
 # ---------------------------------------------------------------------------
 
-def load_config() -> dict[str, Any]:
-    """Load config.yaml, with .env overrides for secrets."""
-    import os
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Require Bearer token if API_KEY is configured."""
 
-    # Load .env if exists (for secrets like HF token)
-    env_path = Path(__file__).resolve().parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().strip().split("\n"):
-            if "=" in line and not line.startswith("#"):
-                key, val = line.split("=", 1)
-                os.environ[key.strip()] = val.strip()
+    async def dispatch(self, request: Request, call_next):
+        api_key = _app_config.server.api_key
+        if not api_key:
+            return await call_next(request)
 
-    # Override config from environment variables
-    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
-    if hf_token:
-        config.setdefault("diarization", {})["huggingface_token"] = hf_token
+        # Skip auth for health check
+        if request.url.path == "/health":
+            return await call_next(request)
 
-    return config
+        auth = request.headers.get("Authorization", "")
+        if auth == f"Bearer {api_key}":
+            return await call_next(request)
+
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
-def _validate_config(config: dict) -> None:
-    """Validate critical config at startup."""
-    audio_cfg = config.get("audio", {})
-    save_path = audio_cfg.get("save_path", "./recordings")
-    if save_path:
-        Path(save_path).mkdir(parents=True, exist_ok=True)
-        logger.info("Recording save path ready: %s", Path(save_path).resolve())
-
-    whisper_cfg = config.get("whisper", {})
-    model_size = whisper_cfg.get("model_size", "large-v3-turbo")
-    valid_models = {"tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"}
-    if model_size not in valid_models:
-        logger.warning("Unknown whisper model '%s', falling back to 'large-v3-turbo'.", model_size)
-        whisper_cfg["model_size"] = "large-v3-turbo"
-
-    server_cfg = config.get("server", {})
-    port = server_cfg.get("port", 8765)
-    if not isinstance(port, int) or port < 1 or port > 65535:
-        logger.warning("Invalid server port %s, using default 8765.", port)
-        server_cfg["port"] = 8765
-
-
-# Global mutable config that can be patched at runtime via POST /config.
-_config: dict[str, Any] = load_config()
-_validate_config(_config)
-
+# ---------------------------------------------------------------------------
+# Vault file writer
+# ---------------------------------------------------------------------------
 
 def _write_result_to_vault(
     vault_file_path: str,
     segments: list[dict],
     speaker_map: dict[str, str],
-    summary: str,
     speaking_stats: list[dict],
 ) -> None:
     """Write meeting result directly to a vault markdown file."""
-    from datetime import datetime
+    from datetime import datetime, date as _date
+    import re as _re
 
     # Collect speakers
     speakers = []
@@ -111,20 +96,18 @@ def _write_result_to_vault(
             speakers.append(seg["speaker"])
             seen.add(seg["speaker"])
 
-    # Build content
     lines = []
 
     # Header
-    now = datetime.now()
     lines.append("## 회의 녹취록")
     lines.append("")
     lines.append(f"> 참석자: {', '.join(speakers)} (자동 감지 {len(speakers)}명)")
     lines.append("")
 
-    # Speaking stats
+    # Speaking stats (always show section)
+    lines.append("### 발언 비율")
+    lines.append("")
     if speaking_stats:
-        lines.append("### 발언 비율")
-        lines.append("")
         for stat in speaking_stats:
             pct = round(stat.get("ratio", 0) * 100)
             secs = stat.get("total_seconds", 0)
@@ -134,16 +117,35 @@ def _write_result_to_vault(
             filled = round(stat.get("ratio", 0) * bar_w)
             bar = "\u25A0" * filled + "\u25A1" * (bar_w - filled)
             lines.append(f"> {stat['speaker']} {pct}% {bar} ({mins}분 {sec}초)")
-        lines.append("")
+    else:
+        lines.append("(없음)")
+    lines.append("")
 
-    # Summary
-    if summary:
-        lines.append(summary.strip())
-        lines.append("")
-        lines.append("---")
-        lines.append("")
+    # Summary placeholder sections (plugin will replace with Claude CLI output)
+    lines.append("### 요약")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
 
-    # Transcript — group consecutive same speaker
+    lines.append("### 주요 결정사항")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("### 액션아이템")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("### 태그")
+    lines.append("")
+    lines.append("(요약 생성 중...)")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+
+    # Transcript
     lines.append("## 녹취록")
     lines.append("")
 
@@ -160,7 +162,6 @@ def _write_result_to_vault(
             texts.append(segments[i]["text"].strip())
             last_ts = segments[i]["timestamp"]
 
-        # Format timestamps as HH:MM:SS
         def fmt(ts):
             h = int(ts // 3600)
             m = int((ts % 3600) // 60)
@@ -175,24 +176,20 @@ def _write_result_to_vault(
         lines.append("")
         i += 1
 
+    # Related meetings placeholder
+    lines.append("")
+    lines.append("### 연관 회의")
+    lines.append("")
+    lines.append("(없음)")
+    lines.append("")
+
     content = "\n".join(lines)
 
-    # Extract tags from summary
-    import re as _re_tags
-    tags = ["회의"]
-    tag_match = _re_tags.search(r'###\s*태그\s*\n([\s\S]*?)(?=\n###|\n##|$)', summary)
-    if tag_match:
-        found = _re_tags.findall(r'#([\w가-힣]+)', tag_match.group(1))
-        tags = list(dict.fromkeys(["회의"] + found))  # dedupe, keep order
-
-    # Build/update frontmatter
-    from datetime import date as _date
+    # Build frontmatter
     fm_lines = ["---"]
     fm_lines.append("type: meeting")
-    if tags:
-        fm_lines.append("tags:")
-        for t in tags:
-            fm_lines.append(f"  - {t}")
+    fm_lines.append("tags:")
+    fm_lines.append("  - 회의")
     fm_lines.append(f"date: {_date.today().isoformat()}")
     if speakers:
         fm_lines.append("participants:")
@@ -204,95 +201,45 @@ def _write_result_to_vault(
 
     # Read existing file and insert/replace
     vault_path = Path(vault_file_path)
+    start_marker = "<!-- meetnote-start -->"
+    end_marker = "<!-- meetnote-end -->"
+
     if vault_path.exists():
         existing = vault_path.read_text(encoding="utf-8")
-
-        # Replace meetnote section if markers exist
-        start_marker = "<!-- meetnote-start -->"
-        end_marker = "<!-- meetnote-end -->"
         start_idx = existing.find(start_marker)
         end_idx = existing.find(end_marker)
 
         if start_idx != -1 and end_idx != -1:
-            # Include the end marker itself in the replacement
             end_idx_full = end_idx + len(end_marker)
             new_content = (
-                existing[:start_idx] +
-                start_marker + "\n\n" +
-                content + "\n" +
-                end_marker + "\n" +
-                existing[end_idx_full:]
+                existing[:start_idx]
+                + start_marker + "\n\n" + content + "\n" + end_marker + "\n"
+                + existing[end_idx_full:]
             )
         else:
             new_content = existing + "\n\n" + start_marker + "\n\n" + content + "\n" + end_marker + "\n"
     else:
         new_content = start_marker + "\n\n" + content + "\n" + end_marker + "\n"
 
-    # Clean up leftover live section (real-time transcription remnants)
-    import re as _re
+    # Clean up
     new_content = _re.sub(
-        r'<!-- meetnote-live-start -->[\s\S]*?<!-- meetnote-live-end -->\s*',
-        '', new_content
+        r'<!-- meetnote-live-start -->[\s\S]*?<!-- meetnote-live-end -->\s*', '', new_content
     )
-    # Remove duplicate empty meetnote sections
     new_content = _re.sub(
-        r'<!-- meetnote-start -->\s*## 회의 녹취록\s*<!-- meetnote-end -->\s*',
-        '', new_content
+        r'<!-- meetnote-start -->\s*## 회의 녹취록\s*<!-- meetnote-end -->\s*', '', new_content
     )
-    # Remove duplicate blank lines
     new_content = _re.sub(r'\n{4,}', '\n\n\n', new_content)
 
     # Update frontmatter
     if new_content.startswith("---\n"):
-        # Replace existing frontmatter
         new_content = _re.sub(r'^---\n[\s\S]*?\n---\n*', '', new_content)
     new_content = frontmatter + new_content
 
     vault_path.write_text(new_content, encoding="utf-8")
 
 
-def _update_document_speaker(document_path: str, old_name: str, new_name: str) -> None:
-    """Replace a speaker name in the vault document (text + frontmatter)."""
-    import re as _re
-
-    # Resolve absolute path — document_path is relative to vault
-    # Try common vault locations
-    for base in [
-        Path.home() / "Works" / "management",
-        Path.cwd().parent,
-    ]:
-        full_path = base / document_path
-        if full_path.exists():
-            try:
-                content = full_path.read_text(encoding="utf-8")
-                updated = content
-                # Replace **old** → **new** (speaker in transcript)
-                updated = updated.replace(f"**{old_name}**", f"**{new_name}**")
-                # Replace in speaking stats: > old 45% → > new 45%
-                updated = _re.sub(rf"> {_re.escape(old_name)} ", f"> {new_name} ", updated)
-                # Replace in participants frontmatter
-                updated = updated.replace(f"  - {old_name}", f"  - {new_name}")
-                # Replace in header participants line
-                updated = _re.sub(
-                    rf"({_re.escape(old_name)})(,|\s|\()",
-                    rf"{new_name}\2",
-                    updated,
-                )
-                if updated != content:
-                    full_path.write_text(updated, encoding="utf-8")
-                    logger.info("Document updated: %s → %s in %s", old_name, new_name, document_path)
-            except Exception as exc:
-                logger.warning("Failed to update document %s: %s", document_path, exc)
-            return
-
-    logger.warning("Document not found: %s", document_path)
-
-
 def _parse_speaker_map(raw_map: dict) -> tuple[dict[str, str], dict[str, str]]:
-    """Parse speaker_map from meta — supports both legacy (str) and rich ({name, email}) formats.
-
-    Returns (name_map, email_map).
-    """
+    """Parse speaker_map — supports both legacy (str) and rich ({name, email}) formats."""
     name_map: dict[str, str] = {}
     email_map: dict[str, str] = {}
     for label, val in raw_map.items():
@@ -308,18 +255,15 @@ def _parse_speaker_map(raw_map: dict) -> tuple[dict[str, str], dict[str, str]]:
 def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict) -> None:
     """Save speaker embeddings + rich speaker_map to .meta.json."""
     import json as _json
-    import numpy as np
     meta_path = Path(wav_path).with_suffix(".meta.json")
     try:
         meta = {}
         if meta_path.exists():
             meta = _json.loads(meta_path.read_text())
-        # Store embeddings as lists (JSON-serializable)
         meta["embeddings"] = {
             label: emb.tolist() if hasattr(emb, "tolist") else list(emb)
             for label, emb in embeddings.items()
         }
-        # Build rich speaker_map with email from Speaker DB
         rich_map = {}
         for label, name in speaker_map.items():
             email = ""
@@ -337,49 +281,97 @@ def _save_embeddings_to_meta(wav_path: str, embeddings: dict, speaker_map: dict)
 
 
 # ---------------------------------------------------------------------------
+# Audio helpers
+# ---------------------------------------------------------------------------
+
+def _pcm_to_wav_bytes(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1, sample_width: int = 2) -> bytes:
+    """Convert raw PCM bytes to WAV format in memory."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return buf.getvalue()
+
+
+def _save_pcm_as_wav(pcm_data: bytes, path: str, sample_rate: int = 16000) -> None:
+    """Save raw PCM bytes as a WAV file."""
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+
+
+# ---------------------------------------------------------------------------
 # Application state
 # ---------------------------------------------------------------------------
 
-class AppState:
-    """Mutable singleton holding recording/processing state."""
+class RecordingSession:
+    """Per-WebSocket recording session state."""
 
-    def __init__(self) -> None:
+    def __init__(self, ws: WebSocket) -> None:
+        self.ws: WebSocket = ws
         self.recording: bool = False
         self.processing: bool = False
-        self.recorder: AudioRecorder | None = None
-        self.transcriber: Transcriber | None = None
-        self.diarizer: Diarizer | None = None
-        self.speaker_db: SpeakerDB | None = None
-        self.summarizer: Summarizer | None = None
-        self.slack_sender: SlackSender | None = None
-        self.crypto: RecordingCrypto | None = None
-        self.searcher: MeetingSearcher | None = None
-        self.active_ws: WebSocket | None = None
-        # Track chunk count so we can compute time_offset for each chunk.
-        self.chunk_index: int = 0
-        # Lock to prevent concurrent access to the transcriber model.
-        self.transcriber_lock = threading.Lock()
-        # Flag to skip chunk transcription when stopping.
         self.stopping: bool = False
-        # Accumulated chunk transcription results (reused at stop to skip re-transcription).
+        self.audio_buffer: bytearray = bytearray()
         self.chunk_segments: list = []
-        # Last meeting's speaker embeddings for post-hoc registration.
-        # Keys are diarization labels (e.g. "SPEAKER_00"), values are numpy arrays.
+        self.chunk_index: int = 0
         self.last_meeting_embeddings: dict = {}
-        # Speaker name map from the last meeting (diarization label -> display name).
         self.last_meeting_speaker_map: dict[str, str] = {}
-        # Previous meeting context for follow-up tracking (sent from plugin at start).
-        self.previous_context: str = ""
-        # Processing progress for polling from side panel
         self.process_progress: dict = {"stage": "", "percent": 0, "wav_path": ""}
+        self._document_name: str = ""
+        self._document_path: str = ""
+        self._user_id: str = ""
+        self._processing_lock = asyncio.Lock()
 
     def reset(self) -> None:
         self.recording = False
         self.processing = False
         self.stopping = False
-        self.recorder = None
         self.chunk_index = 0
         self.chunk_segments = []
+        self.audio_buffer = bytearray()
+
+
+class AppState:
+    """Shared resources across all sessions."""
+
+    def __init__(self) -> None:
+        self.transcriber: Transcriber | None = None
+        self.diarizer: Diarizer | None = None
+        self.speaker_db: SpeakerDB | None = None
+        self.crypto: RecordingCrypto | None = None
+        self.searcher: MeetingSearcher | None = None
+        self.transcriber_lock = threading.Lock()
+        # Active sessions (WebSocket → RecordingSession)
+        self.sessions: dict[WebSocket, RecordingSession] = {}
+
+    def get_session(self, ws: WebSocket) -> RecordingSession:
+        if ws not in self.sessions:
+            self.sessions[ws] = RecordingSession(ws)
+        return self.sessions[ws]
+
+    def remove_session(self, ws: WebSocket) -> None:
+        self.sessions.pop(ws, None)
+
+    @property
+    def last_meeting_embeddings(self) -> dict:
+        """Get last meeting embeddings from any session (backward compat for routers)."""
+        for s in self.sessions.values():
+            if s.last_meeting_embeddings:
+                return s.last_meeting_embeddings
+        return {}
+
+    @property
+    def last_meeting_speaker_map(self) -> dict:
+        """Get last meeting speaker map from any session (backward compat for routers)."""
+        for s in self.sessions.values():
+            if s.last_meeting_speaker_map:
+                return s.last_meeting_speaker_map
+        return {}
 
 
 state = AppState()
@@ -391,55 +383,53 @@ state = AppState()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Pre-load the transcriber model on startup so first recording is fast."""
+    """Pre-load models on startup."""
+    transcriber_config = config_to_transcriber_dict(_app_config)
+
     logger.info("Initialising transcriber (model loading may take a moment)...")
-    state.transcriber = Transcriber(_config)
-    # Load model eagerly in a background thread to avoid blocking the event loop.
+    state.transcriber = Transcriber(transcriber_config)
     await asyncio.to_thread(state.transcriber.load_model)
     logger.info("Transcriber ready.")
 
     state.diarizer = Diarizer(
-        huggingface_token=_config.get("diarization", {}).get("huggingface_token"),
+        huggingface_token=_app_config.diarization.huggingface_token,
     )
     logger.info("Diarizer created (pipeline loaded lazily on first use).")
 
     # Speaker DB
-    speaker_db_cfg = _config.get("speaker_db", {})
-    db_path = speaker_db_cfg.get("path", str(Path(__file__).resolve().parent / "speakers.json"))
-    threshold = speaker_db_cfg.get("similarity_threshold", 0.70)
-    state.speaker_db = SpeakerDB(db_path=db_path, similarity_threshold=threshold)
+    db_path = _app_config.speaker_db.path
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    state.speaker_db = SpeakerDB(
+        db_path=db_path,
+        similarity_threshold=_app_config.speaker_db.similarity_threshold,
+    )
     logger.info("Speaker DB ready (%d registered speakers).", len(state.speaker_db.list_speakers()))
 
-    # Summarizer
-    state.summarizer = Summarizer()
-    engines = await asyncio.to_thread(state.summarizer.detect_engines)
-    logger.info("Summarizer ready (engines: %s).", [e.value for e in engines])
-
-    # Slack sender
-    slack_cfg = SlackConfig.from_dict(_config.get("slack", {}))
-    state.slack_sender = SlackSender(slack_cfg)
-    logger.info("Slack sender ready (enabled=%s).", slack_cfg.enabled)
-
     # Security / crypto
-    sec_cfg = SecurityConfig.from_dict(_config.get("security", {}))
+    sec_cfg = CryptoSecurityConfig(
+        encryption_enabled=_app_config.security.encryption_enabled,
+        auto_delete_days=_app_config.security.auto_delete_days,
+        key_path=_app_config.security.key_path,
+        audit_log_path=_app_config.security.audit_log_path,
+    )
     state.crypto = RecordingCrypto(sec_cfg)
-    logger.info("Security ready (encryption=%s, auto_delete_days=%d).", sec_cfg.encryption_enabled, sec_cfg.auto_delete_days)
+    logger.info("Security ready (encryption=%s, auto_delete_days=%d).",
+                sec_cfg.encryption_enabled, sec_cfg.auto_delete_days)
 
     # Meeting searcher
     state.searcher = MeetingSearcher()
     logger.info("Meeting searcher ready.")
 
+    # Ensure recordings directory exists
+    Path(_app_config.recordings_path).mkdir(parents=True, exist_ok=True)
+
     # Run auto-deletion of old recordings on startup
-    audio_save_path = _config.get("audio", {}).get("save_path", "./recordings")
-    deleted = await asyncio.to_thread(state.crypto.cleanup_old_recordings, audio_save_path)
+    deleted = await asyncio.to_thread(state.crypto.cleanup_old_recordings, _app_config.recordings_path)
     if deleted:
         logger.info("Auto-deleted %d old recording(s).", deleted)
 
-    yield  # application is running
+    yield
 
-    # Cleanup: stop any in-progress recording.
-    if state.recorder and state.recorder.is_recording:
-        state.recorder.stop(save=False)
     logger.info("Server shutdown complete.")
 
 
@@ -449,9 +439,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MeetNote Backend", lifespan=lifespan)
 
+# API Key middleware
+app.add_middleware(APIKeyMiddleware)
+
+_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+# 기본값 "*"은 개발 편의를 위함. 운영 환경에서는 CORS_ORIGINS 환경변수로 제한 권장.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -460,7 +455,21 @@ app.add_middleware(
 # Initialize shared state for routers
 from routers.shared import set_state, set_config
 set_state(state)
-set_config(_config)
+# Provide a dict-like config for backward compatibility with routers
+_compat_config = {
+    "audio": {"save_path": _app_config.recordings_path},
+    "speaker_db": {
+        "path": _app_config.speaker_db.path,
+        "similarity_threshold": _app_config.speaker_db.similarity_threshold,
+    },
+    "security": {
+        "encryption_enabled": _app_config.security.encryption_enabled,
+        "key_path": _app_config.security.key_path,
+        "auto_delete_days": _app_config.security.auto_delete_days,
+        "audit_log_path": _app_config.security.audit_log_path,
+    },
+}
+set_config(_compat_config)
 
 # Include routers
 from routers.speakers import router as speakers_router
@@ -472,87 +481,57 @@ app.include_router(config_router)
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
-
-class ConfigUpdate(BaseModel):
-    """Partial config update payload for POST /config."""
-    audio: dict[str, Any] | None = None
-    whisper: dict[str, Any] | None = None
-    diarization: dict[str, Any] | None = None
-    merger: dict[str, Any] | None = None
-
-
-# ---------------------------------------------------------------------------
 # HTTP endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/devices")
-async def get_devices():
-    """Return available audio input devices."""
-    devices = await asyncio.to_thread(list_devices)
-    return [asdict(d) for d in devices]
+@app.get("/health")
+async def health_check():
+    """Health check with API version."""
+    active_recordings = sum(1 for s in state.sessions.values() if s.recording)
+    active_processing = sum(1 for s in state.sessions.values() if s.processing)
+    return {
+        "ok": True,
+        "api_version": _app_config.API_VERSION,
+        "active_recordings": active_recordings,
+        "active_processing": active_processing,
+        "transcriber": state.transcriber is not None,
+        "diarizer": state.diarizer is not None,
+        "speaker_db_count": len(state.speaker_db.list_speakers()) if state.speaker_db else 0,
+        "device": _app_config.whisper.device,
+        "model": _app_config.whisper.model_size,
+    }
 
-
-@app.get("/status")
-async def get_status():
-    """Return current recording / processing state."""
-    return {"recording": state.recording, "processing": state.processing}
-
-
-@app.post("/config")
-async def update_config(update: ConfigUpdate):
-    """Merge partial config updates into the runtime config."""
-    global _config
-    patch = update.model_dump(exclude_none=True)
-    for section, values in patch.items():
-        if section not in _config:
-            _config[section] = {}
-        _config[section].update(values)
-
-    # Re-create transcriber with updated config so model_size / language
-    # changes take effect on the next recording session.
-    state.transcriber = Transcriber(_config)
-
-    return {"ok": True, "config": _config}
-
-
-# ---------------------------------------------------------------------------
-# Server management endpoints
-# ---------------------------------------------------------------------------
 
 @app.post("/shutdown")
 async def shutdown_server():
     """Gracefully shut down the server."""
     import os, signal
     logger.info("Shutdown requested via API.")
-    # Schedule shutdown after response is sent
     asyncio.get_event_loop().call_later(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
     return {"ok": True, "message": "Shutting down..."}
 
 
-@app.get("/health")
-async def health_check():
-    """Health check with detailed server info."""
-    return {
-        "ok": True,
-        "recording": state.recording,
-        "processing": state.processing,
-        "transcriber": state.transcriber is not None,
-        "diarizer": state.diarizer is not None,
-        "speaker_db_count": len(state.speaker_db.list_speakers()) if state.speaker_db else 0,
-    }
+@app.get("/status")
+async def get_status():
+    """Return current recording / processing state."""
+    active_recordings = sum(1 for s in state.sessions.values() if s.recording)
+    active_processing = sum(1 for s in state.sessions.values() if s.processing)
+    return {"recording": active_recordings > 0, "processing": active_processing > 0}
 
 
 @app.get("/recordings/progress")
 async def get_processing_progress():
     """Return current processing progress for side panel polling."""
-    return {
-        "processing": state.processing,
-        "stage": state.process_progress["stage"],
-        "percent": state.process_progress["percent"],
-        "wav_path": state.process_progress["wav_path"],
-    }
+    # Find any active processing session
+    for s in state.sessions.values():
+        if s.processing:
+            return {
+                "processing": True,
+                "stage": s.process_progress["stage"],
+                "percent": s.process_progress["percent"],
+                "wav_path": s.process_progress["wav_path"],
+            }
+    return {"processing": False, "stage": "", "percent": 0, "wav_path": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -560,37 +539,38 @@ async def get_processing_progress():
 # ---------------------------------------------------------------------------
 
 @app.get("/recordings/pending")
-async def get_pending_recordings():
-    """List WAV recordings that haven't been processed yet.
+async def get_pending_recordings(user_id: str = ""):
+    """List WAV recordings that haven't been processed yet."""
+    import json as _json
 
-    A recording is 'pending' if it has a .wav file but no corresponding
-    .done marker file in the recordings directory.
-    """
-    import os
-    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+    recordings_dir = Path(_app_config.recordings_path)
     if not recordings_dir.exists():
         return {"recordings": []}
 
-    import json as _json
     pending = []
     for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
         done_marker = f.with_suffix(".done")
         if done_marker.exists():
             continue
         stat = f.stat()
-        duration_est = stat.st_size / (16000 * 2)  # 16kHz, 16-bit mono
+        duration_est = stat.st_size / (16000 * 2)
 
-        # Load metadata if exists
         meta_path = f.with_suffix(".meta.json")
         document_name = ""
         document_path = ""
+        meta_user_id = ""
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 document_name = meta.get("document_name", "")
                 document_path = meta.get("document_path", "")
+                meta_user_id = meta.get("user_id", "")
             except Exception:
                 pass
+
+        # Filter by user_id if provided
+        if user_id and meta_user_id != user_id:
+            continue
 
         pending.append({
             "filename": f.name,
@@ -606,14 +586,14 @@ async def get_pending_recordings():
 
 
 @app.get("/recordings/all")
-async def get_all_recordings():
+async def get_all_recordings(user_id: str = ""):
     """List all recordings with their processing status."""
-    import os
-    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
+    import json as _json
+
+    recordings_dir = Path(_app_config.recordings_path)
     if not recordings_dir.exists():
         return {"recordings": []}
 
-    import json as _json
     all_recs = []
     for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
         done_marker = f.with_suffix(".done")
@@ -623,20 +603,14 @@ async def get_all_recordings():
         meta_path = f.with_suffix(".meta.json")
         document_name = ""
         document_path = ""
+        meta_user_id = ""
+        unregistered_speakers = 0
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
                 document_name = meta.get("document_name", "")
                 document_path = meta.get("document_path", "")
-            except Exception:
-                pass
-
-        # Check for unregistered speakers by matching embeddings against DB
-        unregistered_speakers = 0
-        total_speakers = 0
-        if meta_path.exists():
-            try:
-                meta = _json.loads(meta_path.read_text())
+                meta_user_id = meta.get("user_id", "")
                 sp_map = meta.get("speaker_map", {})
                 embs = meta.get("embeddings", {})
                 if sp_map:
@@ -645,10 +619,13 @@ async def get_all_recordings():
                         if display.startswith("화자"):
                             unregistered_speakers += 1
                 elif embs:
-                    # speaker_map empty but embeddings exist → all unregistered
                     unregistered_speakers = len(embs)
             except Exception:
                 pass
+
+        # Filter by user_id if provided
+        if user_id and meta_user_id != user_id:
+            continue
 
         all_recs.append({
             "filename": f.name,
@@ -665,35 +642,168 @@ async def get_all_recordings():
     return {"recordings": all_recs}
 
 
+def _validate_recording_path(wav_path: str) -> Path:
+    """Validate that a recording path is within the recordings directory.
+    Raises HTTPException if path traversal is detected."""
+    resolved = Path(wav_path).resolve()
+    recordings_dir = Path(_app_config.recordings_path).resolve()
+    if not str(resolved).startswith(str(recordings_dir)):
+        raise HTTPException(status_code=403, detail="Invalid recording path")
+    return resolved
+
+
+class RecordingDeleteRequest(BaseModel):
+    wav_path: str
+
+
+@app.post("/recordings/delete")
+async def delete_recording(req: RecordingDeleteRequest):
+    """Delete WAV + meta + done marker files."""
+    _validate_recording_path(req.wav_path)
+    deleted = []
+    for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
+        p = Path(req.wav_path).with_suffix(suffix)
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+
+    logger.info("Deleted recording files: %s", deleted)
+    return {"ok": True, "deleted": deleted}
+
+
+class RecordingRequeueRequest(BaseModel):
+    wav_path: str
+
+
+@app.post("/recordings/requeue")
+async def requeue_recording(req: RecordingRequeueRequest):
+    """Move a completed recording back to pending."""
+    _validate_recording_path(req.wav_path)
+    import json as _json
+
+    done_marker = Path(req.wav_path).with_suffix(".done")
+    if not done_marker.exists():
+        return {"ok": False, "message": "이미 대기 중입니다."}
+
+    done_marker.unlink()
+
+    meta_path = Path(req.wav_path).with_suffix(".meta.json")
+    if meta_path.exists():
+        try:
+            meta = _json.loads(meta_path.read_text())
+            meta.pop("speaker_map", None)
+            meta.pop("embeddings", None)
+            meta.pop("manual_participants", None)
+            meta.pop("skip_speaker_matching", None)
+            meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+        except Exception:
+            pass
+
+    logger.info("Requeued recording: %s", req.wav_path)
+    return {"ok": True}
+
+
+class RecordingUpdateMetaRequest(BaseModel):
+    old_path: str
+    new_path: str
+    new_name: str
+
+
+@app.post("/recordings/update-meta")
+async def update_recording_meta(req: RecordingUpdateMetaRequest):
+    """Update document_name/path in meta files when document is renamed."""
+    import json as _json
+
+    recordings_dir = Path(_app_config.recordings_path)
+    updated = 0
+    for meta_path in recordings_dir.glob("*.meta.json"):
+        try:
+            meta = _json.loads(meta_path.read_text())
+            if meta.get("document_path") == req.old_path:
+                meta["document_name"] = req.new_name
+                meta["document_path"] = req.new_path
+                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+                updated += 1
+        except Exception:
+            continue
+
+    return {"ok": True, "updated": updated}
+
+
 # ---------------------------------------------------------------------------
-# Speaker management endpoints
+# Process file endpoint
 # ---------------------------------------------------------------------------
 
+@app.get("/recordings/results/{filename}")
+async def get_recording_results(filename: str):
+    """Get saved processing results for a recording (for offline plugin pickup)."""
+    import json as _json
+    recordings_dir = Path(_app_config.recordings_path)
+    meta_path = recordings_dir / filename.replace(".wav", ".meta.json")
+
+    if not meta_path.exists():
+        return {"ok": False, "message": "Meta file not found"}
+
+    meta = _json.loads(meta_path.read_text())
+    results = meta.get("processing_results")
+    if not results:
+        return {"ok": False, "message": "No processing results"}
+
+    return {
+        "ok": True,
+        "document_name": meta.get("document_name", ""),
+        "document_path": meta.get("document_path", ""),
+        **results,
+    }
+
+
+@app.post("/recordings/results/{filename}/written")
+async def mark_results_written(filename: str):
+    """Mark processing results as written to vault (plugin confirms)."""
+    import json as _json
+    recordings_dir = Path(_app_config.recordings_path)
+    meta_path = recordings_dir / filename.replace(".wav", ".meta.json")
+
+    if not meta_path.exists():
+        return {"ok": False}
+
+    meta = _json.loads(meta_path.read_text())
+    if "processing_results" in meta:
+        del meta["processing_results"]
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+    return {"ok": True}
+
+
 class ProcessFileRequest(BaseModel):
-    """Process an existing WAV file through the full pipeline."""
     file_path: str
-    vault_file_path: str = ""  # Absolute path to vault .md file — write result directly
+    vault_file_path: str = ""
 
 
 @app.post("/process-file")
 async def process_file(req: ProcessFileRequest):
-    """Process an existing WAV file and send results via active WebSocket."""
-    from pathlib import Path as P
-
+    """Process an existing WAV file through the full pipeline."""
+    _validate_recording_path(req.file_path)
     wav_path = req.file_path
-    if not P(wav_path).exists():
+    if not Path(wav_path).exists():
         return {"ok": False, "message": f"File not found: {wav_path}"}
 
-    ws = state.active_ws
-    if not ws:
-        return {"ok": False, "message": "No WebSocket client connected. Open Obsidian first."}
+    # Find the requesting session (use the first connected session)
+    ws = None
+    session = None
+    for s in state.sessions.values():
+        ws = s.ws
+        session = s
+        break
+    if not ws or not session:
+        return {"ok": False, "message": "No WebSocket client connected."}
 
-    if state.processing:
+    if session._processing_lock.locked():
         return {"ok": False, "message": "Already processing"}
+    await session._processing_lock.acquire()
 
-    # Run the same pipeline as handle_stop but with an existing file
-    state.processing = True
-    state.process_progress = {"stage": "준비 중", "percent": 0, "wav_path": wav_path}
+    session.processing = True
+    session.process_progress = {"stage": "준비 중", "percent": 0, "wav_path": wav_path}
     await send_status(ws)
 
     stage_labels = {
@@ -702,11 +812,10 @@ async def process_file(req: ProcessFileRequest):
         "speaker_embedding": "음성 특징 추출",
         "merging": "결과 병합",
         "correcting": "교정 중",
-        "summarizing": "요약 중",
     }
 
     async def progress(stage: str, percent: float) -> None:
-        state.process_progress = {
+        session.process_progress = {
             "stage": stage_labels.get(stage, stage),
             "percent": percent,
             "wav_path": wav_path,
@@ -737,7 +846,6 @@ async def process_file(req: ProcessFileRequest):
                 )
                 await progress("speaker_embedding", 82.0)
 
-                # Always match against Speaker DB
                 if state.speaker_db and speaker_embeddings:
                     match_results = state.speaker_db.match_speakers(speaker_embeddings)
                     speaker_map = {r.speaker_id: r.display_name for r in match_results}
@@ -746,7 +854,7 @@ async def process_file(req: ProcessFileRequest):
         except Exception as diar_exc:
             logger.warning("Diarization skipped: %s", diar_exc)
 
-        # Ensure all speakers have a name (never SPEAKER_XX in output)
+        # Ensure all speakers have a name
         if diarization_segments:
             all_labels = sorted(set(s.speaker for s in diarization_segments))
             unknown_idx = sum(1 for v in speaker_map.values() if v.startswith("화자"))
@@ -755,10 +863,9 @@ async def process_file(req: ProcessFileRequest):
                     unknown_idx += 1
                     speaker_map[label] = f"화자{unknown_idx}"
 
-        state.last_meeting_embeddings = speaker_embeddings
-        state.last_meeting_speaker_map = speaker_map
+        session.last_meeting_embeddings = speaker_embeddings
+        session.last_meeting_speaker_map = speaker_map
 
-        # Persist embeddings to meta file
         if speaker_embeddings:
             _save_embeddings_to_meta(req.file_path, speaker_embeddings, speaker_map)
 
@@ -775,7 +882,7 @@ async def process_file(req: ProcessFileRequest):
         await progress("merging", 90.0)
         if diarization_segments:
             merged = await asyncio.to_thread(
-                merge, transcription_segments, diarization_segments, speaker_map=speaker_map,
+                merge, transcription_segments, diarization_segments, speaker_map=speaker_map, merge_consecutive=True,
             )
             final_segments = [
                 {"timestamp": s.timestamp, "speaker": s.speaker, "text": s.text}
@@ -789,7 +896,7 @@ async def process_file(req: ProcessFileRequest):
 
         # Correction
         if final_segments:
-            await progress("correcting", 88.0)
+            await progress("correcting", 92.0)
             try:
                 correction = await asyncio.to_thread(correct_transcript, final_segments)
                 if correction.success:
@@ -798,46 +905,63 @@ async def process_file(req: ProcessFileRequest):
             except Exception as corr_exc:
                 logger.warning("Transcript correction failed: %s", corr_exc)
 
-        # Summarize
-        summary_text = ""
-        if state.summarizer and final_segments:
-            await progress("summarizing", 92.0)
-            try:
-                summary_result = await asyncio.to_thread(
-                    state.summarizer.summarize, final_segments,
-                    previous_context=state.previous_context,
-                )
-                if summary_result.success:
-                    summary_text = summary_result.summary
-            except Exception as sum_exc:
-                logger.warning("Summary generation failed: %s", sum_exc)
-
-        # Send final
+        # Send final (no summary — plugin handles it)
         await ws_send(ws, {
             "type": "final",
             "segments": final_segments,
             "speaker_map": speaker_map,
-            "summary": summary_text,
             "speaking_stats": speaking_stats,
         })
         logger.info("Process-file complete: %d segments.", len(final_segments))
 
-        # Write result directly to vault file if path provided
+        # Write to vault if path provided
         if req.vault_file_path:
             try:
                 _write_result_to_vault(
                     req.vault_file_path, final_segments,
-                    speaker_map, summary_text, speaking_stats,
+                    speaker_map, speaking_stats,
                 )
-                logger.info("Result written directly to vault: %s", req.vault_file_path)
+                logger.info("Result written to vault: %s", req.vault_file_path)
+
+                # Save vault_file_path to meta for speaker update
+                import json as _json_meta
+                meta_path = Path(req.file_path).with_suffix(".meta.json")
+                if meta_path.exists():
+                    meta = _json_meta.loads(meta_path.read_text())
+                    meta["vault_file_path"] = req.vault_file_path
+                    meta_path.write_text(_json_meta.dumps(meta, ensure_ascii=False))
             except Exception as write_exc:
                 logger.warning("Failed to write to vault: %s", write_exc)
+
+        # Save processing results to meta.json (for offline plugin pickup)
+        import json as _json_results
+        meta_path = Path(req.file_path).with_suffix(".meta.json")
+        try:
+            meta = _json_results.loads(meta_path.read_text()) if meta_path.exists() else {}
+            meta["processing_results"] = {
+                "segments_data": final_segments,
+                "speaking_stats": speaking_stats,
+                "speaker_map": speaker_map,
+                "processed_at": __import__('datetime').datetime.now().isoformat(),
+            }
+            if req.vault_file_path:
+                meta["vault_file_path"] = req.vault_file_path
+            meta_path.write_text(_json_results.dumps(meta, ensure_ascii=False))
+            logger.info("Processing results saved to meta: %s", meta_path)
+        except Exception as meta_exc:
+            logger.warning("Failed to save results to meta: %s", meta_exc)
 
         # Mark as processed
         done_marker = Path(req.file_path).with_suffix(".done")
         done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
 
-        return {"ok": True, "segments": len(final_segments)}
+        return {
+            "ok": True,
+            "segments": len(final_segments),
+            "segments_data": final_segments,
+            "speaking_stats": speaking_stats,
+            "speaker_map": speaker_map,
+        }
 
     except Exception as exc:
         logger.exception("Process-file failed")
@@ -845,95 +969,11 @@ async def process_file(req: ProcessFileRequest):
         return {"ok": False, "message": str(exc)}
 
     finally:
-        state.processing = False
-        state.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
+        session.processing = False
+        session.process_progress = {"stage": "", "percent": 0, "wav_path": ""}
+        if session._processing_lock.locked():
+            session._processing_lock.release()
         await send_status(ws)
-
-
-
-
-# Speaker, participant, email, slack, security, and search endpoints
-# are now in routers/speakers.py, routers/email.py, routers/config.py
-
-
-
-class RecordingDeleteRequest(BaseModel):
-    """Delete a recording and all associated files."""
-    wav_path: str
-
-
-@app.post("/recordings/delete")
-async def delete_recording(req: RecordingDeleteRequest):
-    """Delete WAV + meta + done marker files."""
-    deleted = []
-    for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
-        p = Path(req.wav_path).with_suffix(suffix)
-        if p.exists():
-            p.unlink()
-            deleted.append(p.name)
-
-    logger.info("Deleted recording files: %s", deleted)
-    return {"ok": True, "deleted": deleted}
-
-
-class RecordingRequeueRequest(BaseModel):
-    wav_path: str
-
-
-class RecordingUpdateMetaRequest(BaseModel):
-    old_path: str
-    new_path: str
-    new_name: str
-
-
-@app.post("/recordings/update-meta")
-async def update_recording_meta(req: RecordingUpdateMetaRequest):
-    """Update document_name/path in meta files when document is renamed."""
-    import json as _json
-    recordings_dir = Path(_config.get("audio", {}).get("save_path", "./recordings"))
-    updated = 0
-
-    for meta_path in recordings_dir.glob("*.meta.json"):
-        try:
-            meta = _json.loads(meta_path.read_text())
-            if meta.get("document_path") == req.old_path:
-                meta["document_name"] = req.new_name
-                meta["document_path"] = req.new_path
-                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-                updated += 1
-                logger.info("Updated meta %s: %s → %s", meta_path.name, req.old_path, req.new_path)
-        except Exception:
-            continue
-
-    return {"ok": True, "updated": updated}
-
-
-@app.post("/recordings/requeue")
-async def requeue_recording(req: RecordingRequeueRequest):
-    """Move a completed recording back to pending. Resets speaker/participant data."""
-    import json as _json
-
-    done_marker = Path(req.wav_path).with_suffix(".done")
-    if not done_marker.exists():
-        return {"ok": False, "message": "이미 대기 중입니다."}
-
-    done_marker.unlink()
-
-    # Reset speaker/participant data in meta
-    meta_path = Path(req.wav_path).with_suffix(".meta.json")
-    if meta_path.exists():
-        try:
-            meta = _json.loads(meta_path.read_text())
-            meta.pop("speaker_map", None)
-            meta.pop("embeddings", None)
-            meta.pop("manual_participants", None)
-            meta.pop("skip_speaker_matching", None)
-            meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-        except Exception:
-            pass
-
-    logger.info("Requeued recording (reset participants): %s", req.wav_path)
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -949,405 +989,177 @@ async def ws_send(ws: WebSocket, msg: dict[str, Any]) -> None:
 
 
 async def send_status(ws: WebSocket) -> None:
+    session = state.sessions.get(ws)
     await ws_send(ws, {
         "type": "status",
-        "recording": state.recording,
-        "processing": state.processing,
+        "recording": session.recording if session else False,
+        "processing": session.processing if session else False,
+    })
+
+
+async def send_session_status(session: RecordingSession) -> None:
+    await ws_send(session.ws, {
+        "type": "status",
+        "recording": session.recording,
+        "processing": session.processing,
     })
 
 
 # ---------------------------------------------------------------------------
-# Recording logic (runs in background task)
+# Recording logic — audio received from plugin via WebSocket
 # ---------------------------------------------------------------------------
 
 async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = None):
-    """Start an audio recording session."""
-    if state.recording:
+    """Prepare for receiving audio chunks from the plugin."""
+    session = state.get_session(ws)
+
+    if session.recording:
         await ws_send(ws, {"type": "error", "message": "Recording already in progress"})
         return
 
-    # Extract previous_context if provided (for follow-up tracking)
-    if config_overrides and "previous_context" in config_overrides:
-        state.previous_context = config_overrides.pop("previous_context", "")
-    else:
-        state.previous_context = ""
-
-    # Extract document info for metadata
-    state._document_name = ""
-    state._document_path = ""
+    session._document_name = ""
+    session._document_path = ""
+    session._user_id = ""
     if config_overrides:
-        state._document_name = config_overrides.pop("document_name", "")
-        state._document_path = config_overrides.pop("document_path", "")
+        session._document_name = config_overrides.pop("document_name", "")
+        session._document_path = config_overrides.pop("document_path", "")
+        session._user_id = config_overrides.pop("user_id", "")
 
-    # Apply any per-session config overrides.
-    effective_config = dict(_config)
-    if config_overrides:
-        for section, values in config_overrides.items():
-            if section not in effective_config:
-                effective_config[section] = {}
-            if isinstance(values, dict):
-                effective_config[section] = {**effective_config.get(section, {}), **values}
-            else:
-                effective_config[section] = values
+    session.recording = True
+    session.audio_buffer = bytearray()
+    session.chunk_segments = []
+    session.chunk_index = 0
+    session.stopping = False
 
-    # Build audio config.
-    audio_cfg_raw = effective_config.get("audio", {})
-    audio_config = AudioConfig(
-        sample_rate=audio_cfg_raw.get("sample_rate", 16000),
-        channels=audio_cfg_raw.get("channels", 1),
-        chunk_duration=audio_cfg_raw.get("chunk_duration", 30),
-        device=audio_cfg_raw.get("device"),
-        save_path=audio_cfg_raw.get("save_path", "./recordings"),
-    )
+    if state.crypto:
+        state.crypto.audit.log("recording_started", {"mode": "remote", "user_id": session._user_id})
 
-    chunk_duration = audio_config.chunk_duration
-    loop = asyncio.get_event_loop()
-    state.chunk_index = 0
+    await send_session_status(session)
+    logger.info("Recording session started for user '%s'.", session._user_id)
 
-    def on_chunk(audio_data, sample_rate: int):
-        """Called from a background thread each time a chunk is ready."""
-        if state.stopping:
-            logger.info("Chunk skipped — recording is stopping.")
+
+async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
+    """Process a binary audio chunk received from the plugin."""
+    session = state.get_session(ws)
+
+    if not session.recording:
+        return
+
+    # Accumulate raw PCM for final WAV
+    session.audio_buffer.extend(pcm_data)
+
+    # Convert PCM to numpy array for transcription
+    audio_array = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+    # Calculate time offset from actual audio data (16kHz, 16bit = 2 bytes/sample)
+    sample_rate = 16000
+    chunk_duration = len(audio_array) / sample_rate
+    time_offset = (len(session.audio_buffer) - len(pcm_data)) / (sample_rate * 2)
+
+    session.chunk_index += 1
+    logger.info("Audio chunk #%d received: %.1fs at offset %.1fs", session.chunk_index, chunk_duration, time_offset)
+
+    # Skip transcription if previous chunk is still processing
+    if not state.transcriber_lock.acquire(blocking=False):
+        logger.info("Chunk #%d skipped — transcriber busy.", session.chunk_index)
+        return
+    state.transcriber_lock.release()
+
+    def transcribe_chunk():
+        if session.stopping:
+            return None
+        with state.transcriber_lock:
+            if session.stopping:
+                return None
+            return state.transcriber.transcribe_chunk(audio_array, time_offset=time_offset)
+
+    try:
+        segments = await asyncio.to_thread(transcribe_chunk)
+        if segments is None:
             return
 
-        time_offset = state.chunk_index * chunk_duration
-        state.chunk_index += 1
-
-        try:
-            with state.transcriber_lock:
-                if state.stopping:
-                    return
-                segments = state.transcriber.transcribe_chunk(audio_data, time_offset=time_offset)
-            # Accumulate for reuse at stop (avoids re-transcription)
-            state.chunk_segments.extend(segments)
-            result = {
-                "type": "chunk",
-                "segments": [
-                    {"start": s.start, "end": s.end, "text": s.text}
-                    for s in segments
-                ],
-            }
-            asyncio.run_coroutine_threadsafe(ws_send(ws, result), loop)
-        except Exception as exc:
-            logger.exception("Chunk transcription failed")
-            asyncio.run_coroutine_threadsafe(
-                ws_send(ws, {"type": "error", "message": f"Chunk transcription error: {exc}"}),
-                loop,
-            )
-
-    recorder = AudioRecorder(
-        mode=RecordingMode.MIC,
-        config=audio_config,
-        chunk_callback=on_chunk,
-    )
-
-    # Start recording in a thread (sounddevice opens streams synchronously).
-    await asyncio.to_thread(recorder.start)
-
-    state.recorder = recorder
-    state.recording = True
-    state.active_ws = ws
-
-    # Audit log: recording started
-    if state.crypto:
-        state.crypto.audit.log("recording_started", {"mode": "mic"})
-
-    await send_status(ws)
-    logger.info("Recording started via WebSocket.")
-
-    # Save metadata alongside WAV file
-    if state.recorder and state.recorder._wav_path:
-        import json as _json
-        meta_path = Path(state.recorder._wav_path).with_suffix(".meta.json")
-        meta = {
-            "document_name": getattr(state, "_document_name", ""),
-            "document_path": getattr(state, "_document_path", ""),
-            "started_at": __import__("datetime").datetime.now().isoformat(),
-        }
-        meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-
-    # Load/reuse models AFTER recording started (audio captures from the start)
-    whisper_cfg = effective_config.get("whisper", {})
-    current_model = whisper_cfg.get("model_size", "large-v3-turbo")
-    if state.transcriber is None or state.transcriber._model_size != current_model:
-        state.transcriber = Transcriber(effective_config)
-        await asyncio.to_thread(state.transcriber.load_model)
-    else:
-        logger.info("Transcriber reused (model unchanged: %s).", current_model)
-
-    diar_cfg = effective_config.get("diarization", {})
-    hf_token = diar_cfg.get("huggingface_token")
-    if hf_token and (state.diarizer is None or state.diarizer._token != hf_token):
-        state.diarizer = Diarizer(
-            huggingface_token=hf_token,
-            min_speakers=diar_cfg.get("min_speakers"),
-            max_speakers=diar_cfg.get("max_speakers"),
-        )
-        logger.info("Diarizer updated with HuggingFace token.")
-    else:
-        logger.info("Diarizer reused.")
+        session.chunk_segments.extend(segments)
+        await ws_send(ws, {
+            "type": "chunk",
+            "segments": [
+                {"start": s.start, "end": s.end, "text": s.text}
+                for s in segments
+            ],
+        })
+    except Exception as exc:
+        logger.exception("Chunk transcription failed")
+        await ws_send(ws, {"type": "error", "message": f"Chunk transcription error: {exc}"})
 
 
-async def handle_stop(ws: WebSocket, process_mode: str = "immediate"):
-    """Stop recording. If process_mode='queue', only save WAV (skip post-processing)."""
-    if not state.recording or state.recorder is None:
+async def handle_stop(ws: WebSocket):
+    """Stop recording and run post-processing pipeline (queue mode only — save WAV)."""
+    session = state.get_session(ws)
+
+    if not session.recording:
         await ws_send(ws, {"type": "error", "message": "No recording in progress"})
         return
 
-    # 1. Stop recording -------------------------------------------------
-    state.stopping = True  # Signal chunk callbacks to skip
-    # Disable chunk callback before stopping to prevent new chunks from firing
-    if state.recorder:
-        state.recorder.chunk_callback = None
+    session.stopping = True
     await ws_send(ws, {"type": "progress", "stage": "stopping_recording", "percent": 0.0})
 
-    # Wait for any in-progress chunk transcription to finish
-    logger.info("Waiting for in-progress chunk transcription to finish...")
+    # Wait for in-progress chunk transcription
     await asyncio.to_thread(state.transcriber_lock.acquire)
     state.transcriber_lock.release()
-    logger.info("Chunk transcription lock released, safe to proceed.")
 
-    wav_path = await asyncio.to_thread(state.recorder.stop, True)
-    state.recording = False
-    await send_status(ws)
-
-    # Audit log: recording stopped
-    if state.crypto:
-        state.crypto.audit.log("recording_stopped", {"file": wav_path or "none"})
-
-    if wav_path is None:
-        await ws_send(ws, {"type": "error", "message": "No audio was captured"})
-        state.reset()
+    # Save accumulated audio as WAV
+    if len(session.audio_buffer) == 0:
+        await ws_send(ws, {"type": "error", "message": "No audio was received"})
+        session.reset()
         return
 
-    logger.info("Recording saved to %s", wav_path)
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    user_slug = session._user_id.split("@")[0].replace(".", "_") if session._user_id else "unknown"
+    wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
+    await asyncio.to_thread(_save_pcm_as_wav, bytes(session.audio_buffer), wav_path)
+
+    logger.info("Recording saved to %s (%.1f MB)",
+                wav_path, len(session.audio_buffer) / 1024 / 1024)
+
+    if state.crypto:
+        state.crypto.audit.log("recording_stopped", {"file": wav_path, "user_id": session._user_id})
+
+    # Save metadata
+    import json as _json
+    meta_path = Path(wav_path).with_suffix(".meta.json")
+    meta = {
+        "user_id": session._user_id,
+        "document_name": session._document_name,
+        "document_path": session._document_path,
+        "started_at": datetime.now().isoformat(),
+    }
+    meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Queue mode: save WAV only, skip post-processing
-    if process_mode == "queue":
-        logger.info("Queue mode — skipping post-processing. WAV saved for later.")
-        await ws_send(ws, {"type": "status", "recording": False, "processing": False})
-        state.reset()
-        return
+    session.recording = False
+    await ws_send(ws, {"type": "status", "recording": False, "processing": False})
+    session.reset()
+    logger.info("Recording saved for later processing (queue mode).")
 
-    # 2. Post-processing ------------------------------------------------
-    state.processing = True
-    await send_status(ws)
 
-    try:
-        # 2a. Reuse chunk transcription results + transcribe tail from WAV
-        transcription_segments = list(state.chunk_segments)
-        if transcription_segments:
-            logger.info(
-                "Reusing %d chunk transcription segments.",
-                len(transcription_segments),
-            )
-            await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 30.0})
+# ---------------------------------------------------------------------------
+# HTTP stop fallback
+# ---------------------------------------------------------------------------
 
-            # Transcribe remaining tail audio from WAV file (safe: runs after stop)
-            chunk_duration = _config.get("audio", {}).get("chunk_duration", 30)
-            covered_seconds = state.chunk_index * chunk_duration
-            try:
-                tail_segments = await asyncio.to_thread(
-                    state.transcriber.transcribe_file_from_offset, wav_path, covered_seconds,
-                )
-                if tail_segments:
-                    transcription_segments.extend(tail_segments)
-                    logger.info("Tail transcription: %d segments from %.1fs.",
-                               len(tail_segments), covered_seconds)
-            except Exception as tail_exc:
-                logger.warning("Tail transcription skipped: %s", tail_exc)
-
-            await progress("transcription", 50.0)
-        else:
-            # Fallback: no chunks collected (e.g., very short recording) — transcribe full file
-            logger.info("No chunk segments available, transcribing full file.")
-            await ws_send(ws, {"type": "progress", "stage": "transcription", "percent": 10.0})
-            transcription_segments = await asyncio.to_thread(
-                state.transcriber.transcribe_file, wav_path
-            )
-            await progress("transcription", 50.0)
-
-        # 2b. Diarization
-        diarization_segments = []
-        speaker_embeddings: dict = {}
-        speaker_map: dict[str, str] = {}
-        try:
-            await progress("diarization", 55.0)
-            diarization_segments = await asyncio.to_thread(state.diarizer.run, wav_path)
-            await progress("diarization", 75.0)
-
-            # 2b-2. Extract speaker embeddings
-            if diarization_segments:
-                await progress("speaker_embedding", 78.0)
-                speaker_embeddings = await asyncio.to_thread(
-                    state.diarizer.extract_embeddings, wav_path, diarization_segments,
-                )
-                await progress("speaker_embedding", 82.0)
-
-                # 2b-3. Match against speaker DB
-                if state.speaker_db and speaker_embeddings:
-                    match_results = state.speaker_db.match_speakers(speaker_embeddings)
-                    speaker_map = {r.speaker_id: r.display_name for r in match_results}
-                    logger.info("Speaker map: %s", speaker_map)
-
-            await progress("diarization", 85.0)
-        except (ValueError, Exception) as diar_exc:
-            logger.warning("Diarization skipped: %s", diar_exc)
-            await ws_send(ws, {
-                "type": "progress",
-                "stage": "diarization_skipped",
-                "percent": 85.0,
-            })
-
-        # Ensure all speakers have a name (never SPEAKER_XX in output)
-        if diarization_segments:
-            all_labels = sorted(set(s.speaker for s in diarization_segments))
-            unknown_idx = sum(1 for v in speaker_map.values() if v.startswith("화자"))
-            for label in all_labels:
-                if label not in speaker_map:
-                    unknown_idx += 1
-                    speaker_map[label] = f"화자{unknown_idx}"
-
-        # Store for post-hoc speaker registration
-        state.last_meeting_embeddings = speaker_embeddings
-        state.last_meeting_speaker_map = speaker_map
-
-        # Persist embeddings to meta file for later registration
-        if speaker_embeddings and wav_path:
-            _save_embeddings_to_meta(wav_path, speaker_embeddings, speaker_map)
-
-        # 2b-4. Compute speaking stats
-        speaking_stats: list[dict] = []
-        if diarization_segments:
-            stats = compute_speaking_stats(diarization_segments, speaker_map)
-            speaking_stats = [
-                {"speaker": s.speaker, "total_seconds": s.total_seconds, "ratio": s.ratio}
-                for s in stats
-            ]
-
-        # 2c. Merge (or fallback to transcription-only)
-        await progress("merging", 90.0)
-        if diarization_segments:
-            merged = await asyncio.to_thread(
-                merge, transcription_segments, diarization_segments, speaker_map=speaker_map,
-            )
-            final_segments = [
-                {"timestamp": s.timestamp, "speaker": s.speaker, "text": s.text}
-                for s in merged
-            ]
-        else:
-            # Fallback: no speaker info
-            final_segments = [
-                {"timestamp": s.start, "speaker": "UNKNOWN", "text": s.text}
-                for s in transcription_segments
-            ]
-        await ws_send(ws, {"type": "progress", "stage": "merging", "percent": 100.0})
-
-        # 2d. LLM transcript correction (optional) ----------------------
-        if final_segments:
-            await progress("correcting", 88.0)
-            try:
-                correction = await asyncio.to_thread(correct_transcript, final_segments)
-                if correction.success:
-                    final_segments = apply_correction(final_segments, correction.corrected)
-                    logger.info("Transcript corrected via %s.", correction.engine)
-                await ws_send(ws, {"type": "progress", "stage": "correcting", "percent": 91.0})
-            except Exception as corr_exc:
-                logger.warning("Transcript correction failed: %s", corr_exc)
-
-        # 3. Summarize (optional) ----------------------------------------
-        summary_text = ""
-        if state.summarizer and final_segments:
-            await progress("summarizing", 92.0)
-            try:
-                summary_result = await asyncio.to_thread(
-                    state.summarizer.summarize, final_segments,
-                    previous_context=state.previous_context,
-                )
-                if summary_result.success:
-                    summary_text = summary_result.summary
-                    logger.info(
-                        "Summary generated via %s (%d chars).",
-                        summary_result.engine.value, len(summary_text),
-                    )
-                await ws_send(ws, {"type": "progress", "stage": "summarizing", "percent": 98.0})
-            except Exception as sum_exc:
-                logger.warning("Summary generation failed: %s", sum_exc)
-
-        # 4. Send to Slack (optional) ------------------------------------
-        slack_status: dict = {}
-        if state.slack_sender and state.slack_sender.enabled:
-            await ws_send(ws, {"type": "progress", "stage": "slack_sending", "percent": 99.0})
-            try:
-                from datetime import datetime
-                start_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                slack_result = await asyncio.to_thread(
-                    state.slack_sender.send_meeting_minutes,
-                    final_segments, speaker_map, summary_text, speaking_stats,
-                    start_time=start_str,
-                )
-                slack_status = {"success": slack_result.success, "error": slack_result.error}
-                if slack_result.success:
-                    logger.info("Meeting minutes sent to Slack.")
-                else:
-                    logger.warning("Slack send failed: %s", slack_result.error)
-            except Exception as slack_exc:
-                logger.warning("Slack send error: %s", slack_exc)
-                slack_status = {"success": False, "error": str(slack_exc)}
-
-        # 5. Send final result -------------------------------------------
-        await ws_send(ws, {
-            "type": "final",
-            "segments": final_segments,
-            "speaker_map": speaker_map,
-            "summary": summary_text,
-            "speaking_stats": speaking_stats,
-            "slack_status": slack_status,
-        })
-        logger.info("Final result sent: %d segments, summary=%d chars.", len(final_segments), len(summary_text))
-
-        # Mark as processed
-        if wav_path:
-            done_marker = Path(wav_path).with_suffix(".done")
-            done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
-
-        # 6. Encrypt recording file (after all processing is done) --------
-        if state.crypto and state.crypto.enabled and wav_path and not wav_path.endswith(".enc"):
-            try:
-                enc_path = await asyncio.to_thread(state.crypto.encrypt_file, wav_path)
-                logger.info("Recording encrypted: %s", enc_path)
-            except Exception as enc_exc:
-                logger.warning("Encryption failed: %s", enc_exc)
-
-    except Exception as exc:
-        logger.exception("Post-processing failed")
-        await ws_send(ws, {"type": "error", "message": f"Post-processing error: {exc}"})
-
-    finally:
-        state.processing = False
-        await send_status(ws)
-        state.reset()
+@app.post("/stop")
+async def http_stop():
+    """HTTP fallback to stop recording when WebSocket is unavailable."""
+    # Find any active recording session
+    for session in state.sessions.values():
+        if session.recording:
+            await handle_stop(session.ws)
+            return {"ok": True}
+    return {"ok": False, "message": "No recording in progress"}
 
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
-
-@app.post("/stop")
-async def http_stop(process_mode: str = "immediate"):
-    """HTTP fallback to stop recording when WebSocket is unavailable."""
-    if not state.recording or state.recorder is None:
-        return {"ok": False, "message": "No recording in progress"}
-
-    ws = state.active_ws
-    if ws:
-        await handle_stop(ws, process_mode=process_mode)
-    else:
-        # No WebSocket — just stop recording and discard
-        await asyncio.to_thread(state.recorder.stop, False)
-        state.reset()
-    return {"ok": True}
-
 
 async def _ping_loop(ws: WebSocket):
     """Send periodic pings to keep the WebSocket alive."""
@@ -1356,49 +1168,72 @@ async def _ping_loop(ws: WebSocket):
             await asyncio.sleep(15)
             await ws.send_json({"type": "ping"})
     except Exception:
-        pass  # connection closed, exit silently
+        pass
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    # Check API key for WebSocket connections
+    api_key = _app_config.server.api_key
+    if api_key:
+        # Check query parameter or first message for auth
+        token = ws.query_params.get("token", "")
+        if token != api_key:
+            await ws.close(code=4001, reason="Invalid API key")
+            return
+
     await ws.accept()
-    state.active_ws = ws  # Track for process-file endpoint
-    logger.info("WebSocket client connected.")
-    await send_status(ws)
+    session = state.get_session(ws)
+    logger.info("WebSocket client connected. Active sessions: %d", len(state.sessions))
 
     ping_task = asyncio.create_task(_ping_loop(ws))
 
     try:
         while True:
-            data = await ws.receive_json()
-            msg_type = data.get("type")
+            message = await ws.receive()
 
-            if msg_type == "start":
-                config_overrides = data.get("config")
-                await handle_start(ws, config_overrides)
+            # Handle disconnect message explicitly
+            if message["type"] == "websocket.disconnect":
+                logger.info("WebSocket client disconnected (disconnect message).")
+                break
 
-            elif msg_type == "stop":
-                process_mode = data.get("process_mode", "immediate")
-                await handle_stop(ws, process_mode=process_mode)
+            if message["type"] == "websocket.receive":
+                # Binary message = audio chunk
+                if "bytes" in message and message["bytes"]:
+                    await handle_audio_chunk(ws, message["bytes"])
 
-            elif msg_type == "pong":
-                pass  # keep-alive response, ignore
+                # Text message = JSON command
+                elif "text" in message and message["text"]:
+                    import json
+                    raw_text = message["text"]
+                    if len(raw_text) > 1_000_000:  # 1MB limit
+                        await ws_send(ws, {"type": "error", "message": "Message too large"})
+                        continue
+                    try:
+                        data = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        await ws_send(ws, {"type": "error", "message": "Invalid JSON"})
+                        continue
+                    msg_type = data.get("type")
 
-            else:
-                await ws_send(ws, {
-                    "type": "error",
-                    "message": f"Unknown message type: {msg_type}",
-                })
+                    if msg_type == "start":
+                        config_overrides = data.get("config")
+                        await handle_start(ws, config_overrides)
+
+                    elif msg_type == "stop":
+                        await handle_stop(ws)
+
+                    elif msg_type == "pong":
+                        pass
+
+                    else:
+                        await ws_send(ws, {
+                            "type": "error",
+                            "message": f"Unknown message type: {msg_type}",
+                        })
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected.")
-        # If client disconnects mid-recording, stop gracefully.
-        if state.recording and state.recorder is not None:
-            try:
-                state.recorder.stop(save=False)
-            except Exception:
-                pass
-            state.reset()
 
     except Exception as exc:
         logger.exception("WebSocket error")
@@ -1408,6 +1243,12 @@ async def websocket_endpoint(ws: WebSocket):
             pass
     finally:
         ping_task.cancel()
+        session = state.sessions.get(ws)
+        if session and session.recording:
+            session.reset()
+            logger.info("Recording session reset on WebSocket close.")
+        state.remove_session(ws)
+        logger.info("Session removed. Active sessions: %d", len(state.sessions))
 
 
 # ---------------------------------------------------------------------------
@@ -1415,14 +1256,10 @@ async def websocket_endpoint(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    server_cfg = _config.get("server", {})
-    host = server_cfg.get("host", "0.0.0.0")
-    port = server_cfg.get("port", 8765)
-
     uvicorn.run(
         "server:app",
-        host=host,
-        port=port,
+        host=_app_config.server.host,
+        port=_app_config.server.port,
         reload=False,
         log_level="info",
     )

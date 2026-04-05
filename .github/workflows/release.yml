@@ -1,4 +1,4 @@
-name: Release
+name: Release Plugin
 
 on:
   push:
@@ -17,6 +17,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Update manifest version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd plugin
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
 
       - name: Build plugin
         working-directory: plugin
@@ -37,17 +43,21 @@ jobs:
         with:
           files: |
             meetnote-plugin.zip
-            plugin/main.js
-            plugin/manifest.json
+            dist/main.js
+            dist/manifest.json
+            dist/styles.css
           body: |
             ## MeetNote ${{ github.ref_name }}
 
             See [CHANGELOG.md](CHANGELOG.md) for details.
 
-            ### Plugin Installation
-            1. Download `meetnote-plugin.zip`
-            2. Extract to `<vault>/.obsidian/plugins/meetnote/`
-            3. Enable in Obsidian Settings → Community Plugins
+            ### Plugin Installation (BRAT)
+            1. Install BRAT plugin in Obsidian
+            2. Add this repository URL in BRAT settings
+            3. Enable MeetNote in Community Plugins
 
-            ### Backend Setup
-            See [docs/SETUP.md](docs/SETUP.md)
+            ### Server Setup
+            ```bash
+            curl -O https://raw.githubusercontent.com/${{ github.repository }}/main/backend/docker-compose.yml
+            docker compose up -d
+            ```

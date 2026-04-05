@@ -15,6 +15,27 @@
 	font-size: 1.1em;
 }
 
+.meetnote-version {
+	font-size: 0.7em;
+	font-weight: 400;
+	opacity: 0.6;
+}
+
+.meetnote-logo-icon {
+	display: inline-flex;
+	align-items: center;
+	margin-right: 2px;
+	color: var(--interactive-accent);
+	vertical-align: middle;
+	position: relative;
+	top: 0.5px;
+}
+
+.meetnote-logo-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
 .meetnote-header-actions {
 	display: flex;
 	align-items: center;

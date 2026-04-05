@@ -12,14 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from recorder.diarizer import DiarizationSegment
 from recorder.transcriber import TranscriptionSegment
 
 logger = logging.getLogger(__name__)
-
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 _UNKNOWN_SPEAKER = "UNKNOWN"
 
@@ -31,13 +27,6 @@ class MergedSegment:
     timestamp: float  # seconds (start time of the utterance)
     speaker: str  # e.g. "SPEAKER_00"
     text: str
-
-
-def _load_merger_config() -> dict[str, Any]:
-    """Load the ``merger`` section from config.yaml."""
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config.get("merger", {})
 
 
 def _compute_overlap(
@@ -106,8 +95,7 @@ def merge(
     merge_consecutive:
         When ``True``, consecutive utterances from the same speaker are
         joined into a single :class:`MergedSegment`.  If ``None`` (the
-        default), the value from ``config.yaml`` (``merger.merge_consecutive``)
-        is used.
+        default), falls back to ``True``.
     speaker_map:
         Optional mapping of diarization speaker labels (e.g. ``"SPEAKER_00"``)
         to display names (e.g. ``"김창수"`` or ``"화자1"``).
@@ -118,8 +106,7 @@ def merge(
         Chronologically ordered, speaker-attributed utterances.
     """
     if merge_consecutive is None:
-        cfg = _load_merger_config()
-        merge_consecutive = bool(cfg.get("merge_consecutive", True))
+        merge_consecutive = True
 
     if speaker_map is None:
         speaker_map = {}

@@ -14,6 +14,7 @@ export class RecorderStatusBar {
 	private connected = false;
 	private recording = false;
 	private processing = false;
+	private chunkCount = 0;
 
 	constructor(statusBarEl: HTMLElement) {
 		this.el = statusBarEl;
@@ -41,12 +42,20 @@ export class RecorderStatusBar {
 	startRecording(): void {
 		this.recording = true;
 		this.processing = false;
+		this.chunkCount = 0;
 		this.recordingStartTime = new Date();
 		this.el.style.display = "";
 
 		this.clearTimer();
 		this.updateElapsed();
 		this.timerInterval = setInterval(() => this.updateElapsed(), 1000);
+	}
+
+	/**
+	 * Increment chunk transcription counter.
+	 */
+	addChunk(): void {
+		this.chunkCount++;
 	}
 
 	/**
@@ -106,7 +115,8 @@ export class RecorderStatusBar {
 		const seconds = elapsed % 60;
 		const mm = String(minutes).padStart(2, "0");
 		const ss = String(seconds).padStart(2, "0");
-		this.el.setText(`🔴 녹음 중 ${mm}:${ss}`);
+		const chunkInfo = this.chunkCount > 0 ? ` | ${this.chunkCount}청크 전사` : "";
+		this.el.setText(`🔴 녹음 중 ${mm}:${ss}${chunkInfo}`);
 	}
 
 	private clearTimer(): void {

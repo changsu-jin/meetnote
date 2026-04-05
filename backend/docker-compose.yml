@@ -1,0 +1,12 @@
+services:
+  meetnote:
+    image: ghcr.io/changsu-jin/meetnote-server:latest
+    ports:
+      - "8765:8765"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    init: true

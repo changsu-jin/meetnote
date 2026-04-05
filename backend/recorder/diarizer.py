@@ -1,13 +1,14 @@
 """Speaker diarization module using pyannote-audio.
 
 Performs offline speaker diarization on a WAV file after recording ends.
-Uses pyannote/speaker-diarization-3.1 pipeline with local inference.
+Uses pyannote/speaker-diarization-community-1 pipeline (CC-BY-4.0, no token required).
 First run downloads ~1GB of model weights from HuggingFace.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,13 +16,10 @@ from typing import Optional
 
 import numpy as np
 import torch
-import yaml
-from pyannote.audio import Inference, Model, Pipeline
+from pyannote.audio import Model, Pipeline
 from pyannote.core import Segment
 
 logger = logging.getLogger(__name__)
-
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 # Supported speaker count range for auto-detection
 _MIN_SPEAKERS_DEFAULT = 2
@@ -40,19 +38,12 @@ class DiarizationSegment:
     speaker: str  # e.g. "SPEAKER_00"
 
 
-def _load_config() -> dict:
-    """Load and return the diarization section of config.yaml."""
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config.get("diarization", {})
-
-
 class Diarizer:
     """Wrapper around pyannote speaker-diarization pipeline.
 
     Usage::
 
-        diarizer = Diarizer()           # loads config & pipeline once
+        diarizer = Diarizer()
         segments = diarizer.run("meeting.wav")
         for seg in segments:
             print(f"{seg.start:.1f}-{seg.end:.1f}  {seg.speaker}")
@@ -64,24 +55,14 @@ class Diarizer:
         min_speakers: Optional[int] = None,
         max_speakers: Optional[int] = None,
     ) -> None:
-        """Initialise the diarizer.
-
-        Parameters that are *not* explicitly passed fall back to values in
-        ``config.yaml``.  Passing ``None`` (the default) means "use config, or
-        the built-in default if the config value is also null".
-        """
-        cfg = _load_config()
-
-        self._token: str = huggingface_token or cfg.get("huggingface_token", "")
-        self._min_speakers: Optional[int] = (
-            min_speakers if min_speakers is not None else cfg.get("min_speakers")
-        )
-        self._max_speakers: Optional[int] = (
-            max_speakers if max_speakers is not None else cfg.get("max_speakers")
-        )
+        # Token is optional for community-1 (CC-BY-4.0, not gated)
+        # If provided, it enables higher HuggingFace download rate limits
+        self._token: str = huggingface_token or os.environ.get("HF_TOKEN", "")
+        self._min_speakers: Optional[int] = min_speakers
+        self._max_speakers: Optional[int] = max_speakers
 
         self._pipeline: Optional[Pipeline] = None
-        self._embedding_inference: Optional[Inference] = None
+        self._embedding_inference = None
 
     # ------------------------------------------------------------------
     # Pipeline loading (lazy)
@@ -92,23 +73,19 @@ class Diarizer:
         if self._pipeline is not None:
             return self._pipeline
 
-        if not self._token:
-            raise ValueError(
-                "A HuggingFace token is required to download pyannote models. "
-                "Set 'diarization.huggingface_token' in config.yaml or pass it "
-                "to the Diarizer constructor."
-            )
-
         logger.info(
             "Loading diarization pipeline '%s' (first run may download ~1 GB) ...",
             PIPELINE_NAME,
         )
-        self._pipeline = Pipeline.from_pretrained(
-            PIPELINE_NAME,
-            token=self._token,
-        )
 
-        # Try MPS (Apple Silicon GPU) acceleration, fallback to CPU
+        # community-1 doesn't require a token, but token speeds up downloads
+        kwargs = {}
+        if self._token:
+            kwargs["token"] = self._token
+
+        self._pipeline = Pipeline.from_pretrained(PIPELINE_NAME, **kwargs)
+
+        # Select best available device
         device = self._resolve_device()
         self._pipeline = self._pipeline.to(device)
         logger.info("Diarization pipeline ready (device=%s).", device)
@@ -116,11 +93,14 @@ class Diarizer:
 
     @staticmethod
     def _resolve_device() -> torch.device:
-        """Select the best available device: MPS > CPU."""
-        if torch.backends.mps.is_available():
+        """Select the best available device: CUDA > MPS > CPU."""
+        if torch.cuda.is_available():
+            logger.info("CUDA available, using GPU acceleration.")
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             logger.info("MPS (Apple Silicon GPU) available, using GPU acceleration.")
             return torch.device("mps")
-        logger.info("MPS not available, using CPU.")
+        logger.info("No GPU available, using CPU.")
         return torch.device("cpu")
 
     # ------------------------------------------------------------------
@@ -139,7 +119,6 @@ class Diarizer:
         audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         if n_channels > 1:
             audio = audio.reshape(-1, n_channels).mean(axis=1)
-        # Shape: (1, time) — single channel
         waveform = torch.from_numpy(audio).unsqueeze(0)
         return waveform, sample_rate
 
@@ -148,11 +127,7 @@ class Diarizer:
     # ------------------------------------------------------------------
 
     def _ensure_embedding_model(self):
-        """Load the speaker embedding model on first use.
-
-        Returns the raw PyTorch model (not Inference wrapper) due to
-        pyannote 4.x compatibility issues with Inference.crop().
-        """
+        """Load the speaker embedding model on first use."""
         if self._embedding_inference is not None:
             return self._embedding_inference
 
@@ -180,19 +155,7 @@ class Diarizer:
     ) -> list[DiarizationSegment]:
         """Run speaker diarization on a WAV file.
 
-        Parameters
-        ----------
-        wav_path:
-            Path to a mono 16 kHz WAV file.
-        min_speakers:
-            Override minimum speaker count for this call.
-        max_speakers:
-            Override maximum speaker count for this call.
-
-        Returns
-        -------
-        list[DiarizationSegment]
-            Chronologically ordered list of (start, end, speaker) segments.
+        Returns chronologically ordered list of (start, end, speaker) segments.
         """
         wav_path = Path(wav_path)
         if not wav_path.is_file():
@@ -200,11 +163,8 @@ class Diarizer:
 
         pipeline = self._ensure_pipeline()
 
-        # Resolve speaker count hints (call-level > instance-level > defaults)
         min_spk = min_speakers if min_speakers is not None else self._min_speakers
         max_spk = max_speakers if max_speakers is not None else self._max_speakers
-
-        # Apply defaults when still None (auto-detect within 2-6 range)
         if min_spk is None:
             min_spk = _MIN_SPEAKERS_DEFAULT
         if max_spk is None:
@@ -212,12 +172,9 @@ class Diarizer:
 
         logger.info(
             "Running diarization on '%s' (speakers: %d-%d) ...",
-            wav_path.name,
-            min_spk,
-            max_spk,
+            wav_path.name, min_spk, max_spk,
         )
 
-        # Load audio as waveform dict to bypass torchcodec/FFmpeg dependency
         waveform, sample_rate = self._load_wav(wav_path)
 
         result = pipeline(
@@ -230,7 +187,7 @@ class Diarizer:
         if hasattr(result, "speaker_diarization"):
             diarization = result.speaker_diarization
         else:
-            diarization = result  # pyannote 3.x returns Annotation directly
+            diarization = result
 
         segments: list[DiarizationSegment] = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -244,8 +201,7 @@ class Diarizer:
 
         logger.info(
             "Diarization complete: %d segments, %d unique speakers.",
-            len(segments),
-            len({s.speaker for s in segments}),
+            len(segments), len({s.speaker for s in segments}),
         )
         return segments
 
@@ -254,30 +210,12 @@ class Diarizer:
         wav_path: str | Path,
         segments: list[DiarizationSegment],
     ) -> dict[str, np.ndarray]:
-        """Extract a representative embedding for each unique speaker.
-
-        For each speaker, embeddings are computed from their individual
-        diarization segments and averaged to produce a single representative
-        vector.
-
-        Parameters
-        ----------
-        wav_path:
-            Path to the WAV file used for diarization.
-        segments:
-            Diarization segments (output of :meth:`run`).
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            Mapping of speaker label (e.g. ``"SPEAKER_00"``) to embedding vector.
-        """
+        """Extract a representative embedding for each unique speaker."""
         wav_path = Path(wav_path)
         model = self._ensure_embedding_model()
         waveform, sample_rate = self._load_wav(wav_path)
         device = getattr(self, "_embedding_device", "cpu")
 
-        # Group segments by speaker
         speaker_segs: dict[str, list[DiarizationSegment]] = {}
         for seg in segments:
             speaker_segs.setdefault(seg.speaker, []).append(seg)
@@ -288,17 +226,14 @@ class Diarizer:
             seg_embeddings: list[np.ndarray] = []
 
             for seg in segs:
-                # Skip very short segments (< 0.5s) — too little signal
                 if seg.end - seg.start < 0.5:
                     continue
                 try:
-                    # Extract audio segment
                     start_sample = int(seg.start * sample_rate)
                     end_sample = int(seg.end * sample_rate)
                     seg_waveform = waveform[:, start_sample:end_sample]
                     if seg_waveform.shape[1] < sample_rate * 0.5:
                         continue
-                    # Add batch dimension: (1, 1, time)
                     seg_input = seg_waveform.unsqueeze(0).to(device)
                     with torch.no_grad():
                         emb = model(seg_input)
@@ -314,15 +249,10 @@ class Diarizer:
 
             if seg_embeddings:
                 avg = np.mean(seg_embeddings, axis=0)
-                # L2-normalise for cosine similarity later
                 norm = np.linalg.norm(avg)
                 if norm > 0:
                     avg = avg / norm
                 embeddings[speaker] = avg
-                logger.debug(
-                    "Speaker %s: averaged %d segment embeddings (dim=%d).",
-                    speaker, len(seg_embeddings), avg.shape[0],
-                )
             else:
                 logger.warning(
                     "Speaker %s: no usable segments for embedding extraction.", speaker,

@@ -20,8 +20,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-VALID_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo")
-VALID_DEVICES = ("cpu", "cuda")
+VALID_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "distil-large-v3")
+VALID_DEVICES = ("cpu", "cuda", "mps")
 VALID_COMPUTE_TYPES = ("int8", "float16", "float32")
 
 # MLX model name mapping (HuggingFace repo IDs)
@@ -32,6 +32,12 @@ _MLX_MODEL_MAP = {
     "medium": "mlx-community/whisper-medium-mlx",
     "large-v3": "mlx-community/whisper-large-v3-mlx",
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "distil-large-v3": "mlx-community/distil-whisper-large-v3",
+}
+
+# faster-whisper model name mapping (distil models use different HF repo)
+_FW_MODEL_MAP = {
+    "distil-large-v3": "distil-whisper/distil-large-v3",
 }
 
 
@@ -115,13 +121,15 @@ class Transcriber:
             logger.info("MLX Whisper model loaded successfully.")
         else:
             logger.info(
-                "MLX not available, using faster-whisper (CPU): size=%s, compute_type=%s",
+                "MLX not available, using faster-whisper: size=%s, device=%s, compute_type=%s",
                 self._model_size,
+                self._device,
                 self._compute_type,
             )
             from faster_whisper import WhisperModel
+            fw_model_name = _FW_MODEL_MAP.get(self._model_size, self._model_size)
             self._fw_model = WhisperModel(
-                self._model_size,
+                fw_model_name,
                 device=self._device,
                 compute_type=self._compute_type,
             )
