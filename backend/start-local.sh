@@ -25,6 +25,8 @@ fi
 
 source venv/bin/activate
 
+export PYTHONWARNINGS="ignore::UserWarning:pyannote.audio.core.io"
+
 PORT="${1:-${SERVER_PORT:-8765}}"
 export SERVER_PORT="$PORT"
 
