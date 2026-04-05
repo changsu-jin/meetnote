@@ -182,7 +182,7 @@ HUGGINGFACE_TOKEN=hf_your_token_here
 1. 설정 → **Obsidian42 - BRAT** → **"Add Beta Plugin"**
 2. 저장소 URL 입력:
    ```
-   changsu-jin/meetnote-plugin
+   changsu-jin/meetnote
    ```
 3. "Add Plugin" 클릭 → BRAT이 자동으로 다운로드 및 설치
 4. 설정 → 커뮤니티 플러그인 → **MeetNote** 활성화

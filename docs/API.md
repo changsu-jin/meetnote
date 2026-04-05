@@ -204,9 +204,9 @@ WebSocket은 **두 가지 메시지 타입**을 수신합니다:
 ```json
 {
   "ok": true,
-  "api_version": "1.0.0",
-  "recording": false,
-  "processing": false,
+  "api_version": "2.0",
+  "active_recordings": 0,
+  "active_processing": 0,
   "transcriber": true,
   "diarizer": true,
   "speaker_db_count": 5,
