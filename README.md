@@ -58,6 +58,10 @@ Obsidian → BRAT 플러그인 → `changsu-jin/meetnote` 추가
 
 > GPU가 없는 환경에서는 화자구분이 CPU로 동작하여 처리 시간이 크게 늘어납니다.
 
+## 개발 후기
+
+- [MeetNote 개발 회고](https://42class.com/posts/meetnote-retrospective/)
+
 ## 라이선스
 
 MIT
