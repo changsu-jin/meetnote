@@ -17,13 +17,16 @@ ENV AUTO_DELETE_DAYS=0
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8765
 ENV HF_HUB_ENABLE_XET=0
+ENV HF_HUB_OFFLINE=1
 ENV SMTP_HOST=smtp.gmail.com
 ENV SMTP_PORT=587
 ENV SMTP_USE_TLS=true
 
 RUN useradd -m appuser && \
     mkdir -p /app/data/recordings && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app && \
+    cp -r /root/.cache /home/appuser/.cache 2>/dev/null; \
+    chown -R appuser:appuser /home/appuser/.cache 2>/dev/null || true
 
 USER appuser
 
