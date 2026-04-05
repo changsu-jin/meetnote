@@ -215,21 +215,4 @@ docker compose up -d   # 재시작
 
 ## 환경변수 참조
 
-`.env` 파일에 설정합니다. 모두 선택사항입니다.
-
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `HUGGINGFACE_TOKEN` | (없음) | venv 첫 실행 시 모델 다운로드용 |
-| `API_KEY` | (없음) | 서버 인증 (원격 서버 시) |
-| `CORS_ORIGINS` | `*` | 허용 origin (운영 시 제한 권장) |
-| `WHISPER_MODEL` | `large-v3-turbo` | STT 모델 |
-| `WHISPER_LANGUAGE` | `ko` | 전사 언어 |
-| `WHISPER_DEVICE` | `auto` | auto/cpu/cuda/mps |
-| `WHISPER_COMPUTE_TYPE` | `int8` | 양자화 |
-| `SERVER_PORT` | `8765` | 서버 포트 |
-| `SMTP_HOST` | `smtp.gmail.com` | 이메일 SMTP 서버 |
-| `SMTP_PORT` | `587` | SMTP 포트 |
-| `SMTP_USER` | (없음) | SMTP 로그인 |
-| `SMTP_PASSWORD` | (없음) | SMTP 비밀번호 |
-| `RECORDINGS_PATH` | `./data/recordings` | 녹음 저장 경로 |
-| `SPEAKER_DB_PATH` | `./data/speakers.json` | 화자 DB 경로 |
+전체 환경변수 목록은 [설치 가이드 — 서버 환경변수](INSTALLATION.md#서버-환경변수-env)를 참고하세요.

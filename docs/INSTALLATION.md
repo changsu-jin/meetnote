@@ -278,17 +278,7 @@ bash upgrade.sh
 
 ## 문제 해결
 
-자주 발생하는 문제와 해결 방법입니다.
-
-| 증상 | 해결 |
-|------|------|
-| "서버 연결 끊김" | 터미널(또는 Docker)에서 서버가 실행 중인지 확인 |
-| 마이크 권한 거부 | 시스템 설정 → 개인 정보 보호 → 마이크 → Obsidian 허용 |
-| 녹음은 되는데 전사 안 됨 | 서버 터미널에서 에러 메시지 확인 |
-| 설치 중 에러 | Python 3.10+ 설치 여부 확인: `python3 --version` |
-| 처리 시간이 너무 김 | Apple Silicon 맥이 아니면 CPU 모드로 느릴 수 있음 |
-
-더 자세한 문제 해결 방법은 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)를 참고하세요.
+설치/실행 중 문제가 발생하면 [문제 해결 가이드(TROUBLESHOOTING.md)](TROUBLESHOOTING.md)를 참고하세요.
 
 ---
 
