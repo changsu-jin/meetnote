@@ -294,7 +294,7 @@ export default class MeetNotePlugin extends Plugin {
 		new Notice("녹음을 시작합니다.");
 	}
 
-	private stopRecording() {
+	private async stopRecording() {
 		if (!this.isRecording) {
 			new Notice("현재 녹음 중이 아닙니다.");
 			return;
@@ -312,10 +312,22 @@ export default class MeetNotePlugin extends Plugin {
 		this.isRecording = false;
 		this.updateRibbonIcon();
 
-		// Clean up live transcription section from the document
-		this.writer.cleanupLiveSection().catch((err) =>
-			console.error("[MeetNote] Live section cleanup failed:", err)
-		);
+		// Keep live transcription and add notice (will be replaced after processing)
+		if (this.writer.currentFile) {
+			try {
+				await this.app.vault.process(this.writer.currentFile, (content) => {
+					const liveEnd = content.indexOf("<!-- meetnote-live-end -->");
+					if (liveEnd !== -1) {
+						return content.slice(0, liveEnd + "<!-- meetnote-live-end -->".length)
+							+ "\n\n> **녹음 저장 완료** — 사이드 패널에서 '처리' 버튼을 눌러 회의록을 생성하세요.\n"
+							+ content.slice(liveEnd + "<!-- meetnote-live-end -->".length);
+					}
+					return content + "\n\n> **녹음 저장 완료** — 사이드 패널에서 '처리' 버튼을 눌러 회의록을 생성하세요.\n";
+				});
+			} catch (err) {
+				console.error("[MeetNote] Failed to add notice:", err);
+			}
+		}
 		this.writer.reset();
 		this.recordingStartTime = null;
 		this.statusBar.setIdle();

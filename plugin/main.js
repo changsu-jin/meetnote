@@ -2357,7 +2357,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     await this.audioCapture.start(deviceId);
     new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
   }
-  stopRecording() {
+  async stopRecording() {
     if (!this.isRecording) {
       new import_obsidian4.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
       return;
@@ -2370,9 +2370,19 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.statusBar.stopRecording();
     this.isRecording = false;
     this.updateRibbonIcon();
-    this.writer.cleanupLiveSection().catch(
-      (err) => console.error("[MeetNote] Live section cleanup failed:", err)
-    );
+    if (this.writer.currentFile) {
+      try {
+        await this.app.vault.process(this.writer.currentFile, (content) => {
+          const liveEnd = content.indexOf("<!-- meetnote-live-end -->");
+          if (liveEnd !== -1) {
+            return content.slice(0, liveEnd + "<!-- meetnote-live-end -->".length) + "\n\n> **\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC** \u2014 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uD68C\uC758\uB85D\uC744 \uC0DD\uC131\uD558\uC138\uC694.\n" + content.slice(liveEnd + "<!-- meetnote-live-end -->".length);
+          }
+          return content + "\n\n> **\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC** \u2014 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uD68C\uC758\uB85D\uC744 \uC0DD\uC131\uD558\uC138\uC694.\n";
+        });
+      } catch (err) {
+        console.error("[MeetNote] Failed to add notice:", err);
+      }
+    }
     this.writer.reset();
     this.recordingStartTime = null;
     this.statusBar.setIdle();
