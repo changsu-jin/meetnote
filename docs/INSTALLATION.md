@@ -7,74 +7,23 @@
 
 ## 설치 방법 개요
 
-MeetNote 서버는 **Docker** 또는 **macOS 로컬(venv)** 두 가지 방식으로 실행할 수 있습니다.
+MeetNote 서버는 **macOS 로컬(venv)** 또는 **Docker** 두 가지 방식으로 실행할 수 있습니다.
 
-| | Docker (팀 공용 서버) | macOS 로컬 (개인 사용) |
+| | macOS 로컬 (개인 사용) | Docker (팀 공용 서버) |
 |---|---|---|
-| **대상** | 팀 내 공용 서버에 올려두고 여러 명이 사용 | 본인 맥북에서 직접 실행 |
-| **OS** | Linux / macOS / Windows | macOS (Apple Silicon) |
-| **GPU 가속** | CUDA (Linux + NVIDIA GPU) / macOS Docker는 CPU only | MPS/MLX (Apple Silicon) |
-| **모델 다운로드** | Docker 이미지에 포함 | 최초 실행 시 자동 다운로드 (~5GB) |
-| **HuggingFace 토큰** | **불필요** | **필요** (최초 1회 발급) |
-| **설치 난이도** | 쉬움 (docker compose up) | 보통 (스크립트 실행) |
-| **추천 상황** | 사내 서버가 있을 때 | 개인 맥북에서 빠르게 쓰고 싶을 때 |
+| **대상** | 본인 맥북에서 직접 실행 | 팀 내 공용 서버에 올려두고 여러 명이 사용 |
+| **OS** | macOS (Apple Silicon) | Linux / macOS / Windows |
+| **GPU 가속** | MPS/MLX (Apple Silicon) | CUDA (Linux + NVIDIA GPU) / macOS Docker는 CPU only |
+| **모델 다운로드** | 최초 실행 시 자동 다운로드 (~5GB) | Docker 이미지에 포함 |
+| **HuggingFace 토큰** | **필요** (최초 1회 발급) | **불필요** |
+| **설치 난이도** | 보통 (스크립트 실행) | 쉬움 (docker compose up) |
+| **추천 상황** | **대부분의 사용자** | 사내 GPU 서버가 있을 때 |
 
 > 어떤 방식이든 **Obsidian 플러그인 설치**는 동일합니다.
 
 ---
 
-## Docker 서버 설치 (팀 공용)
-
-팀 전체가 하나의 서버를 공유하는 방식입니다. 서버 관리자가 한 번만 설치하면 됩니다.
-
-### 사전 요구사항
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) 설치
-
-### 설치 및 실행
-
-```bash
-# 1. 프로젝트 다운로드
-git clone https://github.com/changsu-jin/meetnote.git
-cd meetnote/backend
-
-# 2. 환경변수 설정 (선택)
-cp .env.example .env
-# .env 파일을 열어 SMTP 등 필요한 값 수정
-
-# 3. 서버 실행
-docker compose up -d
-```
-
-이것으로 끝입니다. Docker 이미지에 Whisper, pyannote 모델이 모두 포함되어 있으므로 **HuggingFace 토큰이 필요 없습니다**.
-
-### 주요 환경변수 (.env)
-
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `API_KEY` | (없음) | 서버 인증용 키 (플러그인 설정과 일치시켜야 함) |
-| `SMTP_HOST` | `smtp.gmail.com` | SMTP 메일 서버 |
-| `SMTP_PORT` | `587` | SMTP 포트 |
-| `SMTP_USER` | (없음) | SMTP 계정 |
-| `SMTP_PASSWORD` | (없음) | SMTP 앱 비밀번호 |
-| `SMTP_USE_TLS` | `true` | TLS 사용 여부 |
-| `WHISPER_MODEL` | `large-v3-turbo` | Whisper 모델 크기 |
-| `WHISPER_LANGUAGE` | `ko` | 인식 언어 |
-| `ENCRYPTION_ENABLED` | `false` | 녹음 파일 암호화 |
-| `AUTO_DELETE_DAYS` | `0` | 녹음 자동 삭제 (0 = 비활성) |
-
-> 발신자 이메일(From)은 서버가 아닌 **플러그인 설정**에서 관리합니다.
-
-### 데이터 영속화
-
-`docker-compose.yml`에서 `./data` 디렉토리를 볼륨 마운트합니다.
-컨테이너를 삭제해도 화자 DB, 녹음 파일은 호스트에 유지됩니다.
-
----
-
 ## macOS 로컬 설치 (개인 사용, GPU 가속)
-
-본인 맥북에서 직접 서버를 실행하는 방식입니다. Apple Silicon(M1/M2/M3/M4)이면 GPU 가속으로 빠르게 처리됩니다.
 
 ### 사전 요구사항
 
@@ -120,6 +69,62 @@ bash start-local.sh
 ```bash
 bash start-local.sh 9000
 ```
+
+---
+
+## Docker 서버 설치 (팀 공용)
+
+팀 전체가 하나의 서버를 공유하는 방식입니다. 서버 관리자가 한 번만 설치하면 됩니다.
+
+### 사전 요구사항
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) 설치
+
+### 설치 및 실행
+
+```bash
+# 1. 프로젝트 다운로드
+git clone https://github.com/changsu-jin/meetnote.git
+cd meetnote/backend
+
+# 2. 환경변수 설정 (선택)
+cp .env.example .env
+# .env 파일을 열어 SMTP 등 필요한 값 수정
+
+# 3. 서버 실행
+docker compose up -d
+```
+
+이것으로 끝입니다. Docker 이미지에 Whisper, pyannote 모델이 모두 포함되어 있으므로 **HuggingFace 토큰이 필요 없습니다**.
+
+### 데이터 영속화
+
+`docker-compose.yml`에서 `./data` 디렉토리를 볼륨 마운트합니다.
+컨테이너를 삭제해도 화자 DB, 녹음 파일은 호스트에 유지됩니다.
+
+---
+
+## 서버 환경변수 (.env)
+
+Docker, macOS 로컬 모두 `.env` 파일로 서버 설정을 관리합니다. 모두 선택사항이며, 기본값으로 동작합니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `HUGGINGFACE_TOKEN` | (없음) | macOS 로컬 전용 — 최초 모델 다운로드용. Docker는 불필요 |
+| `API_KEY` | (없음) | 서버 인증용 키 (플러그인 설정과 일치시켜야 함) |
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP 메일 서버 |
+| `SMTP_PORT` | `587` | SMTP 포트 |
+| `SMTP_USER` | (없음) | SMTP 계정 |
+| `SMTP_PASSWORD` | (없음) | SMTP 앱 비밀번호 |
+| `SMTP_USE_TLS` | `true` | TLS 사용 여부 |
+| `WHISPER_MODEL` | `large-v3-turbo` | Whisper 모델 크기 |
+| `WHISPER_LANGUAGE` | `ko` | 인식 언어 |
+| `WHISPER_DEVICE` | `auto` | auto / cpu / cuda / mps |
+| `ENCRYPTION_ENABLED` | `false` | 녹음 파일 암호화 |
+| `AUTO_DELETE_DAYS` | `0` | 녹음 자동 삭제 (0 = 비활성) |
+| `SERVER_PORT` | `8765` | 서버 포트 |
+
+> 발신자 이메일(From)은 서버가 아닌 **플러그인 설정**에서 관리합니다.
 
 ---
 
