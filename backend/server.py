@@ -882,7 +882,7 @@ async def process_file(req: ProcessFileRequest):
         await progress("merging", 90.0)
         if diarization_segments:
             merged = await asyncio.to_thread(
-                merge, transcription_segments, diarization_segments, speaker_map=speaker_map,
+                merge, transcription_segments, diarization_segments, speaker_map=speaker_map, merge_consecutive=True,
             )
             final_segments = [
                 {"timestamp": s.timestamp, "speaker": s.speaker, "text": s.text}
