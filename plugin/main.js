@@ -2860,8 +2860,41 @@ var OnboardingModal = class extends import_obsidian4.Modal {
     const step3 = steps.createDiv({ cls: "meetnote-onboarding-step" });
     step3.createEl("div", { text: "3", cls: "meetnote-onboarding-number" });
     const step3Content = step3.createDiv();
-    step3Content.createEl("strong", { text: "\uB179\uC74C \uC2DC\uC791" });
-    step3Content.createEl("p", { text: "\uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uC5F4\uACE0, \uB9AC\uBCF8\uC758 \uB9C8\uC774\uD06C \uC544\uC774\uCF58\uC744 \uD074\uB9AD\uD558\uBA74 \uB179\uC74C\uC774 \uC2DC\uC791\uB429\uB2C8\uB2E4. \uB179\uC74C \uC885\uB8CC \uD6C4 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uC804\uC0AC\uB97C \uC2E4\uD589\uD558\uC138\uC694." });
+    step3Content.createEl("strong", { text: "API Key (\uC120\uD0DD)" });
+    step3Content.createEl("p", { text: "\uC6D0\uACA9 \uC11C\uBC84\uB97C \uC0AC\uC6A9\uD558\uB294 \uACBD\uC6B0 \uC778\uC99D\uC6A9 API Key\uB97C \uC785\uB825\uD558\uC138\uC694. \uB85C\uCEEC \uC11C\uBC84\uB294 \uBE44\uC6CC\uB450\uC138\uC694." });
+    const apiKeyInput = step3Content.createEl("input", {
+      type: "password",
+      placeholder: "API Key (\uC120\uD0DD\uC0AC\uD56D)",
+      cls: "meetnote-onboarding-input"
+    });
+    apiKeyInput.value = this.plugin.settings.apiKey;
+    const step4 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+    step4.createEl("div", { text: "4", cls: "meetnote-onboarding-number" });
+    const step4Content = step4.createDiv();
+    step4Content.createEl("strong", { text: "\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C (\uD544\uC218)" });
+    step4Content.createEl("p", { text: "\uD68C\uC758\uB85D \uC774\uBA54\uC77C \uC804\uC1A1 \uC2DC \uC0AC\uC6A9\uD560 \uBC1C\uC2E0\uC790 \uC8FC\uC18C\uC785\uB2C8\uB2E4. \uC0AC\uC6A9\uC790 \uC2DD\uBCC4\uC5D0\uB3C4 \uC0AC\uC6A9\uB429\uB2C8\uB2E4." });
+    const emailInput = step4Content.createEl("input", {
+      type: "email",
+      placeholder: "your@email.com",
+      cls: "meetnote-onboarding-input"
+    });
+    emailInput.value = this.plugin.settings.emailFromAddress;
+    const step5 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+    step5.createEl("div", { text: "5", cls: "meetnote-onboarding-number" });
+    const step5Content = step5.createDiv();
+    step5Content.createEl("strong", { text: "\uCC38\uC11D\uC790 \uC790\uB3D9\uC644\uC131 \uACBD\uB85C (\uC120\uD0DD)" });
+    step5Content.createEl("p", { text: "vault \uB0B4 \uC0AC\uC6A9\uC790 \uC815\uBCF4\uAC00 \uC788\uB294 \uD3F4\uB354 \uACBD\uB85C\uB97C \uC785\uB825\uD558\uC138\uC694. \uD654\uC790 \uB4F1\uB85D \uC2DC \uC774\uB984/\uC774\uBA54\uC77C \uC790\uB3D9\uC644\uC131\uC5D0 \uC0AC\uC6A9\uB429\uB2C8\uB2E4." });
+    const participantInput = step5Content.createEl("input", {
+      type: "text",
+      placeholder: "\uC608: People",
+      cls: "meetnote-onboarding-input"
+    });
+    participantInput.value = this.plugin.settings.participantSuggestPath;
+    const step6 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+    step6.createEl("div", { text: "6", cls: "meetnote-onboarding-number" });
+    const step6Content = step6.createDiv();
+    step6Content.createEl("strong", { text: "\uB179\uC74C \uC2DC\uC791" });
+    step6Content.createEl("p", { text: "\uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uC5F4\uACE0, \uB9AC\uBCF8\uC758 \uB9C8\uC774\uD06C \uC544\uC774\uCF58\uC744 \uD074\uB9AD\uD558\uBA74 \uB179\uC74C\uC774 \uC2DC\uC791\uB429\uB2C8\uB2E4. \uB179\uC74C \uC885\uB8CC \uD6C4 \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C '\uCC98\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC \uC804\uC0AC\uB97C \uC2E4\uD589\uD558\uC138\uC694." });
     const btnRow = contentEl.createDiv({ cls: "meetnote-onboarding-actions" });
     const saveBtn = btnRow.createEl("button", { text: "\uC800\uC7A5 \uD6C4 \uC2DC\uC791", cls: "mod-cta" });
     saveBtn.addEventListener("click", async () => {
@@ -2869,6 +2902,9 @@ var OnboardingModal = class extends import_obsidian4.Modal {
       if (url) {
         this.plugin.settings.serverUrl = url;
       }
+      this.plugin.settings.apiKey = apiKeyInput.value.trim();
+      this.plugin.settings.emailFromAddress = emailInput.value.trim();
+      this.plugin.settings.participantSuggestPath = participantInput.value.trim();
       await this.plugin.saveSettings();
       new import_obsidian4.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       this.close();

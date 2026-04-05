@@ -923,12 +923,51 @@ class OnboardingModal extends Modal {
 		});
 		urlInput.value = this.plugin.settings.serverUrl;
 
-		// Step 3
+		// Step 3: API Key
 		const step3 = steps.createDiv({ cls: "meetnote-onboarding-step" });
 		step3.createEl("div", { text: "3", cls: "meetnote-onboarding-number" });
 		const step3Content = step3.createDiv();
-		step3Content.createEl("strong", { text: "녹음 시작" });
-		step3Content.createEl("p", { text: "마크다운 문서를 열고, 리본의 마이크 아이콘을 클릭하면 녹음이 시작됩니다. 녹음 종료 후 사이드 패널에서 '처리' 버튼을 눌러 전사를 실행하세요." });
+		step3Content.createEl("strong", { text: "API Key (선택)" });
+		step3Content.createEl("p", { text: "원격 서버를 사용하는 경우 인증용 API Key를 입력하세요. 로컬 서버는 비워두세요." });
+		const apiKeyInput = step3Content.createEl("input", {
+			type: "password",
+			placeholder: "API Key (선택사항)",
+			cls: "meetnote-onboarding-input",
+		});
+		apiKeyInput.value = this.plugin.settings.apiKey;
+
+		// Step 4: 발신자 이메일
+		const step4 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step4.createEl("div", { text: "4", cls: "meetnote-onboarding-number" });
+		const step4Content = step4.createDiv();
+		step4Content.createEl("strong", { text: "발신자 이메일 (필수)" });
+		step4Content.createEl("p", { text: "회의록 이메일 전송 시 사용할 발신자 주소입니다. 사용자 식별에도 사용됩니다." });
+		const emailInput = step4Content.createEl("input", {
+			type: "email",
+			placeholder: "your@email.com",
+			cls: "meetnote-onboarding-input",
+		});
+		emailInput.value = this.plugin.settings.emailFromAddress;
+
+		// Step 5: 참석자 자동완성 경로
+		const step5 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step5.createEl("div", { text: "5", cls: "meetnote-onboarding-number" });
+		const step5Content = step5.createDiv();
+		step5Content.createEl("strong", { text: "참석자 자동완성 경로 (선택)" });
+		step5Content.createEl("p", { text: "vault 내 사용자 정보가 있는 폴더 경로를 입력하세요. 화자 등록 시 이름/이메일 자동완성에 사용됩니다." });
+		const participantInput = step5Content.createEl("input", {
+			type: "text",
+			placeholder: "예: People",
+			cls: "meetnote-onboarding-input",
+		});
+		participantInput.value = this.plugin.settings.participantSuggestPath;
+
+		// Step 6: 녹음 시작 안내
+		const step6 = steps.createDiv({ cls: "meetnote-onboarding-step" });
+		step6.createEl("div", { text: "6", cls: "meetnote-onboarding-number" });
+		const step6Content = step6.createDiv();
+		step6Content.createEl("strong", { text: "녹음 시작" });
+		step6Content.createEl("p", { text: "마크다운 문서를 열고, 리본의 마이크 아이콘을 클릭하면 녹음이 시작됩니다. 녹음 종료 후 사이드 패널에서 '처리' 버튼을 눌러 전사를 실행하세요." });
 
 		// Action buttons
 		const btnRow = contentEl.createDiv({ cls: "meetnote-onboarding-actions" });
@@ -939,6 +978,9 @@ class OnboardingModal extends Modal {
 			if (url) {
 				this.plugin.settings.serverUrl = url;
 			}
+			this.plugin.settings.apiKey = apiKeyInput.value.trim();
+			this.plugin.settings.emailFromAddress = emailInput.value.trim();
+			this.plugin.settings.participantSuggestPath = participantInput.value.trim();
 			await this.plugin.saveSettings();
 			new Notice("설정이 저장되었습니다.");
 			this.close();

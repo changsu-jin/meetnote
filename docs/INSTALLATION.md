@@ -54,6 +54,23 @@ bash install-local.sh
 
 설치 중 "HuggingFace 토큰:" 프롬프트가 나타나면, 아래 섹션에서 발급받은 토큰을 붙여넣으세요.
 
+### 이메일 설정 (선택)
+
+이메일 전송 기능을 사용하려면 `backend/.env` 파일에 SMTP 설정을 추가합니다:
+
+```bash
+cd ~/meetnote/backend
+cat >> .env << 'EOF'
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your@gmail.com
+SMTP_PASSWORD="앱비밀번호"
+EOF
+```
+
+> 비밀번호에 공백이 있으면 반드시 따옴표로 감싸세요.
+> `.env` 파일 없이도 녹음, 전사, 화자구분, 요약은 모두 정상 동작합니다.
+
 ### 서버 실행
 
 ```bash
