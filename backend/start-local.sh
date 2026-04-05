@@ -7,13 +7,18 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# .env 로드 (값에 공백이 있을 수 있으므로 라인 단위 파싱)
+# .env 로드 (값에 공백/따옴표가 있을 수 있음)
 if [ -f ".env" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
-        line="${line%%#*}"  # 주석 제거
-        line="${line// /}"  # 앞뒤 공백은 유지하되 빈 줄 스킵
-        if [[ -n "$line" && "$line" == *"="* ]]; then
-            export "$line"
+        # 주석/빈줄 스킵
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if [[ "$line" == *"="* ]]; then
+            key="${line%%=*}"
+            val="${line#*=}"
+            # 따옴표 제거
+            val="${val%\"}"
+            val="${val#\"}"
+            export "$key=$val"
         fi
     done < .env
 fi

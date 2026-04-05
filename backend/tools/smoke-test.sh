@@ -21,7 +21,7 @@ check() {
     local expected="$3"
 
     RESPONSE=$(curl -s --connect-timeout 5 "$url" 2>/dev/null)
-    if echo "$RESPONSE" | grep -q "$expected" 2>/dev/null; then
+    if echo "$RESPONSE" | grep -qF "$expected" 2>/dev/null; then
         echo -e "${GREEN}✓${NC} $name"
         PASS=$((PASS + 1))
     else

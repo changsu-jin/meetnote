@@ -357,6 +357,22 @@ class AppState:
     def remove_session(self, ws: WebSocket) -> None:
         self.sessions.pop(ws, None)
 
+    @property
+    def last_meeting_embeddings(self) -> dict:
+        """Get last meeting embeddings from any session (backward compat for routers)."""
+        for s in self.sessions.values():
+            if s.last_meeting_embeddings:
+                return s.last_meeting_embeddings
+        return {}
+
+    @property
+    def last_meeting_speaker_map(self) -> dict:
+        """Get last meeting speaker map from any session (backward compat for routers)."""
+        for s in self.sessions.values():
+            if s.last_meeting_speaker_map:
+                return s.last_meeting_speaker_map
+        return {}
+
 
 state = AppState()
 
@@ -426,7 +442,8 @@ app = FastAPI(title="MeetNote Backend", lifespan=lifespan)
 # API Key middleware
 app.add_middleware(APIKeyMiddleware)
 
-_cors_origins = os.environ.get("CORS_ORIGINS", "app://obsidian.md,http://localhost,http://127.0.0.1").split(",")
+_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+# 기본값 "*"은 개발 편의를 위함. 운영 환경에서는 CORS_ORIGINS 환경변수로 제한 권장.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
