@@ -113,8 +113,8 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("발신자 이메일")
-			.setDesc("회의록 이메일 전송 시 From 주소")
+			.setName("발신자 이메일 *")
+			.setDesc("사용자 식별 + 이메일 발송 From 주소 (필수)")
 			.addText((text) => {
 				text
 					.setPlaceholder("your@company.com")
@@ -124,7 +124,7 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 				const val = this.plugin.settings.emailFromAddress;
-				if (val && !this.isValidEmail(val)) {
+				if (!val || !this.isValidEmail(val)) {
 					text.inputEl.addClass("meetnote-input-error");
 				}
 			});

@@ -721,13 +721,13 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C").setDesc("\uD68C\uC758\uB85D \uC774\uBA54\uC77C \uC804\uC1A1 \uC2DC From \uC8FC\uC18C").addText((text) => {
+    new import_obsidian.Setting(containerEl).setName("\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C *").setDesc("\uC0AC\uC6A9\uC790 \uC2DD\uBCC4 + \uC774\uBA54\uC77C \uBC1C\uC1A1 From \uC8FC\uC18C (\uD544\uC218)").addText((text) => {
       text.setPlaceholder("your@company.com").setValue(this.plugin.settings.emailFromAddress).onChange(async (value) => {
         this.plugin.settings.emailFromAddress = value.trim();
         await this.plugin.saveSettings();
       });
       const val = this.plugin.settings.emailFromAddress;
-      if (val && !this.isValidEmail(val)) {
+      if (!val || !this.isValidEmail(val)) {
         text.inputEl.addClass("meetnote-input-error");
       }
     });
@@ -2327,6 +2327,10 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     }
     if (!this.backendClient.connected) {
       new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
+    if (!this.settings.emailFromAddress) {
+      new import_obsidian4.Notice("MeetNote \uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.");
       return;
     }
     const activeFile = this.app.workspace.getActiveFile();

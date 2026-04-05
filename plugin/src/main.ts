@@ -253,6 +253,12 @@ export default class MeetNotePlugin extends Plugin {
 			return;
 		}
 
+		// Ensure email is configured (used as user_id)
+		if (!this.settings.emailFromAddress) {
+			new Notice("MeetNote 설정에서 발신자 이메일을 입력해주세요.");
+			return;
+		}
+
 		// Ensure there is an active markdown file
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile || activeFile.extension !== "md") {
