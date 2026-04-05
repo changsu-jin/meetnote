@@ -10,6 +10,7 @@ export interface MeetNoteSettings {
 	audioDevice: string;
 	emailFromAddress: string;
 	gitlabLinkEnabled: boolean;
+	onboardingDone: boolean;
 }
 
 export const DEFAULT_SETTINGS: MeetNoteSettings = {
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: MeetNoteSettings = {
 	audioDevice: "",
 	emailFromAddress: "",
 	gitlabLinkEnabled: true,
+	onboardingDone: false,
 };
 
 export class MeetNoteSettingTab extends PluginSettingTab {

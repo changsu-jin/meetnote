@@ -220,8 +220,8 @@ export default class MeetNotePlugin extends Plugin {
 
 		this.addSettingTab(new MeetNoteSettingTab(this.app, this));
 
-		// Show onboarding if server URL is default (not configured)
-		if (this.settings.serverUrl === DEFAULT_SETTINGS.serverUrl) {
+		// Show onboarding only once (first install)
+		if (!this.settings.onboardingDone) {
 			this.showOnboarding();
 		}
 
@@ -981,6 +981,7 @@ class OnboardingModal extends Modal {
 			this.plugin.settings.apiKey = apiKeyInput.value.trim();
 			this.plugin.settings.emailFromAddress = emailInput.value.trim();
 			this.plugin.settings.participantSuggestPath = participantInput.value.trim();
+			this.plugin.settings.onboardingDone = true;
 			await this.plugin.saveSettings();
 			new Notice("설정이 저장되었습니다.");
 			this.close();
@@ -988,7 +989,11 @@ class OnboardingModal extends Modal {
 		});
 
 		const skipBtn = btnRow.createEl("button", { text: "나중에 설정" });
-		skipBtn.addEventListener("click", () => this.close());
+		skipBtn.addEventListener("click", async () => {
+			this.plugin.settings.onboardingDone = true;
+			await this.plugin.saveSettings();
+			this.close();
+		});
 	}
 
 	onClose(): void {

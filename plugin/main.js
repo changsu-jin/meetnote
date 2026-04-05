@@ -670,7 +670,8 @@ var DEFAULT_SETTINGS = {
   participantSuggestPath: "",
   audioDevice: "",
   emailFromAddress: "",
-  gitlabLinkEnabled: true
+  gitlabLinkEnabled: true,
+  onboardingDone: false
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -2302,7 +2303,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       (leaf) => new MeetNoteSidePanel(leaf, this)
     );
     this.addSettingTab(new MeetNoteSettingTab(this.app, this));
-    if (this.settings.serverUrl === DEFAULT_SETTINGS.serverUrl) {
+    if (!this.settings.onboardingDone) {
       this.showOnboarding();
     }
     console.log("MeetNote plugin loaded");
@@ -2905,13 +2906,18 @@ var OnboardingModal = class extends import_obsidian4.Modal {
       this.plugin.settings.apiKey = apiKeyInput.value.trim();
       this.plugin.settings.emailFromAddress = emailInput.value.trim();
       this.plugin.settings.participantSuggestPath = participantInput.value.trim();
+      this.plugin.settings.onboardingDone = true;
       await this.plugin.saveSettings();
       new import_obsidian4.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       this.close();
       this.app.commands.executeCommandById("meetnote:open-side-panel");
     });
     const skipBtn = btnRow.createEl("button", { text: "\uB098\uC911\uC5D0 \uC124\uC815" });
-    skipBtn.addEventListener("click", () => this.close());
+    skipBtn.addEventListener("click", async () => {
+      this.plugin.settings.onboardingDone = true;
+      await this.plugin.saveSettings();
+      this.close();
+    });
   }
   onClose() {
     this.contentEl.empty();
