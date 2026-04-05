@@ -49,12 +49,14 @@ Obsidian → BRAT 플러그인 → `changsu-jin/meetnote` 추가
 
 ## 플랫폼 지원
 
-| 플랫폼 | Docker | GPU | 권장 |
-|--------|--------|-----|------|
-| Linux + NVIDIA | O | CUDA | Docker |
-| Windows + NVIDIA | O | CUDA (WSL2) | Docker |
-| macOS (Apple Silicon) | O (CPU) | MPS/MLX (venv) | venv |
-| macOS (Intel) / Linux (CPU) | O | X | Docker |
+| 플랫폼 | Docker | GPU | 처리 속도 (60분 회의) | 권장 |
+|--------|--------|-----|-------------------|------|
+| Linux + NVIDIA | O | CUDA | ~5분 | Docker |
+| Windows + NVIDIA | O | CUDA (WSL2) | ~5분 | Docker |
+| macOS (Apple Silicon) | O (CPU) | MPS/MLX (venv) | ~5분 (venv) / ~40분 (Docker, CPU) | venv |
+| macOS (Intel) / Linux (CPU) | O | X | ~40분 (CPU only) | Docker |
+
+> GPU가 없는 환경에서는 화자구분이 CPU로 동작하여 처리 시간이 크게 늘어납니다.
 
 ## 라이선스
 
