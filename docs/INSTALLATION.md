@@ -87,13 +87,20 @@ bash start-local.sh 9000
 mkdir -p meetnote && cd meetnote
 curl -O https://raw.githubusercontent.com/changsu-jin/meetnote/main/backend/docker-compose.yml
 
-# 2. 서버 실행
+# 2. 이메일 전송 설정 (선택 — 이메일 기능 사용 시 필수)
+cat > .env << 'EOF'
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your@gmail.com
+SMTP_PASSWORD=앱비밀번호
+EOF
+
+# 3. 서버 실행
 docker compose up -d
 ```
 
-이것으로 끝입니다. Docker 이미지에 Whisper, pyannote 모델이 모두 포함되어 있으므로 **HuggingFace 토큰이 필요 없습니다**.
-
-SMTP 등 환경변수가 필요하면 `.env` 파일을 생성하세요 (없어도 동작합니다).
+> `.env` 파일 없이도 서버는 정상 동작합니다 (녹음, 전사, 화자구분, 요약 모두 가능).
+> 이메일 전송 기능을 사용하려면 SMTP 설정이 필요합니다.
 
 ### 데이터 영속화
 
