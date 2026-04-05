@@ -83,19 +83,17 @@ bash start-local.sh 9000
 ### 설치 및 실행
 
 ```bash
-# 1. 프로젝트 다운로드
-git clone https://github.com/changsu-jin/meetnote.git
-cd meetnote/backend
+# 1. docker-compose.yml 다운로드
+mkdir -p meetnote && cd meetnote
+curl -O https://raw.githubusercontent.com/changsu-jin/meetnote/main/backend/docker-compose.yml
 
-# 2. 환경변수 설정 (선택)
-cp .env.example .env
-# .env 파일을 열어 SMTP 등 필요한 값 수정
-
-# 3. 서버 실행
+# 2. 서버 실행
 docker compose up -d
 ```
 
 이것으로 끝입니다. Docker 이미지에 Whisper, pyannote 모델이 모두 포함되어 있으므로 **HuggingFace 토큰이 필요 없습니다**.
+
+SMTP 등 환경변수가 필요하면 `.env` 파일을 생성하세요 (없어도 동작합니다).
 
 ### 데이터 영속화
 
