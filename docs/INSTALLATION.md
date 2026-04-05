@@ -13,7 +13,7 @@ MeetNote 서버는 **Docker** 또는 **macOS 로컬(venv)** 두 가지 방식으
 |---|---|---|
 | **대상** | 팀 내 공용 서버에 올려두고 여러 명이 사용 | 본인 맥북에서 직접 실행 |
 | **OS** | Linux / macOS / Windows | macOS (Apple Silicon) |
-| **GPU 가속** | CPU only | MPS GPU 가속 (Apple Silicon) |
+| **GPU 가속** | CUDA (Linux + NVIDIA GPU) / macOS Docker는 CPU only | MPS/MLX (Apple Silicon) |
 | **모델 다운로드** | Docker 이미지에 포함 | 최초 실행 시 자동 다운로드 (~5GB) |
 | **HuggingFace 토큰** | **불필요** | **필요** (최초 1회 발급) |
 | **설치 난이도** | 쉬움 (docker compose up) | 보통 (스크립트 실행) |
