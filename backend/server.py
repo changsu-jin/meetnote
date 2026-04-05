@@ -569,7 +569,7 @@ async def get_pending_recordings(user_id: str = ""):
                 pass
 
         # Filter by user_id if provided
-        if user_id and meta_user_id and meta_user_id != user_id:
+        if user_id and meta_user_id != user_id:
             continue
 
         pending.append({
@@ -624,7 +624,7 @@ async def get_all_recordings(user_id: str = ""):
                 pass
 
         # Filter by user_id if provided
-        if user_id and meta_user_id and meta_user_id != user_id:
+        if user_id and meta_user_id != user_id:
             continue
 
         all_recs.append({
