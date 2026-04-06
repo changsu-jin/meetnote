@@ -87,10 +87,12 @@ bash start-local.sh
 bash start-local.sh 9000
 ```
 
-### 자동 시작 설정 (선택)
+### 자동 시작 설정 (선��, macOS 로컬 전용)
+
+> Docker 사용 시에는 `docker compose`의 `restart: always` 정책을 사용하세요. 이 섹션은 **macOS 로컬(venv) 설치**에만 해당합니다.
 
 매번 터미널에서 서버를 수동 실행하는 대신, **macOS 로그인 시 자동으로 시작**하도록 설정할 수 있습니다.
-노트북을 닫았다 열어도 서버가 자동으로 재시작됩니다.
+노트북을 닫���다 열어도 서버가 자동으로 재시작됩니다.
 
 ```bash
 cd ~/meetnote/backend
