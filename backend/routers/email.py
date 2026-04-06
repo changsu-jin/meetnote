@@ -139,6 +139,13 @@ async def send_email(req: EmailSendRequest):
     if req.body:
         subject = req.subject or "[MeetNote] 회의록"
         email_body = req.body
+        # GitLab 링크 추가 (vault_file_path가 있을 때)
+        if req.include_gitlab_link and req.vault_file_path:
+            vault_path = Path(req.vault_file_path)
+            if vault_path.exists():
+                gitlab_url = await asyncio.to_thread(_get_gitlab_url, str(vault_path))
+                if gitlab_url:
+                    email_body += f"\n\n---\n📎 문서 링크: {gitlab_url}\n"
     # Legacy: 서버가 vault 파일을 읽는 경우 (로컬 서버)
     elif req.vault_file_path:
         vault_path = Path(req.vault_file_path)

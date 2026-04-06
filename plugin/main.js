@@ -1511,13 +1511,17 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             emailBtn.setText("\uC804\uC1A1 \uC911...");
             emailBtn.setAttribute("disabled", "true");
             try {
+              const vaultBasePath = this.app.vault.adapter?.basePath || "";
+              const vaultFilePath = vaultBasePath ? `${vaultBasePath}/${docPath}` : "";
               const resp = await this.api("/email/send", {
                 method: "POST",
                 body: {
                   recipients: selected,
                   from_address: fromAddress,
                   subject: `[MeetNote] ${docName}`,
-                  body: emailBody
+                  body: emailBody,
+                  vault_file_path: vaultFilePath,
+                  include_gitlab_link: this.plugin.settings.gitlabLinkEnabled
                 }
               });
               if (resp.ok) {

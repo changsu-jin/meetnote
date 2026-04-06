@@ -494,6 +494,10 @@ export class MeetNoteSidePanel extends ItemView {
 						emailBtn.setAttribute("disabled", "true");
 
 						try {
+							// vault 절대 경로 구성 (GitLab 링크 생성용)
+							const vaultBasePath = (this.app.vault.adapter as any)?.basePath || "";
+							const vaultFilePath = vaultBasePath ? `${vaultBasePath}/${docPath}` : "";
+
 							const resp = await this.api("/email/send", {
 								method: "POST",
 								body: {
@@ -501,6 +505,8 @@ export class MeetNoteSidePanel extends ItemView {
 									from_address: fromAddress,
 									subject: `[MeetNote] ${docName}`,
 									body: emailBody,
+									vault_file_path: vaultFilePath,
+									include_gitlab_link: this.plugin.settings.gitlabLinkEnabled,
 								},
 							});
 							if (resp.ok) {
