@@ -52,11 +52,19 @@ bash install-local.sh
 - Apple Silicon인 경우 MLX Whisper 설치 (GPU 가속)
 - HuggingFace 토큰 입력 안내 및 `.env` 파일 생성
 
-설치 중 "HuggingFace 토큰:" 프롬프트가 나타나면, 아래 섹션에서 발급받은 토큰을 붙여넣으세요.
+설치 중 "HuggingFace 토큰:" 프롬프트가 나타나면, [HuggingFace 토큰 발급](#huggingface-토큰-발급) 섹션을 참고하여 토큰을 붙여넣으세요.
 
 ### 이메일 설정 (선택)
 
-이메일 전송 기능을 사용하려면 `backend/.env` 파일에 SMTP 설정을 추가합니다:
+설치 스크립트에서 SMTP 설정을 안내합니다. Gmail을 사용하는 경우 **앱 비밀번호**가 필요합니다:
+
+1. [Google 앱 비밀번호 페이지](https://myaccount.google.com/apppasswords)에 접속
+2. 앱 이름 입력 (예: `meetnote`) → **만들기** 클릭
+3. 생성된 16자리 비밀번호를 복사하여 설치 시 입력
+
+> 앱 비밀번호는 Google 계정에 **2단계 인증이 활성화**되어 있어야 생성할 수 있습니다.
+
+수동으로 설정하려면 `backend/.env` 파일에 추가합니다:
 
 ```bash
 cd ~/meetnote/backend
