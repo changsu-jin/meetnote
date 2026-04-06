@@ -87,6 +87,25 @@ bash start-local.sh
 bash start-local.sh 9000
 ```
 
+### 자동 시작 설정 (선택)
+
+매번 터미널에서 서버를 수동 실행하는 대신, **macOS 로그인 시 자동으로 시작**하도록 설정할 수 있습니다.
+노트북을 닫았다 열어도 서버가 자동으로 재시작됩니다.
+
+```bash
+cd ~/meetnote/backend
+bash install-autostart.sh
+```
+
+자동 시작을 제거하려면:
+
+```bash
+bash install-autostart.sh remove
+```
+
+> 서버 로그는 `backend/logs/` 디렉토리에서 확인할 수 있습니다:
+> `tail -f ~/meetnote/backend/logs/server.err.log`
+
 ---
 
 ## Docker 서버 설치 (팀 공용)
@@ -310,6 +329,8 @@ bash upgrade.sh
 ### 매번 하는 것 (macOS 로컬)
 1. 터미널에서 `cd ~/meetnote/backend && bash start-local.sh`
 2. Obsidian 열기 → 문서 열기/생성 → 녹음 시작/중지 → 처리
+
+> 자동 시작을 설정했다면 1번은 불필요합니다. (`bash install-autostart.sh`)
 
 ### 매번 하는 것 (Docker)
 1. Docker Desktop 실행 확인 (자동 시작 설정 권장)
