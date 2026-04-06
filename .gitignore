@@ -48,3 +48,4 @@ backlog/
 # Backend data directories
 backend/data/
 backend/models/
+backend/logs/
