@@ -87,7 +87,7 @@ bash start-local.sh
 bash start-local.sh 9000
 ```
 
-### 자동 시작 설정 (선��, macOS 로컬 전용)
+### 자동 시작 설정 (선택, macOS 로컬 전용)
 
 > Docker 사용 시에는 `docker compose`의 `restart: always` 정책을 사용하세요. 이 섹션은 **macOS 로컬(venv) 설치**에만 해당합니다.
 
