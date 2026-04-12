@@ -5,6 +5,8 @@
  * Falls back gracefully if Claude CLI is not installed.
  */
 
+import { App, TFile, Notice } from "obsidian";
+
 const MAX_TRANSCRIPT_CHARS = 50_000;
 const SUMMARY_TIMEOUT_MS = 120_000;
 
@@ -41,10 +43,134 @@ const SUMMARY_PROMPT = `\
 {transcript}
 `;
 
+export type SummaryFailureReason =
+	| "no-transcript"     // 녹취 내용이 비어 있음 → 요약할 게 없음
+	| "engine-missing"    // Claude CLI / Ollama 둘 다 설치되어 있지 않음
+	| "generation-failed" // 엔진은 있으나 실행 실패 / 빈 출력
+	| "parse-failed";     // 출력이 예상 포맷이 아님 (4개 섹션 헤딩 없음)
+
 export interface SummaryResult {
 	success: boolean;
 	summary: string;
 	engine: "claude" | "ollama" | "none";
+	reason?: SummaryFailureReason;
+}
+
+export interface ParsedSummary {
+	ok: boolean;
+	summary: string;
+	decisions: string;
+	actions: string;
+	tags: string;
+}
+
+/**
+ * Parse a raw summary blob (from Claude CLI / Ollama) into 4 sections.
+ * Robust to: ## or ### headings, ```markdown code-fence wrappers, leading preamble.
+ * Returns ok=false if no recognizable section was found.
+ */
+export function parseSummaryText(raw: string): ParsedSummary {
+	const empty: ParsedSummary = { ok: false, summary: "", decisions: "", actions: "", tags: "" };
+	if (!raw || !raw.trim()) return empty;
+
+	let text = raw.trim();
+
+	// Strip leading/trailing markdown code-fence wrapper (```markdown ... ``` or ``` ... ```)
+	const fenceMatch = text.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/);
+	if (fenceMatch) text = fenceMatch[1].trim();
+
+	const section = (label: string): string => {
+		// Allow ## or ### headings, optional whitespace, optional **bold**.
+		// Wrap label in a non-capturing group so `|` alternation inside the label
+		// doesn't split the whole regex and leave the capture group undefined.
+		const re = new RegExp(
+			`^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[가-힣A-Za-z]|\\n---|$)`,
+			"m",
+		);
+		const m = text.match(re);
+		return m && m[1] != null ? m[1].trim() : "";
+	};
+
+	const summary = section("요약");
+	const decisions = section("주요\\s*결정사항");
+	const actions = section("액션\\s*아이템|액션아이템|Action\\s*Items?");
+	const tags = section("태그|Tags?");
+
+	const ok = !!(summary || decisions || actions || tags);
+	return { ok, summary, decisions, actions, tags };
+}
+
+const PLACEHOLDER_RE = /\(요약 생성 중\.\.\.\)/g;
+
+/**
+ * Apply a SummaryResult to the meeting MD file.
+ * - On generation failure → writes "(요약 생성 실패)" / "(요약 생략)" + Notice
+ * - On parse failure → writes "(요약 파싱 실패)" + Notice (raw saved to console)
+ * - On success → fills the 4 sections, missing sections become "(없음)"
+ */
+export async function applySummaryToVault(
+	app: App,
+	file: TFile,
+	result: SummaryResult,
+): Promise<{ ok: boolean; reason?: SummaryFailureReason }> {
+	if (!result.success) {
+		// reason은 summarize()가 명시적으로 넣는 것이 우선, 없으면 engine으로 추정
+		const reason: SummaryFailureReason =
+			result.reason
+				?? (result.engine === "none" ? "engine-missing" : "generation-failed");
+		const replacement =
+			reason === "no-transcript" ? "(녹취 내용 없음)"
+			: reason === "engine-missing" ? "(요약 생략 — AI 엔진 미설치)"
+			: "(요약 생성 실패)";
+		try {
+			await app.vault.process(file, (c) => c.replace(PLACEHOLDER_RE, replacement));
+		} catch (err) {
+			console.error("[Summarizer] Failed to write fallback placeholder:", err);
+		}
+		if (reason === "no-transcript") {
+			// 녹취 내용이 없으면 사용자에게 알릴 필요 없음 — placeholder만 교체
+		} else if (reason === "engine-missing") {
+			new Notice("Claude CLI/Ollama가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+		} else {
+			new Notice("요약 생성에 실패했습니다. 콘솔 로그를 확인해주세요.", 8000);
+		}
+		return { ok: false, reason };
+	}
+
+	const parsed = parseSummaryText(result.summary);
+	if (!parsed.ok) {
+		console.warn("[Summarizer] Could not parse summary output. Raw text:\n", result.summary);
+		try {
+			await app.vault.process(file, (c) => c.replace(PLACEHOLDER_RE, "(요약 파싱 실패)"));
+		} catch (err) {
+			console.error("[Summarizer] Failed to write parse-failed placeholder:", err);
+		}
+		new Notice("요약 형식을 인식하지 못했습니다 (요약 파싱 실패). 콘솔 로그 확인.", 8000);
+		return { ok: false, reason: "parse-failed" as SummaryFailureReason };
+	}
+
+	try {
+		await app.vault.process(file, (content) => {
+			let u = content;
+			const repl = (label: string, val: string) => {
+				const re = new RegExp(`### ${label}\\n\\n\\(요약 생성 중\\.\\.\\.\\)`);
+				u = u.replace(re, `### ${label}\n${val.trim() || "(없음)"}`);
+			};
+			repl("요약", parsed.summary);
+			repl("주요 결정사항", parsed.decisions);
+			repl("액션아이템", parsed.actions);
+			repl("태그", parsed.tags);
+			// Sweep any leftover placeholders (defensive)
+			u = u.replace(PLACEHOLDER_RE, "(없음)");
+			return u;
+		});
+	} catch (err) {
+		console.error("[Summarizer] Failed to apply summary to vault:", err);
+		new Notice("요약 적용 중 오류가 발생했습니다.", 8000);
+		return { ok: false, reason: "generation-failed" };
+	}
+
+	return { ok: true };
 }
 
 export interface FinalSegment {
@@ -150,7 +276,8 @@ function summarizeWithOllama(prompt: string): Promise<SummaryResult> {
 export async function summarize(segments: FinalSegment[]): Promise<SummaryResult> {
 	const transcript = formatTranscript(segments);
 	if (!transcript) {
-		return { success: false, summary: "", engine: "none" };
+		console.log("[Summarizer] Transcript is empty — skipping summary.");
+		return { success: false, summary: "", engine: "none", reason: "no-transcript" };
 	}
 
 	// 1. Try Claude CLI
@@ -164,7 +291,7 @@ export async function summarize(segments: FinalSegment[]): Promise<SummaryResult
 		}
 
 		console.log("[Summarizer] Ollama not found — skipping summary.");
-		return { success: false, summary: "", engine: "none" };
+		return { success: false, summary: "", engine: "none", reason: "engine-missing" };
 	}
 
 	const prompt = buildPrompt(transcript);

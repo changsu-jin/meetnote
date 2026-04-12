@@ -49,3 +49,4 @@ backlog/
 backend/data/
 backend/models/
 backend/logs/
+plugin/test-results/

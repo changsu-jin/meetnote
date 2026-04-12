@@ -272,17 +272,22 @@ WebSocket은 **두 가지 메시지 타입**을 수신합니다:
 
 ### POST /email/send
 
-회의록을 이메일로 발송합니다. `from_address`는 플러그인 설정에서 전달됩니다.
+회의록을 이메일로 발송합니다. 본문은 플러그인이 MD 파일에서 `<!-- meetnote-start -->` ~ `## 녹취록` 사이(요약/결정/액션/태그 섹션)만 추출해 전달합니다. 녹취록 전문은 포함하지 않습니다.
 
 **Request:**
 ```json
 {
   "recipients": ["user1@example.com", "user2@example.com"],
   "from_address": "sender@example.com",
+  "subject": "[MeetNote] 2026-04-12 기획회의",
+  "body": "### 요약\n- 핵심 논의...\n\n### 주요 결정사항\n- ...\n\n### 액션아이템\n- [ ] ...\n\n### 태그\n#키워드",
   "vault_file_path": "/vault/meetings/회의록.md",
   "include_gitlab_link": true
 }
 ```
+
+- `subject` / `body` 필수. 플러그인의 `side-panel.ts` emailBtn handler가 이 포맷 그대로 호출합니다.
+- `include_gitlab_link=true` + `vault_file_path`가 유효한 git 저장소 경로일 때 메일 하단에 해당 파일의 GitLab 링크가 추가됩니다.
 
 **Response:**
 ```json

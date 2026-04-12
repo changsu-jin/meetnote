@@ -7,9 +7,9 @@
  * - Speaker mapping UI (register/edit/delete)
  */
 
-import { ItemView, Notice, WorkspaceLeaf, TFile, requestUrl, setIcon } from "obsidian";
+import { ItemView, Modal, Notice, WorkspaceLeaf, TFile, requestUrl, setIcon } from "obsidian";
 import type MeetNotePlugin from "./main";
-import { summarize } from "./summarizer";
+import { summarize, applySummaryToVault } from "./summarizer";
 
 export const SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 
@@ -35,6 +35,7 @@ interface SpeakerInfo {
 
 interface LastMeetingSpeaker {
 	speaker_map: Record<string, string>;
+	speaker_email_map?: Record<string, string>;
 	available_labels: string[];
 	wav_path?: string;
 }
@@ -42,6 +43,7 @@ interface LastMeetingSpeaker {
 export class MeetNoteSidePanel extends ItemView {
 	plugin: MeetNotePlugin;
 	private refreshInterval: ReturnType<typeof setInterval> | null = null;
+	private headerRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private processing = false;
 	private serverProcess: any = null;
 	private selectedWavPath: string = "";  // WAV path for speaker mapping context
@@ -74,7 +76,14 @@ export class MeetNoteSidePanel extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
-		// nothing to clean up
+		this.clearHeaderRefresh();
+	}
+
+	private clearHeaderRefresh(): void {
+		if (this.headerRefreshInterval !== null) {
+			clearInterval(this.headerRefreshInterval);
+			this.headerRefreshInterval = null;
+		}
 	}
 
 	async render(): Promise<void> {
@@ -111,13 +120,15 @@ export class MeetNoteSidePanel extends ItemView {
 		});
 
 		if (serverOnline) {
-			// Record button
 			const isRecording = this.plugin.isRecording;
+			const isPaused = this.plugin.isPaused;
+
+			// Record button (lucide icon)
 			const recBtn = headerActions.createEl("button", {
-				text: isRecording ? "⏹" : "🎙",
 				cls: "meetnote-header-btn",
 				attr: { title: isRecording ? "녹음 중지" : "녹음 시작" },
 			});
+			setIcon(recBtn, isRecording ? "square" : "mic");
 			recBtn.addEventListener("click", () => {
 				(this.app as any).commands.executeCommandById(
 					isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
@@ -125,15 +136,87 @@ export class MeetNoteSidePanel extends ItemView {
 				setTimeout(() => this.render(), 1000);
 			});
 
+			// Pause/Resume button (only visible during recording)
+			if (isRecording) {
+				const pauseBtn = headerActions.createEl("button", {
+					cls: "meetnote-header-btn",
+					attr: { title: isPaused ? "녹음 재개" : "녹음 일시중지" },
+				});
+				setIcon(pauseBtn, isPaused ? "play" : "pause");
+				pauseBtn.addEventListener("click", () => {
+					if (isPaused) {
+						this.plugin.resumeRecording();
+					} else {
+						this.plugin.pauseRecording();
+					}
+				});
+			}
 		}
 
-		const dashBtn = headerActions.createEl("button", { text: "📊", cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
+		const dashBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
+		setIcon(dashBtn, "bar-chart-2");
 		dashBtn.addEventListener("click", () => {
 			(this.app as any).commands.executeCommandById("meetnote:meeting-dashboard");
 		});
 
-		const refreshBtn = headerActions.createEl("button", { text: "↻", cls: "meetnote-header-btn" });
+		const refreshBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "새로고침" } });
+		setIcon(refreshBtn, "refresh-cw");
 		refreshBtn.addEventListener("click", () => this.render());
+
+		// #1: Recording elapsed time display — plugin의 단일 경과시간 소스 사용
+		// (일시중지 시간은 경과에 포함하지 않음 → 상태바와 항상 일치)
+		if (serverOnline && this.plugin.isRecording) {
+			const recStatus = headerSection.createDiv({ cls: `meetnote-rec-status ${this.plugin.isPaused ? "" : "meetnote-rec-pulse"}` });
+			const recStatusText = recStatus.createEl("span");
+			const updateHeaderTime = () => {
+				const elapsed = Math.floor(this.plugin.getRecordedElapsedMs() / 1000);
+				const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+				const ss = String(elapsed % 60).padStart(2, "0");
+				recStatusText.setText(this.plugin.isPaused ? `⏸ 일시중지 ${mm}:${ss}` : `🔴 녹음 중 ${mm}:${ss}`);
+			};
+			updateHeaderTime();
+			// 1초마다 텍스트만 업데이트. 다음 render() 시 이전 타이머는 clearHeaderRefresh로 정리.
+			this.clearHeaderRefresh();
+			if (!this.plugin.isPaused) {
+				this.headerRefreshInterval = setInterval(() => {
+					if (!this.plugin.isRecording || this.plugin.isPaused) {
+						this.clearHeaderRefresh();
+						return;
+					}
+					updateHeaderTime();
+				}, 1000);
+			}
+		} else {
+			this.clearHeaderRefresh();
+		}
+
+		// #3: Server offline banner (single unified message)
+		if (!serverOnline) {
+			const offlineBanner = container.createDiv({ cls: "meetnote-offline-banner" });
+			offlineBanner.createEl("span", { text: "서버에 연결할 수 없습니다. 서버를 시작하고 새로고침하세요." });
+			return; // Don't render sections that require server
+		}
+
+		// #5: Progress section right after header
+		if (this.processing) {
+			const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
+			const title = this.processingDocName ? `처리 중: ${this.processingDocName}` : "처리 중...";
+			progressSection.createEl("h4", { text: title });
+			const stageEl = progressSection.createEl("div", { text: "준비 중...", cls: "meetnote-progress-stage" });
+			const progressBar = progressSection.createDiv({ cls: "meetnote-progress" });
+			const bar = progressBar.createDiv({ cls: "meetnote-progress-bar" });
+			const progressPoller = setInterval(async () => {
+				if (!this.processing) { clearInterval(progressPoller); return; }
+				try {
+					const prog = await this.api("/recordings/progress");
+					if (prog.processing && prog.stage) {
+						stageEl.textContent = `${prog.stage} (${Math.round(prog.percent)}%)`;
+						bar.style.width = `${Math.round(prog.percent)}%`;
+						bar.style.animation = "none";
+					}
+				} catch { /* ignore */ }
+			}, 2000);
+		}
 
 		// ── Recording Queue Section ──
 		let pendingCount = 0;
@@ -146,24 +229,26 @@ export class MeetNoteSidePanel extends ItemView {
 			const pendingContent = this.createCollapsibleSection(container, "pending", "대기 중", pendingCount > 0 ? `${pendingCount}` : undefined);
 
 			if (recordings.length === 0) {
-				pendingContent.createEl("p", { text: "대기 중인 녹음이 없습니다.", cls: "meetnote-empty" });
+				const emptyGuide = pendingContent.createDiv({ cls: "meetnote-empty-guide" });
+				const guideBtn = emptyGuide.createEl("button", { cls: "meetnote-guide-btn" });
+				setIcon(guideBtn, "mic");
+				guideBtn.appendText(" 녹음을 시작해보세요");
+				guideBtn.addEventListener("click", () => {
+					(this.app as any).commands.executeCommandById("meetnote:start-recording");
+					setTimeout(() => this.render(), 1000);
+				});
 			} else {
 				const listContainer = pendingContent.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of recordings) {
 					const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
 
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
-					if (rec.document_name) {
-						const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
+					const docDisplayName = rec.document_name || rec.filename || new Date(rec.created * 1000).toLocaleDateString("ko-KR");
+					{
+						const titleEl = info.createEl("a", { text: docDisplayName, cls: "meetnote-recording-title" });
 						titleEl.addEventListener("click", async (e) => {
 							e.preventDefault();
-							const docPath = rec.document_path || "";
-							if (docPath) {
-								const file = this.app.vault.getAbstractFileByPath(docPath);
-								if (file) {
-									await this.app.workspace.getLeaf().openFile(file as any);
-								}
-							}
+							await this.openRecordingDocument(rec);
 						});
 					}
 					const date = new Date(rec.created * 1000);
@@ -172,76 +257,94 @@ export class MeetNoteSidePanel extends ItemView {
 					info.createEl("div", { text: `${dateStr} · ${rec.duration_minutes}분 · 예상 처리시간 ~${estMinutes}분`, cls: "meetnote-recording-meta" });
 
 					const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+					if (rec.document_path) {
+						const continueBtn = btnGroup.createEl("button", { text: "이어 녹음", cls: "meetnote-edit-btn" });
+						continueBtn.addEventListener("click", async () => {
+							await this.plugin.startContinueRecording(rec.path, rec.document_path || "");
+							setTimeout(() => this.render(), 1000);
+						});
+					}
 					const btn = btnGroup.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
 					btn.addEventListener("click", () => this.processRecording(rec, btn));
 					const delBtn = btnGroup.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
-					delBtn.addEventListener("click", async () => {
+					delBtn.addEventListener("click", () => {
 						const docName = rec.document_name || rec.filename;
-						const confirmed = confirm(`"${docName}" 녹음 및 관련 파일을 모두 삭제하시겠습니까?\n\n삭제 대상:\n- 녹음 파일 (WAV)\n- 메타데이터\n- 연결된 마크다운 문서`);
-						if (!confirmed) return;
-						try {
-							await this.api("/recordings/delete", {
-								method: "POST",
-								body: { wav_path: rec.path },
-							});
-							// Delete linked vault document
-							if (rec.document_path) {
-								const file = this.app.vault.getAbstractFileByPath(rec.document_path);
-								if (file) {
-									await this.app.vault.delete(file as any);
+						this.showConfirmModal(
+							`"${docName}" 삭제`,
+							"녹음 파일(WAV), 메타데이터, 연결된 마크다운 문서가 모두 삭제됩니다.",
+							async () => {
+								try {
+									await this.api("/recordings/delete", {
+										method: "POST",
+										body: { wav_path: rec.path },
+									});
+									if (rec.document_path) {
+										const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+										if (file) {
+											await this.app.vault.delete(file as any);
+										}
+									}
+									new Notice(`${docName} 삭제 완료`);
+									await this.render();
+								} catch {
+									new Notice("삭제 실패");
 								}
-							}
-							new Notice(`${docName} 삭제 완료`);
-							await this.render();
-						} catch {
-							new Notice("삭제 실패");
-						}
+							},
+						);
 					});
 				}
 				if (recordings.length > 3) {
-					pendingContent.createEl("div", { text: `↓ ${recordings.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
+					listContainer.addClass("meetnote-list-scrollable");
 				}
 			}
 		} catch (err) {
-			container.createEl("p", { text: "서버에 연결할 수 없습니다.", cls: "meetnote-error" });
+			// Server offline handled by banner above
 		}
 
 		// ── Completed Recordings Section ──
 		try {
-			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
+			const userId = this.plugin.settings.emailFromAddress;
+			const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(userId)}`);
 			const allRecs: PendingRecording[] = allResp.recordings || [];
 			const completed = allRecs
 				.filter((r) => r.processed)
-				.sort((a, b) => b.created - a.created)
-				.slice(0, 10);
+				.sort((a, b) => b.created - a.created);
+
+			// User-id visibility check: warn if other users' meetings are hidden
+			if (userId) {
+				try {
+					const unfilteredResp = await this.api(`/recordings/all`);
+					const unfilteredRecs = (unfilteredResp.recordings || []) as PendingRecording[];
+					const hidden = unfilteredRecs.length - allRecs.length;
+					if (hidden > 0) {
+						const hint = container.createDiv({ cls: "meetnote-userid-hint" });
+						hint.createEl("span", {
+							text: `다른 발신자 이메일로 만든 녹음 ${hidden}건이 숨겨져 있습니다. 설정의 '발신자 이메일'을 확인하세요.`,
+						});
+					}
+				} catch { /* unfiltered fetch optional */ }
+			}
 
 			if (completed.length > 0) {
 				const completedContent = this.createCollapsibleSection(container, "completed", "최근 회의", `${completed.length}`);
 				const completedList = completedContent.createDiv({ cls: "meetnote-recording-list" });
 				for (const rec of completed) {
-					const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
+					const item = completedList.createDiv({ cls: "meetnote-recording-item" });
 					const info = item.createDiv({ cls: "meetnote-recording-info" });
 
-					if (rec.document_name) {
-						const titleEl = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
-						titleEl.addEventListener("click", async (e) => {
-							e.preventDefault();
-							const docPath = rec.document_path || "";
-							if (docPath) {
-								const file = this.app.vault.getAbstractFileByPath(docPath);
-								if (file) {
-									await this.app.workspace.getLeaf().openFile(file as any);
-								}
-							}
-						});
-					}
+					const cDocName = rec.document_name || rec.filename || new Date(rec.created * 1000).toLocaleDateString("ko-KR");
+					const titleEl = info.createEl("a", { text: cDocName, cls: "meetnote-recording-title" });
+					titleEl.addEventListener("click", async (e) => {
+						e.preventDefault();
+						await this.openRecordingDocument(rec);
+					});
 
 					const date = new Date(rec.created * 1000);
 					const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-					const statusIcon = (rec.unregistered_speakers && rec.unregistered_speakers > 0) ? "⚠" : "✓";
-					const statusText = (rec.unregistered_speakers && rec.unregistered_speakers > 0)
-						? `${dateStr} · ${rec.duration_minutes}분 ${statusIcon} 미등록 ${rec.unregistered_speakers}명`
-						: `${dateStr} · ${rec.duration_minutes}분 ✓`;
+					const hasUnregistered = rec.unregistered_speakers && rec.unregistered_speakers > 0;
+					const statusText = hasUnregistered
+						? `${dateStr} · ${rec.duration_minutes}분 · ⚠ 미등록 ${rec.unregistered_speakers}명`
+						: `${dateStr} · ${rec.duration_minutes}분 · ✓ 완료`;
 					info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
 
 					const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
@@ -259,52 +362,46 @@ export class MeetNoteSidePanel extends ItemView {
 						await this.render();
 					});
 					const requeueBtn = btnGroup.createEl("button", { text: "재처리", cls: "meetnote-edit-btn" });
-					requeueBtn.addEventListener("click", async () => {
-						const confirmed = confirm("재처리하면 기존 화자 매핑 및 참석자 정보가 초기화됩니다.\n계속하시겠습니까?");
-						if (!confirmed) return;
-						try {
-							await this.api("/recordings/requeue", {
-								method: "POST",
-								body: { wav_path: rec.path },
-							});
-							new Notice("대기 중으로 이동됨");
-							await this.render();
-						} catch {
-							new Notice("이동 실패");
-						}
+					requeueBtn.addEventListener("click", () => {
+						this.showConfirmModal(
+							"재처리 확인",
+							"기존 화자 매핑 및 참석자 정보가 초기화됩니다.",
+							async () => {
+								try {
+									await this.api("/recordings/requeue", {
+										method: "POST",
+										body: { wav_path: rec.path },
+									});
+									new Notice("대기 중으로 이동됨");
+									await this.render();
+								} catch {
+									new Notice("이동 실패");
+								}
+							},
+						);
 					});
 				}
 				if (completed.length > 3) {
-					completedContent.createEl("div", { text: `↓ ${completed.length - 3}건 더보기 (스크롤)`, cls: "meetnote-scroll-hint" });
+					completedList.addClass("meetnote-list-scrollable");
 				}
 			}
 		} catch {
 			// ignore — server might be offline
 		}
 
-		// ── Progress Section ──
-		if (this.processing) {
-			const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
-			const title = this.processingDocName ? `처리 중: ${this.processingDocName}` : "처리 중...";
-			progressSection.createEl("h4", { text: title });
-			const stageEl = progressSection.createEl("div", { text: "준비 중...", cls: "meetnote-progress-stage" });
-			const progressBar = progressSection.createDiv({ cls: "meetnote-progress" });
-			const bar = progressBar.createDiv({ cls: "meetnote-progress-bar" });
-			// Poll and update progress in-place
-			const progressPoller = setInterval(async () => {
-				if (!this.processing) { clearInterval(progressPoller); return; }
-				try {
-					const prog = await this.api("/recordings/progress");
-					if (prog.processing && prog.stage) {
-						stageEl.textContent = `${prog.stage} (${Math.round(prog.percent)}%)`;
-						bar.style.width = `${Math.round(prog.percent)}%`;
-						bar.style.animation = "none";
-					}
-				} catch { /* ignore */ }
-			}, 2000);
+		// ── Speaker Mapping Section (only when a recording is selected and exists) ──
+		if (this.selectedWavPath) {
+			// Verify selected recording still exists on server
+			try {
+				const checkResp = await this.api(`/recordings/all`);
+				const exists = (checkResp.recordings || []).some((r: any) => r.path === this.selectedWavPath);
+				if (!exists) {
+					this.selectedWavPath = "";
+					this.selectedDocName = "";
+				}
+			} catch { /* ignore */ }
 		}
-
-		// ── Speaker Mapping Section (document-specific) ──
+		if (this.selectedWavPath) {
 		const speakerContent = this.createCollapsibleSection(container, "speakers", "회의 참석자");
 
 		if (this.cachedNames.length === 0) {
@@ -312,7 +409,7 @@ export class MeetNoteSidePanel extends ItemView {
 		}
 
 		try {
-			if (this.selectedWavPath) {
+			{
 				if (this.selectedDocName) {
 					speakerContent.createEl("div", { text: `📋 ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
 				}
@@ -413,7 +510,7 @@ export class MeetNoteSidePanel extends ItemView {
 							} catch { /* skip */ }
 						}
 						// Server handles meta + document + DB update atomically
-						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.render(); }
+						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.updateDocumentParticipants(); await this.render(); }
 						else { new Notice("변경할 이름을 입력하세요."); }
 					});
 				}
@@ -523,11 +620,15 @@ export class MeetNoteSidePanel extends ItemView {
 					});
 				}
 
-			} else {
-				speakerContent.createEl("p", { text: "최근 회의에서 '관리' 버튼을 눌러주세요.", cls: "meetnote-empty" });
 			}
 
-			// ── Speaker DB Management Section ──
+		} catch (err) {
+			// Server offline handled by banner above
+		}
+		} // end if (this.selectedWavPath)
+
+		// ── Speaker DB Management Section (always visible) ──
+		try {
 			const allSpeakersResp = await this.api("/speakers");
 			const allDbSpeakers: SpeakerInfo[] = allSpeakersResp || [];
 
@@ -555,15 +656,13 @@ export class MeetNoteSidePanel extends ItemView {
 					const detailParts: string[] = [];
 					if (s.email) detailParts.push(s.email);
 					if (s.last_matched_at) {
-						const d = s.last_matched_at.slice(0, 10);
-						detailParts.push(`최근 매칭 ${d}`);
+						detailParts.push(`최근 매칭 ${s.last_matched_at.slice(0, 10)}`);
 					} else {
 						detailParts.push("매칭 이력 없음");
 					}
 					infoCol.createEl("div", { text: detailParts.join(" · "), cls: "meetnote-db-speaker-detail" });
 
 					const btnCol = row.createDiv({ cls: "meetnote-btn-group" });
-
 					const editBtn = btnCol.createEl("button", { text: "수정", cls: "meetnote-edit-btn" });
 					editBtn.addEventListener("click", () => {
 						infoCol.empty();
@@ -571,38 +670,34 @@ export class MeetNoteSidePanel extends ItemView {
 						const nameInput = inputWrapper.createEl("input", { type: "text", value: s.name, cls: "meetnote-speaker-input" });
 						const emailInput = infoCol.createEl("input", { type: "text", value: s.email || "", placeholder: "이메일", cls: "meetnote-speaker-input" });
 						this.addAutoSuggest(inputWrapper, nameInput, emailInput);
-
 						btnCol.empty();
 						const saveBtn = btnCol.createEl("button", { text: "저장", cls: "meetnote-register-btn" });
 						saveBtn.addEventListener("click", async () => {
 							const newName = nameInput.value.trim();
 							if (!newName) { new Notice("이름을 입력하세요."); return; }
 							try {
-								await this.api(`/speakers/${s.id}`, {
-									method: "PUT",
-									body: { name: newName, email: emailInput.value.trim() },
-								});
+								await this.api(`/speakers/${s.id}`, { method: "PUT", body: { name: newName, email: emailInput.value.trim() } });
 								new Notice(`${newName} 수정 완료`);
 								await this.render();
-							} catch {
-								new Notice("수정 실패");
-							}
+							} catch { new Notice("수정 실패"); }
 						});
 						const cancelBtn = btnCol.createEl("button", { text: "취소", cls: "meetnote-delete-btn" });
-						cancelBtn.addEventListener("click", () => renderSpeakerList(speakers));
+						cancelBtn.addEventListener("click", () => renderSpeakerList(allDbSpeakers));
 					});
 
 					const delBtn = btnCol.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
-					delBtn.addEventListener("click", async () => {
-						const confirmed = confirm(`"${s.name}"을(를) 음성 등록에서 삭제하시겠습니까?\n\n삭제 후 해당 사용자는 다음 회의에서 자동 인식되지 않습니다.`);
-						if (!confirmed) return;
-						try {
-							await this.api(`/speakers/${s.id}`, { method: "DELETE" });
-							new Notice(`${s.name} 삭제됨`);
-							await this.render();
-						} catch {
-							new Notice("삭제 실패");
-						}
+					delBtn.addEventListener("click", () => {
+						this.showConfirmModal(
+							`"${s.name}" 삭제`,
+							"삭제 후 해당 사용자는 다음 회의에서 자동 인식되지 않습니다.",
+							async () => {
+								try {
+									await this.api(`/speakers/${s.id}`, { method: "DELETE" });
+									new Notice(`${s.name} 삭제됨`);
+									await this.render();
+								} catch { new Notice("삭제 실패"); }
+							},
+						);
 					});
 				}
 			};
@@ -619,10 +714,14 @@ export class MeetNoteSidePanel extends ItemView {
 					));
 				}
 			});
-
-		} catch (err) {
-			container.createEl("p", { text: "서버 연결 필요", cls: "meetnote-error" });
+		} catch {
+			// Server offline handled by banner above
 		}
+	}
+
+	private showConfirmModal(title: string, message: string, onConfirm: () => void): void {
+		const modal = new ConfirmModal(this.app, title, message, onConfirm);
+		modal.open();
 	}
 
 	/**
@@ -735,75 +834,21 @@ export class MeetNoteSidePanel extends ItemView {
 							await this.writeResultToVault(file as TFile, finalSegments, resp.speaking_stats || []);
 						}
 
-						// Generate summary via Claude CLI
+						// Generate summary via Claude CLI / Ollama, then apply via shared helper.
 						try {
 							this.plugin.statusBar.setProgress("요약 생성 중", 95);
 							if (finalSegments.length > 0) {
 								const result = await summarize(finalSegments);
-								if (result.success && result.summary) {
-									// Replace placeholder sections with actual summary
-									await this.app.vault.process(file as TFile, (content) => {
-										// Extract sections from Claude output
-										const summaryMatch = result.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
-										const decisionsMatch = result.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
-										const actionsMatch = result.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
-										const tagsMatch = result.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
-
-										let updated = content;
-
-										// Replace each placeholder section
-										if (summaryMatch) {
-											updated = updated.replace(
-												/### 요약\n\n\(요약 생성 중\.\.\.\)/,
-												`### 요약\n${summaryMatch[1].trimEnd()}`
-											);
-										}
-										if (decisionsMatch) {
-											updated = updated.replace(
-												/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/,
-												`### 주요 결정사항\n${decisionsMatch[1].trimEnd()}`
-											);
-										}
-										if (actionsMatch) {
-											updated = updated.replace(
-												/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/,
-												`### 액션아이템\n${actionsMatch[1].trimEnd()}`
-											);
-										}
-										if (tagsMatch) {
-											updated = updated.replace(
-												/### 태그\n\n\(요약 생성 중\.\.\.\)/,
-												`### 태그\n${tagsMatch[1].trimEnd()}`
-											);
-										}
-
-										// If no section matches (Claude output format different), replace all placeholders
-										if (updated === content) {
-											updated = updated.replace(
-												/### 요약\n\n\(요약 생성 중\.\.\.\)\n\n### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)\n\n### 액션아이템\n\n\(요약 생성 중\.\.\.\)\n\n### 태그\n\n\(요약 생성 중\.\.\.\)/,
-												result.summary.trim()
-											);
-										}
-
-										return updated;
-									});
-									hasSummary = true;
-								} else if (result.engine === "none") {
-									// Replace placeholders with (없음)
-									await this.app.vault.process(file as TFile, (content) => {
-										return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
-									});
-									new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
-								}
+								const applied = await applySummaryToVault(this.app, file as TFile, result);
+								hasSummary = applied.ok;
 							}
 						} catch (err) {
 							console.error("[MeetNote] Summary generation failed:", err);
-							// Replace placeholders with (없음) on error
-							try {
-								await this.app.vault.process(file as TFile, (content) => {
-									return content.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
-								});
-							} catch { /* ignore */ }
+							await applySummaryToVault(this.app, file as TFile, {
+								success: false,
+								summary: "",
+								engine: "claude",
+							});
 						}
 
 						// Run tag extraction + related meeting links
@@ -815,7 +860,7 @@ export class MeetNoteSidePanel extends ItemView {
 							if (tagMatch) {
 								const tags = (tagMatch[1].match(/#[\w가-힣]+/g) || []).map((t: string) => t.slice(1));
 								if (tags.length > 0) {
-									writer["activeFile"] = file;
+									writer["activeFile"] = file as TFile;
 									writer["lastTags"] = tags.includes("회의") ? tags : ["회의", ...tags];
 									if (this.plugin.settings.autoLinkEnabled) {
 										linkedCount = await writer.linkRelatedMeetings();
@@ -870,6 +915,27 @@ export class MeetNoteSidePanel extends ItemView {
 			this.lastHealthData = null;
 			return false;
 		}
+	}
+
+	/**
+	 * Open the MD file for a recording entry. If the document_path is empty
+	 * or the file no longer exists in the vault, show a Notice and refresh
+	 * the panel so the stale entry can be reconciled with server state.
+	 */
+	private async openRecordingDocument(rec: PendingRecording): Promise<void> {
+		const docPath = rec.document_path || "";
+		if (!docPath) {
+			new Notice("이 녹음에 연결된 회의록 문서가 없습니다.", 5000);
+			await this.render();
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(docPath);
+		if (!file) {
+			new Notice(`회의록 파일을 찾을 수 없습니다: ${docPath}`, 6000);
+			await this.render();
+			return;
+		}
+		await this.app.workspace.getLeaf().openFile(file as TFile);
 	}
 
 	private getServerLabel(): string {
@@ -1058,7 +1124,7 @@ export class MeetNoteSidePanel extends ItemView {
 				// Replace participants section
 				const partLines = allParticipants.map((n) => `  - ${n}`).join("\n");
 				if (fm.includes("participants:")) {
-					fm = fm.replace(/participants:\n(?:\s+-\s+.+\n?)*/,
+					fm = fm.replace(/participants:\s*\[?\]?\n(?:\s+-\s+.+\n?)*/,
 						`participants:\n${partLines}\n`);
 				}
 
@@ -1206,5 +1272,38 @@ export class MeetNoteSidePanel extends ItemView {
 			body: options?.body ? JSON.stringify(options.body) : undefined,
 		});
 		return resp.json();
+	}
+}
+
+class ConfirmModal extends Modal {
+	private title: string;
+	private message: string;
+	private onConfirm: () => void;
+
+	constructor(app: any, title: string, message: string, onConfirm: () => void) {
+		super(app);
+		this.title = title;
+		this.message = message;
+		this.onConfirm = onConfirm;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl("h3", { text: this.title });
+		contentEl.createEl("p", { text: this.message, cls: "meetnote-confirm-message" });
+
+		const btnRow = contentEl.createDiv({ cls: "meetnote-confirm-actions" });
+		const cancelBtn = btnRow.createEl("button", { text: "취소" });
+		cancelBtn.addEventListener("click", () => this.close());
+
+		const confirmBtn = btnRow.createEl("button", { text: "삭제", cls: "mod-warning" });
+		confirmBtn.addEventListener("click", () => {
+			this.close();
+			this.onConfirm();
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

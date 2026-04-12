@@ -122,6 +122,23 @@ export class MeetingWriter {
 		this.activeFile = file;
 		this.startTime = startTime;
 
+		// Check if markers already exist (이어 녹음 시)
+		const existingContent = await this.app.vault.read(file);
+		if (existingContent.includes(SECTION_MARKER_START)) {
+			// Markers exist — just reset live section for continued recording
+			await this.app.vault.process(this.activeFile, (content) => {
+				const liveStart = content.indexOf(LIVE_MARKER_START);
+				const liveEnd = content.indexOf(LIVE_MARKER_END);
+				if (liveStart !== -1 && liveEnd !== -1) {
+					return content.slice(0, liveStart + LIVE_MARKER_START.length)
+						+ "\n"
+						+ content.slice(liveEnd);
+				}
+				return content;
+			});
+			return;
+		}
+
 		const liveSection = [
 			"",
 			SECTION_MARKER_START,

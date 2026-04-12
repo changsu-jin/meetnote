@@ -4,11 +4,13 @@
 	"description": "MeetNote - 회의 음성을 자동 녹음하고 화자구분하여 회의록을 작성하는 Obsidian 플러그인",
 	"main": "main.js",
 	"scripts": {
-		"build": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node && npm run deploy",
+		"typecheck": "tsc --noEmit",
+		"build": "tsc --noEmit && esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node && npm run deploy",
 		"dev": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node --watch",
 		"deploy": "if [ -n \"$MEETNOTE_VAULT\" ]; then cp main.js styles.css \"$MEETNOTE_VAULT/.obsidian/plugins/meetnote/\"; elif [ -f .vault_path ]; then cp main.js styles.css \"$(cat .vault_path)/.obsidian/plugins/meetnote/\"; else echo 'MEETNOTE_VAULT 미설정 — .vault_path 파일 또는 환경변수를 설정하세요'; fi"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.59.1",
 		"@types/node": "^20.0.0",
 		"esbuild": "^0.21.0",
 		"obsidian": "latest",

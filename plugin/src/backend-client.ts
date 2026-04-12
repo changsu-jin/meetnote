@@ -30,7 +30,15 @@ export interface StopCommand {
 	type: "stop";
 }
 
-export type OutboundMessage = StartCommand | StopCommand;
+export interface PauseCommand {
+	type: "pause";
+}
+
+export interface ResumeCommand {
+	type: "resume";
+}
+
+export type OutboundMessage = StartCommand | StopCommand | PauseCommand | ResumeCommand;
 
 // Inbound messages
 export interface ChunkMessage {
@@ -68,12 +76,17 @@ export interface ProgressMessage {
 	percent: number;
 }
 
+export interface PingMessage {
+	type: "ping";
+}
+
 export type InboundMessage =
 	| ChunkMessage
 	| FinalMessage
 	| StatusMessage
 	| ErrorMessage
-	| ProgressMessage;
+	| ProgressMessage
+	| PingMessage;
 
 // Status returned by GET /status
 export interface BackendStatus {
@@ -218,6 +231,14 @@ export class BackendClient {
 		}
 	}
 
+	sendPause(): void {
+		this.send({ type: "pause" });
+	}
+
+	sendResume(): void {
+		this.send({ type: "resume" });
+	}
+
 	/** Send a binary audio chunk (PCM data) to the server. */
 	sendAudioChunk(pcmData: ArrayBuffer): void {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -336,7 +357,7 @@ export class BackendClient {
 				break;
 			case "ping":
 				// Respond to server keep-alive ping
-				this.send({ type: "pong" } as OutboundMessage);
+				this.ws?.send(JSON.stringify({ type: "pong" }));
 				break;
 			default:
 				console.warn(

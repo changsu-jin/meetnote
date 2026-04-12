@@ -10,6 +10,7 @@ export interface MeetNoteSettings {
 	audioDevice: string;
 	emailFromAddress: string;
 	gitlabLinkEnabled: boolean;
+	meetingFolder: string;
 	onboardingDone: boolean;
 }
 
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS: MeetNoteSettings = {
 	audioDevice: "",
 	emailFromAddress: "",
 	gitlabLinkEnabled: true,
+	meetingFolder: "meetings",
 	onboardingDone: false,
 };
 
@@ -98,6 +100,22 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 				});
 		});
 
+		// ── 회의록 ──────────────────────────────────────────────────────
+		containerEl.createEl("h3", { text: "회의록" });
+
+		new Setting(containerEl)
+			.setName("회의록 저장 폴더")
+			.setDesc("녹음 시작 시 새 회의록 문서가 생성되는 폴더 (vault 내 경로)")
+			.addText((text) =>
+				text
+					.setPlaceholder("meetings")
+					.setValue(this.plugin.settings.meetingFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.meetingFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
 		// ── 참석자 / 이메일 ──────────────────────────────────────────────
 		containerEl.createEl("h3", { text: "참석자 / 이메일" });
 
@@ -116,14 +134,19 @@ export class MeetNoteSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("발신자 이메일 *")
-			.setDesc("사용자 식별 + 이메일 발송 From 주소 (필수)")
+			.setDesc("사용자 식별 + 이메일 발송 From 주소 (필수). 변경 시 사이드패널 회의록 목록이 자동 갱신됩니다.")
 			.addText((text) => {
 				text
 					.setPlaceholder("your@company.com")
 					.setValue(this.plugin.settings.emailFromAddress)
 					.onChange(async (value) => {
-						this.plugin.settings.emailFromAddress = value.trim();
+						const next = value.trim();
+						const prev = this.plugin.settings.emailFromAddress;
+						this.plugin.settings.emailFromAddress = next;
 						await this.plugin.saveSettings();
+						if (next !== prev) {
+							this.plugin.refreshSidePanels();
+						}
 					});
 				const val = this.plugin.settings.emailFromAddress;
 				if (!val || !this.isValidEmail(val)) {

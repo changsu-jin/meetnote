@@ -6,11 +6,15 @@
  * - Recording: elapsed time (mm:ss), updating every second
  * - Processing: "화자 구분 중... XX%"
  * - Disconnected: "서버 연결 끊김"
+ *
+ * 경과 시간은 plugin이 소유하는 단일 소스(`getRecordedElapsedMs`)를 provider
+ * 함수로 주입받아 읽는다. 상태바 자체는 시간 상태를 보관하지 않아, 사이드패널
+ * 헤더와 상태바가 항상 동일한 값을 표시한다.
  */
 export class RecorderStatusBar {
 	private el: HTMLElement;
 	private timerInterval: ReturnType<typeof setInterval> | null = null;
-	private recordingStartTime: Date | null = null;
+	private elapsedProvider: () => number = () => 0;
 	private connected = false;
 	private recording = false;
 	private processing = false;
@@ -19,6 +23,13 @@ export class RecorderStatusBar {
 	constructor(statusBarEl: HTMLElement) {
 		this.el = statusBarEl;
 		this.setIdle();
+	}
+
+	/**
+	 * 경과 시간(ms)을 반환하는 함수 주입. plugin이 녹음 시작 시 한 번 호출.
+	 */
+	setElapsedProvider(fn: () => number): void {
+		this.elapsedProvider = fn;
 	}
 
 	// ── Public state updates ───────────────────────────────────────────
@@ -37,15 +48,24 @@ export class RecorderStatusBar {
 	}
 
 	/**
-	 * Start showing the recording timer.
+	 * Start showing the recording timer. (초기 녹음 시작)
 	 */
 	startRecording(): void {
 		this.recording = true;
 		this.processing = false;
 		this.chunkCount = 0;
-		this.recordingStartTime = new Date();
 		this.el.style.display = "";
+		this.clearTimer();
+		this.updateElapsed();
+		this.timerInterval = setInterval(() => this.updateElapsed(), 1000);
+	}
 
+	/**
+	 * 일시중지 상태에서 재개. chunkCount는 보존한다.
+	 */
+	resumeRecording(): void {
+		this.recording = true;
+		this.el.style.display = "";
 		this.clearTimer();
 		this.updateElapsed();
 		this.timerInterval = setInterval(() => this.updateElapsed(), 1000);
@@ -59,12 +79,24 @@ export class RecorderStatusBar {
 	}
 
 	/**
+	 * Show paused state in the status bar. 누적 경과 시간을 함께 표시.
+	 */
+	setPaused(): void {
+		this.clearTimer();
+		this.el.style.display = "";
+		const elapsedMs = this.elapsedProvider();
+		const elapsed = Math.floor(elapsedMs / 1000);
+		const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+		const ss = String(elapsed % 60).padStart(2, "0");
+		this.el.setText(`⏸ 일시중지 ${mm}:${ss}`);
+	}
+
+	/**
 	 * Stop the recording timer. Typically transitions to processing or idle.
 	 */
 	stopRecording(): void {
 		this.recording = false;
 		this.clearTimer();
-		this.recordingStartTime = null;
 	}
 
 	/**
@@ -86,7 +118,6 @@ export class RecorderStatusBar {
 		this.recording = false;
 		this.processing = false;
 		this.clearTimer();
-		this.recordingStartTime = null;
 
 		if (!this.connected) {
 			this.el.setText("서버 연결 끊김");
@@ -107,10 +138,8 @@ export class RecorderStatusBar {
 	// ── Internal helpers ───────────────────────────────────────────────
 
 	private updateElapsed(): void {
-		if (!this.recordingStartTime) return;
-		const elapsed = Math.floor(
-			(Date.now() - this.recordingStartTime.getTime()) / 1000
-		);
+		const elapsedMs = this.elapsedProvider();
+		const elapsed = Math.floor(elapsedMs / 1000);
 		const minutes = Math.floor(elapsed / 60);
 		const seconds = elapsed % 60;
 		const mm = String(minutes).padStart(2, "0");

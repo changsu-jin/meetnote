@@ -25,7 +25,7 @@ def _load_dotenv() -> None:
             continue
         if "=" in line:
             key, val = line.split("=", 1)
-            os.environ.setdefault(key.strip(), val.strip())
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
     # HuggingFace Hub library reads HF_TOKEN, not HUGGINGFACE_TOKEN
     hf_token = os.environ.get("HUGGINGFACE_TOKEN", "")

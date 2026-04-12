@@ -44,11 +44,19 @@
 
 .meetnote-header-btn {
 	font-size: 0.8em;
-	padding: 2px 8px;
+	padding: 2px 6px;
 	cursor: pointer;
 	background: none;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.meetnote-header-btn svg {
+	width: 14px;
+	height: 14px;
 }
 
 .meetnote-header-btn:hover {
@@ -162,9 +170,7 @@
 	font-size: 0.8em;
 }
 
-.meetnote-completed {
-	opacity: 0.7;
-}
+/* #4: removed opacity for completed recordings */
 
 .meetnote-process-btn,
 .meetnote-register-btn {
@@ -398,6 +404,105 @@
 @keyframes meetnote-pulse {
 	0%, 100% { opacity: 0.4; }
 	50% { opacity: 1; }
+}
+
+/* ── Recording status ──────────────────────────────────────── */
+
+.meetnote-rec-status {
+	font-size: 0.8em;
+	font-weight: 500;
+	padding: 4px 8px;
+	margin-top: 6px;
+	border-radius: 4px;
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	text-align: center;
+}
+
+.meetnote-rec-pulse {
+	animation: meetnote-rec-blink 1.5s ease-in-out infinite;
+}
+
+@keyframes meetnote-rec-blink {
+	0%, 100% { opacity: 0.7; }
+	50% { opacity: 1; }
+}
+
+/* ── Offline banner ───────────────────────────────────────── */
+
+.meetnote-offline-banner {
+	padding: 12px;
+	margin: 8px 0;
+	border-radius: 6px;
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	font-size: 0.85em;
+	text-align: center;
+	line-height: 1.4;
+}
+
+/* ── User-id mismatch hint ────────────────────────────────── */
+
+.meetnote-userid-hint {
+	padding: 8px 10px;
+	margin: 6px 0;
+	border-radius: 4px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: 0.78em;
+	line-height: 1.4;
+	border-left: 3px solid var(--text-warning);
+}
+
+/* ── Empty state guide ────────────────────────────────────── */
+
+.meetnote-empty-guide {
+	text-align: center;
+	padding: 16px 8px;
+}
+
+.meetnote-guide-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 8px 16px;
+	font-size: 0.9em;
+	cursor: pointer;
+	border: 1px dashed var(--interactive-accent);
+	border-radius: 6px;
+	background: none;
+	color: var(--interactive-accent);
+}
+
+.meetnote-guide-btn:hover {
+	background: var(--background-modifier-hover);
+}
+
+.meetnote-guide-btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* ── Scrollable list with fade ────────────────────────────── */
+
+.meetnote-list-scrollable {
+	position: relative;
+	-webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+	mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+}
+
+/* ── Confirm modal ────────────────────────────────────────── */
+
+.meetnote-confirm-message {
+	color: var(--text-muted);
+	line-height: 1.5;
+	margin: 8px 0 16px 0;
+}
+
+.meetnote-confirm-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
 }
 
 /* ── Settings tabs ─────────────────────────────────────────── */

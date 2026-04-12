@@ -133,6 +133,79 @@ RecordingSession (세션별 — WebSocket 연결당 1개)
 
 ---
 
+## 오디오 파일 생명주기
+
+녹음 파일(WAV)과 관련 파일의 전체 생명주기:
+
+```
+녹음 시작                    녹음 중지                     처리 완료
+   │                           │                            │
+   │                    ┌──────┴──────┐              ┌──────┴──────┐
+   │                    │ .wav 생성    │              │ .done 생성   │
+   │                    │ .meta.json   │              │ 결과→meta    │
+   │                    └─────────────┘              └─────────────┘
+   │                           │                            │
+   │                    "대기 중" 상태                 "처리 완료" 상태
+   │                     ┌─────┴─────┐                      │
+   │                     │           │                      │
+   │                  이어 녹음    처리 시작            재처리(requeue)
+   │                     │           │                      │
+   │              2번째 .wav     STT+화자분리          .done 삭제
+   │              같은 doc_path  WAV 병합 처리         speaker 초기화
+   │                     │           │                      │
+   │                     └─────┬─────┘                "대기 중"으로
+   │                           │
+   │                      처리 완료
+   │                    모든 관련 WAV에
+   │                    .done 마커 생성
+   │
+   └──── 삭제 요청 → .wav + .meta.json + .done 삭제
+```
+
+### 파일 구성
+
+| 파일 | 생성 시점 | 내용 |
+|------|----------|------|
+| `meeting_{user}_{timestamp}.wav` | 녹음 중지 | 16kHz mono 16-bit PCM → WAV |
+| `meeting_{user}_{timestamp}.meta.json` | 녹음 중지 | user_id, document_name, document_path, started_at, continued_from |
+| `meeting_{user}_{timestamp}.done` | 처리 완료 | 처리 완료 시각 (재처리 방지 마커) |
+| `_merged_{stem}.wav` | 처리 중 (임시) | 이어 녹음 WAV 병합 결과. 처리 완료 후 삭제 |
+
+### 상태 전이
+
+| 상태 | 파일 존재 | 사이드패널 표시 |
+|------|----------|---------------|
+| 대기 중 | .wav + .meta.json | "대기 중" 섹션, 이어녹음/처리/삭제 버튼 |
+| 처리 완료 | .wav + .meta.json + .done | "최근 회의" 섹션, 참석자/재처리 버튼 |
+| 삭제됨 | (없음) | 표시 안 됨 |
+
+### meta.json 필드
+
+```json
+{
+  "user_id": "user@example.com",
+  "document_name": "회의_2026-04-12_143000",
+  "document_path": "meetings/회의_2026-04-12_143000.md",
+  "started_at": "2026-04-12T14:30:00",
+  "continued_from": "data/recordings/meeting_user_20260412_143000.wav",
+  "embeddings": { "SPEAKER_00": [0.1, ...] },
+  "speaker_map": { "SPEAKER_00": { "name": "Alice", "email": "alice@test.com" } },
+  "manual_participants": [{ "name": "Bob", "email": "bob@test.com" }],
+  "processing_results": {
+    "segments_data": [...],
+    "speaking_stats": [...],
+    "speaker_map": {...},
+    "processed_at": "2026-04-12T14:45:00"
+  }
+}
+```
+
+### 자동 삭제
+
+`AUTO_DELETE_DAYS` 환경변수 설정 시, 서버 시작 시점에 해당 일수가 지난 녹음을 자동 삭제.
+
+---
+
 ## Docker 배포
 
 ```

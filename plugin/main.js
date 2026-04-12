@@ -122,6 +122,18 @@ var init_writer = __esm({
       async init(file, startTime) {
         this.activeFile = file;
         this.startTime = startTime;
+        const existingContent = await this.app.vault.read(file);
+        if (existingContent.includes(SECTION_MARKER_START)) {
+          await this.app.vault.process(this.activeFile, (content) => {
+            const liveStart = content.indexOf(LIVE_MARKER_START);
+            const liveEnd = content.indexOf(LIVE_MARKER_END);
+            if (liveStart !== -1 && liveEnd !== -1) {
+              return content.slice(0, liveStart + LIVE_MARKER_START.length) + "\n" + content.slice(liveEnd);
+            }
+            return content;
+          });
+          return;
+        }
         const liveSection = [
           "",
           SECTION_MARKER_START,
@@ -329,191 +341,13 @@ var init_writer = __esm({
   }
 });
 
-// src/summarizer.ts
-var summarizer_exports = {};
-__export(summarizer_exports, {
-  summarize: () => summarize
-});
-function formatTranscript(segments) {
-  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
-}
-function buildPrompt(transcript) {
-  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
-}
-function isClaudeAvailable() {
-  try {
-    const { execSync } = require("child_process");
-    const homedir = require("os").homedir();
-    const extraPaths = [
-      `${homedir}/.asdf/shims`,
-      `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-      "/usr/local/bin",
-      "/opt/homebrew/bin"
-    ];
-    const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
-    execSync("which claude", { stdio: "ignore", timeout: 3e3, env });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function getClaudePath() {
-  const homedir = require("os").homedir();
-  const candidates = [
-    `${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
-    `${homedir}/.asdf/shims/claude`,
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude"
-  ];
-  const fs = require("fs");
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-    }
-  }
-  return "claude";
-}
-function isOllamaAvailable() {
-  try {
-    const { execSync } = require("child_process");
-    execSync("ollama list", { stdio: "ignore", timeout: 5e3 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-function summarizeWithOllama(prompt) {
-  return new Promise((resolve) => {
-    try {
-      const { execFile } = require("child_process");
-      execFile(
-        "ollama",
-        ["run", OLLAMA_MODEL, prompt],
-        { timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.warn("[Summarizer] Ollama failed:", error.message);
-            resolve({ success: false, summary: "", engine: "ollama" });
-            return;
-          }
-          const output = stdout.trim();
-          if (output) {
-            console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
-            resolve({ success: true, summary: output, engine: "ollama" });
-          } else {
-            resolve({ success: false, summary: "", engine: "ollama" });
-          }
-        }
-      );
-    } catch (err) {
-      console.warn("[Summarizer] Failed to execute Ollama:", err);
-      resolve({ success: false, summary: "", engine: "none" });
-    }
-  });
-}
-async function summarize(segments) {
-  const transcript = formatTranscript(segments);
-  if (!transcript) {
-    return { success: false, summary: "", engine: "none" };
-  }
-  if (!isClaudeAvailable()) {
-    console.log("[Summarizer] Claude CLI not found \u2014 trying Ollama...");
-    if (isOllamaAvailable()) {
-      const prompt2 = buildPrompt(transcript);
-      return summarizeWithOllama(prompt2);
-    }
-    console.log("[Summarizer] Ollama not found \u2014 skipping summary.");
-    return { success: false, summary: "", engine: "none" };
-  }
-  const prompt = buildPrompt(transcript);
-  return new Promise((resolve) => {
-    try {
-      const { execFile } = require("child_process");
-      const claudePath = getClaudePath();
-      const homedir = require("os").homedir();
-      const extraPaths = [
-        `${homedir}/.asdf/shims`,
-        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
-        "/usr/local/bin",
-        "/opt/homebrew/bin"
-      ];
-      const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
-      const child = execFile(
-        claudePath,
-        ["-p", prompt],
-        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.warn("[Summarizer] Claude CLI failed:", error.message);
-            resolve({ success: false, summary: "", engine: "claude" });
-            return;
-          }
-          const output = stdout.trim();
-          if (output) {
-            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
-            resolve({ success: true, summary: output, engine: "claude" });
-          } else {
-            console.warn("[Summarizer] Claude CLI returned empty output.");
-            resolve({ success: false, summary: "", engine: "claude" });
-          }
-        }
-      );
-    } catch (err) {
-      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
-      resolve({ success: false, summary: "", engine: "none" });
-    }
-  });
-}
-var MAX_TRANSCRIPT_CHARS, SUMMARY_TIMEOUT_MS, SUMMARY_PROMPT, OLLAMA_MODEL, OLLAMA_TIMEOUT_MS;
-var init_summarizer = __esm({
-  "src/summarizer.ts"() {
-    MAX_TRANSCRIPT_CHARS = 5e4;
-    SUMMARY_TIMEOUT_MS = 12e4;
-    SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
-
-\uC624\uB298 \uB0A0\uC9DC: {today}
-
-## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
-
-### \uC694\uC57D
-- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
-
-### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
-- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
-
-### \uC561\uC158\uC544\uC774\uD15C
-- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
-
-### \uD0DC\uADF8
-#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
-
-## \uADDC\uCE59
-- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
-- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
-- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
-- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
-- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
-- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
-
-## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
-
-{transcript}
-`;
-    OLLAMA_MODEL = "exaone3.5:7.8b";
-    OLLAMA_TIMEOUT_MS = 18e4;
-  }
-});
-
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
   default: () => MeetNotePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -530,10 +364,27 @@ var AudioCapture = class {
     this.buffer = [];
     this.samplesCollected = 0;
     this._isCapturing = false;
+    this._isPaused = false;
     this.callbacks = callbacks;
   }
   get isCapturing() {
     return this._isCapturing;
+  }
+  get isPaused() {
+    return this._isPaused;
+  }
+  pause() {
+    if (this._isCapturing && !this._isPaused) {
+      this._isPaused = true;
+      if (this.samplesCollected > 0) {
+        this.flushChunk();
+      }
+    }
+  }
+  resume() {
+    if (this._isCapturing && this._isPaused) {
+      this._isPaused = false;
+    }
   }
   /**
    * Start capturing audio from the specified device (or default).
@@ -559,7 +410,7 @@ var AudioCapture = class {
       this.buffer = [];
       this.samplesCollected = 0;
       this.scriptProcessor.onaudioprocess = (event) => {
-        if (!this._isCapturing) return;
+        if (!this._isCapturing || this._isPaused) return;
         const inputData = event.inputBuffer.getChannelData(0);
         const resampled = inputSampleRate === TARGET_SAMPLE_RATE ? new Float32Array(inputData) : this.resample(inputData, inputSampleRate, TARGET_SAMPLE_RATE);
         this.buffer.push(resampled);
@@ -583,6 +434,7 @@ var AudioCapture = class {
   stop() {
     if (!this._isCapturing) return;
     this._isCapturing = false;
+    this._isPaused = false;
     if (this.samplesCollected > 0) {
       this.flushChunk();
     }
@@ -671,6 +523,7 @@ var DEFAULT_SETTINGS = {
   audioDevice: "",
   emailFromAddress: "",
   gitlabLinkEnabled: true,
+  meetingFolder: "meetings",
   onboardingDone: false
 };
 var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -715,6 +568,13 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    containerEl.createEl("h3", { text: "\uD68C\uC758\uB85D" });
+    new import_obsidian.Setting(containerEl).setName("\uD68C\uC758\uB85D \uC800\uC7A5 \uD3F4\uB354").setDesc("\uB179\uC74C \uC2DC\uC791 \uC2DC \uC0C8 \uD68C\uC758\uB85D \uBB38\uC11C\uAC00 \uC0DD\uC131\uB418\uB294 \uD3F4\uB354 (vault \uB0B4 \uACBD\uB85C)").addText(
+      (text) => text.setPlaceholder("meetings").setValue(this.plugin.settings.meetingFolder).onChange(async (value) => {
+        this.plugin.settings.meetingFolder = value.trim();
+        await this.plugin.saveSettings();
+      })
+    );
     containerEl.createEl("h3", { text: "\uCC38\uC11D\uC790 / \uC774\uBA54\uC77C" });
     new import_obsidian.Setting(containerEl).setName("\uCC38\uC11D\uC790 \uC790\uB3D9\uC644\uC131 \uACBD\uB85C").setDesc("vault \uB0B4 \uC0AC\uC6A9\uC790 \uC815\uBCF4 \uD3F4\uB354 (\uC774\uB984 + \uC774\uBA54\uC77C \uC790\uB3D9\uC644\uC131\uC5D0 \uC0AC\uC6A9)").addText(
       (text) => text.setPlaceholder("people \uB610\uB294 team/members").setValue(this.plugin.settings.participantSuggestPath).onChange(async (value) => {
@@ -722,10 +582,15 @@ var MeetNoteSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C *").setDesc("\uC0AC\uC6A9\uC790 \uC2DD\uBCC4 + \uC774\uBA54\uC77C \uBC1C\uC1A1 From \uC8FC\uC18C (\uD544\uC218)").addText((text) => {
+    new import_obsidian.Setting(containerEl).setName("\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C *").setDesc("\uC0AC\uC6A9\uC790 \uC2DD\uBCC4 + \uC774\uBA54\uC77C \uBC1C\uC1A1 From \uC8FC\uC18C (\uD544\uC218). \uBCC0\uACBD \uC2DC \uC0AC\uC774\uB4DC\uD328\uB110 \uD68C\uC758\uB85D \uBAA9\uB85D\uC774 \uC790\uB3D9 \uAC31\uC2E0\uB429\uB2C8\uB2E4.").addText((text) => {
       text.setPlaceholder("your@company.com").setValue(this.plugin.settings.emailFromAddress).onChange(async (value) => {
-        this.plugin.settings.emailFromAddress = value.trim();
+        const next = value.trim();
+        const prev = this.plugin.settings.emailFromAddress;
+        this.plugin.settings.emailFromAddress = next;
         await this.plugin.saveSettings();
+        if (next !== prev) {
+          this.plugin.refreshSidePanels();
+        }
       });
       const val = this.plugin.settings.emailFromAddress;
       if (!val || !this.isValidEmail(val)) {
@@ -850,6 +715,12 @@ var BackendClient = class {
       this.httpStop();
     }
   }
+  sendPause() {
+    this.send({ type: "pause" });
+  }
+  sendResume() {
+    this.send({ type: "resume" });
+  }
   /** Send a binary audio chunk (PCM data) to the server. */
   sendAudioChunk(pcmData) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -953,7 +824,7 @@ var BackendClient = class {
         this.callbacks.onProgress?.(msg.stage, msg.percent);
         break;
       case "ping":
-        this.send({ type: "pong" });
+        this.ws?.send(JSON.stringify({ type: "pong" }));
         break;
       default:
         console.warn(
@@ -993,13 +864,19 @@ init_writer();
 var RecorderStatusBar = class {
   constructor(statusBarEl) {
     this.timerInterval = null;
-    this.recordingStartTime = null;
+    this.elapsedProvider = () => 0;
     this.connected = false;
     this.recording = false;
     this.processing = false;
     this.chunkCount = 0;
     this.el = statusBarEl;
     this.setIdle();
+  }
+  /**
+   * 경과 시간(ms)을 반환하는 함수 주입. plugin이 녹음 시작 시 한 번 호출.
+   */
+  setElapsedProvider(fn) {
+    this.elapsedProvider = fn;
   }
   // ── Public state updates ───────────────────────────────────────────
   /**
@@ -1015,13 +892,22 @@ var RecorderStatusBar = class {
     }
   }
   /**
-   * Start showing the recording timer.
+   * Start showing the recording timer. (초기 녹음 시작)
    */
   startRecording() {
     this.recording = true;
     this.processing = false;
     this.chunkCount = 0;
-    this.recordingStartTime = /* @__PURE__ */ new Date();
+    this.el.style.display = "";
+    this.clearTimer();
+    this.updateElapsed();
+    this.timerInterval = setInterval(() => this.updateElapsed(), 1e3);
+  }
+  /**
+   * 일시중지 상태에서 재개. chunkCount는 보존한다.
+   */
+  resumeRecording() {
+    this.recording = true;
     this.el.style.display = "";
     this.clearTimer();
     this.updateElapsed();
@@ -1034,12 +920,23 @@ var RecorderStatusBar = class {
     this.chunkCount++;
   }
   /**
+   * Show paused state in the status bar. 누적 경과 시간을 함께 표시.
+   */
+  setPaused() {
+    this.clearTimer();
+    this.el.style.display = "";
+    const elapsedMs = this.elapsedProvider();
+    const elapsed = Math.floor(elapsedMs / 1e3);
+    const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+    const ss = String(elapsed % 60).padStart(2, "0");
+    this.el.setText(`\u23F8 \uC77C\uC2DC\uC911\uC9C0 ${mm}:${ss}`);
+  }
+  /**
    * Stop the recording timer. Typically transitions to processing or idle.
    */
   stopRecording() {
     this.recording = false;
     this.clearTimer();
-    this.recordingStartTime = null;
   }
   /**
    * Show post-processing progress (e.g., diarization).
@@ -1059,7 +956,6 @@ var RecorderStatusBar = class {
     this.recording = false;
     this.processing = false;
     this.clearTimer();
-    this.recordingStartTime = null;
     if (!this.connected) {
       this.el.setText("\uC11C\uBC84 \uC5F0\uACB0 \uB04A\uAE40");
       this.el.style.display = "";
@@ -1076,10 +972,8 @@ var RecorderStatusBar = class {
   }
   // ── Internal helpers ───────────────────────────────────────────────
   updateElapsed() {
-    if (!this.recordingStartTime) return;
-    const elapsed = Math.floor(
-      (Date.now() - this.recordingStartTime.getTime()) / 1e3
-    );
+    const elapsedMs = this.elapsedProvider();
+    const elapsed = Math.floor(elapsedMs / 1e3);
     const minutes = Math.floor(elapsed / 60);
     const seconds = elapsed % 60;
     const mm = String(minutes).padStart(2, "0");
@@ -1096,13 +990,258 @@ var RecorderStatusBar = class {
 };
 
 // src/side-panel.ts
+var import_obsidian4 = require("obsidian");
+
+// src/summarizer.ts
 var import_obsidian3 = require("obsidian");
-init_summarizer();
+var MAX_TRANSCRIPT_CHARS = 5e4;
+var SUMMARY_TIMEOUT_MS = 12e4;
+var SUMMARY_PROMPT = `\uB2F9\uC2E0\uC740 \uD68C\uC758\uB85D \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC544\uB798 \uD68C\uC758 \uB179\uCDE8\uB85D\uC744 \uBD84\uC11D\uD558\uC5EC \uD55C\uAD6D\uC5B4\uB85C \uAD6C\uC870\uD654\uB41C \uC694\uC57D\uC744 \uC791\uC131\uD574\uC8FC\uC138\uC694.
+
+\uC624\uB298 \uB0A0\uC9DC: {today}
+
+## \uCD9C\uB825 \uD615\uC2DD (\uB9C8\uD06C\uB2E4\uC6B4)
+
+### \uC694\uC57D
+- (\uD575\uC2EC \uB17C\uC758\uC0AC\uD56D\uC744 3~5\uAC1C bullet point\uB85C)
+
+### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
+- (\uD68C\uC758\uC5D0\uC11C \uACB0\uC815\uB41C \uC0AC\uD56D\uB4E4)
+
+### \uC561\uC158\uC544\uC774\uD15C
+- [ ] \uD560\uC77C \uB0B4\uC6A9 \u{1F464} \uB2F4\uB2F9\uC790\uC774\uB984 \u{1F4C5} YYYY-MM-DD
+
+### \uD0DC\uADF8
+#\uD0A4\uC6CC\uB4DC1 #\uD0A4\uC6CC\uB4DC2 #\uD0A4\uC6CC\uB4DC3
+
+## \uADDC\uCE59
+- \uB179\uCDE8\uB85D\uC5D0 \uBA85\uC2DC\uB41C \uB0B4\uC6A9\uB9CC \uC694\uC57D\uD558\uC138\uC694. \uCD94\uCE21\uD558\uC9C0 \uB9C8\uC138\uC694.
+- \uD654\uC790 \uC774\uB984\uC740 \uB179\uCDE8\uB85D\uC5D0 \uB098\uC628 \uADF8\uB300\uB85C \uC0AC\uC6A9\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC774 \uC5C6\uC73C\uBA74 "\uC5C6\uC74C"\uC73C\uB85C \uD45C\uC2DC\uD558\uC138\uC694.
+- \uC561\uC158\uC544\uC774\uD15C\uC758 \uAE30\uD55C\uC740 \uBC18\uB4DC\uC2DC YYYY-MM-DD \uD615\uC2DD\uC73C\uB85C \uC791\uC131\uD558\uC138\uC694. \uC0C1\uB300\uC801 \uD45C\uD604(\uC608: "\uAE08\uC694\uC77C", "\uB2E4\uC74C \uC8FC")\uC740 \uC624\uB298 \uB0A0\uC9DC\uB97C \uAE30\uC900\uC73C\uB85C \uC808\uB300 \uB0A0\uC9DC\uB85C \uBCC0\uD658\uD558\uC138\uC694.
+- \uAE30\uD55C\uC774 \uBA85\uC2DC\uB418\uC9C0 \uC54A\uC740 \uC561\uC158\uC544\uC774\uD15C\uC740 \u{1F4C5} \uC5C6\uC774 \uC791\uC131\uD558\uC138\uC694.
+- \uD0DC\uADF8\uB294 \uD68C\uC758\uC758 \uD575\uC2EC \uC8FC\uC81C/\uD504\uB85C\uC81D\uD2B8/\uAE30\uC220\uC744 3~7\uAC1C \uCD94\uCD9C\uD558\uC138\uC694. \uD55C\uAE00 \uB610\uB294 \uC601\uC5B4 \uB2E8\uC5B4, \uACF5\uBC31 \uC5C6\uC774 #\uC73C\uB85C \uC2DC\uC791.
+- \uB9C8\uD06C\uB2E4\uC6B4 \uD615\uC2DD\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uB2E4\uB978 \uC124\uBA85\uC740 \uBD88\uD544\uC694\uD569\uB2C8\uB2E4.
+
+## \uC774\uBC88 \uD68C\uC758 \uB179\uCDE8\uB85D
+
+{transcript}
+`;
+function parseSummaryText(raw) {
+  const empty = { ok: false, summary: "", decisions: "", actions: "", tags: "" };
+  if (!raw || !raw.trim()) return empty;
+  let text = raw.trim();
+  const fenceMatch = text.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  const section = (label) => {
+    const re = new RegExp(
+      `^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[\uAC00-\uD7A3A-Za-z]|\\n---|$)`,
+      "m"
+    );
+    const m = text.match(re);
+    return m && m[1] != null ? m[1].trim() : "";
+  };
+  const summary = section("\uC694\uC57D");
+  const decisions = section("\uC8FC\uC694\\s*\uACB0\uC815\uC0AC\uD56D");
+  const actions = section("\uC561\uC158\\s*\uC544\uC774\uD15C|\uC561\uC158\uC544\uC774\uD15C|Action\\s*Items?");
+  const tags = section("\uD0DC\uADF8|Tags?");
+  const ok = !!(summary || decisions || actions || tags);
+  return { ok, summary, decisions, actions, tags };
+}
+var PLACEHOLDER_RE = /\(요약 생성 중\.\.\.\)/g;
+async function applySummaryToVault(app, file, result) {
+  if (!result.success) {
+    const reason = result.reason ?? (result.engine === "none" ? "engine-missing" : "generation-failed");
+    const replacement = reason === "no-transcript" ? "(\uB179\uCDE8 \uB0B4\uC6A9 \uC5C6\uC74C)" : reason === "engine-missing" ? "(\uC694\uC57D \uC0DD\uB7B5 \u2014 AI \uC5D4\uC9C4 \uBBF8\uC124\uCE58)" : "(\uC694\uC57D \uC0DD\uC131 \uC2E4\uD328)";
+    try {
+      await app.vault.process(file, (c) => c.replace(PLACEHOLDER_RE, replacement));
+    } catch (err) {
+      console.error("[Summarizer] Failed to write fallback placeholder:", err);
+    }
+    if (reason === "no-transcript") {
+    } else if (reason === "engine-missing") {
+      new import_obsidian3.Notice("Claude CLI/Ollama\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
+    } else {
+      new import_obsidian3.Notice("\uC694\uC57D \uC0DD\uC131\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uCF58\uC194 \uB85C\uADF8\uB97C \uD655\uC778\uD574\uC8FC\uC138\uC694.", 8e3);
+    }
+    return { ok: false, reason };
+  }
+  const parsed = parseSummaryText(result.summary);
+  if (!parsed.ok) {
+    console.warn("[Summarizer] Could not parse summary output. Raw text:\n", result.summary);
+    try {
+      await app.vault.process(file, (c) => c.replace(PLACEHOLDER_RE, "(\uC694\uC57D \uD30C\uC2F1 \uC2E4\uD328)"));
+    } catch (err) {
+      console.error("[Summarizer] Failed to write parse-failed placeholder:", err);
+    }
+    new import_obsidian3.Notice("\uC694\uC57D \uD615\uC2DD\uC744 \uC778\uC2DD\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (\uC694\uC57D \uD30C\uC2F1 \uC2E4\uD328). \uCF58\uC194 \uB85C\uADF8 \uD655\uC778.", 8e3);
+    return { ok: false, reason: "parse-failed" };
+  }
+  try {
+    await app.vault.process(file, (content) => {
+      let u = content;
+      const repl = (label, val) => {
+        const re = new RegExp(`### ${label}\\n\\n\\(\uC694\uC57D \uC0DD\uC131 \uC911\\.\\.\\.\\)`);
+        u = u.replace(re, `### ${label}
+${val.trim() || "(\uC5C6\uC74C)"}`);
+      };
+      repl("\uC694\uC57D", parsed.summary);
+      repl("\uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D", parsed.decisions);
+      repl("\uC561\uC158\uC544\uC774\uD15C", parsed.actions);
+      repl("\uD0DC\uADF8", parsed.tags);
+      u = u.replace(PLACEHOLDER_RE, "(\uC5C6\uC74C)");
+      return u;
+    });
+  } catch (err) {
+    console.error("[Summarizer] Failed to apply summary to vault:", err);
+    new import_obsidian3.Notice("\uC694\uC57D \uC801\uC6A9 \uC911 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4.", 8e3);
+    return { ok: false, reason: "generation-failed" };
+  }
+  return { ok: true };
+}
+function formatTranscript(segments) {
+  return segments.filter((s) => s.text.trim()).map((s) => `[${s.speaker}] ${s.text.trim()}`).join("\n");
+}
+function buildPrompt(transcript) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  return SUMMARY_PROMPT.replace("{today}", today).replace("{transcript}", transcript.slice(0, MAX_TRANSCRIPT_CHARS));
+}
+function isClaudeAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    const homedir = require("os").homedir();
+    const extraPaths = [
+      `${homedir}/.asdf/shims`,
+      `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+      "/usr/local/bin",
+      "/opt/homebrew/bin"
+    ];
+    const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+    execSync("which claude", { stdio: "ignore", timeout: 3e3, env });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getClaudePath() {
+  const homedir = require("os").homedir();
+  const candidates = [
+    `${homedir}/.asdf/installs/nodejs/24.2.0/bin/claude`,
+    `${homedir}/.asdf/shims/claude`,
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude"
+  ];
+  const fs = require("fs");
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+    }
+  }
+  return "claude";
+}
+var OLLAMA_MODEL = "exaone3.5:7.8b";
+var OLLAMA_TIMEOUT_MS = 18e4;
+function isOllamaAvailable() {
+  try {
+    const { execSync } = require("child_process");
+    execSync("ollama list", { stdio: "ignore", timeout: 5e3 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function summarizeWithOllama(prompt) {
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      execFile(
+        "ollama",
+        ["run", OLLAMA_MODEL, prompt],
+        { timeout: OLLAMA_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Ollama failed:", error.message);
+            resolve({ success: false, summary: "", engine: "ollama" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Ollama/${OLLAMA_MODEL} (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "ollama" });
+          } else {
+            resolve({ success: false, summary: "", engine: "ollama" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Ollama:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+async function summarize(segments) {
+  const transcript = formatTranscript(segments);
+  if (!transcript) {
+    console.log("[Summarizer] Transcript is empty \u2014 skipping summary.");
+    return { success: false, summary: "", engine: "none", reason: "no-transcript" };
+  }
+  if (!isClaudeAvailable()) {
+    console.log("[Summarizer] Claude CLI not found \u2014 trying Ollama...");
+    if (isOllamaAvailable()) {
+      const prompt2 = buildPrompt(transcript);
+      return summarizeWithOllama(prompt2);
+    }
+    console.log("[Summarizer] Ollama not found \u2014 skipping summary.");
+    return { success: false, summary: "", engine: "none", reason: "engine-missing" };
+  }
+  const prompt = buildPrompt(transcript);
+  return new Promise((resolve) => {
+    try {
+      const { execFile } = require("child_process");
+      const claudePath = getClaudePath();
+      const homedir = require("os").homedir();
+      const extraPaths = [
+        `${homedir}/.asdf/shims`,
+        `${homedir}/.asdf/installs/nodejs/24.2.0/bin`,
+        "/usr/local/bin",
+        "/opt/homebrew/bin"
+      ];
+      const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ""].join(":") };
+      const child = execFile(
+        claudePath,
+        ["-p", prompt],
+        { timeout: SUMMARY_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn("[Summarizer] Claude CLI failed:", error.message);
+            resolve({ success: false, summary: "", engine: "claude" });
+            return;
+          }
+          const output = stdout.trim();
+          if (output) {
+            console.log(`[Summarizer] Summary generated via Claude CLI (${output.length} chars).`);
+            resolve({ success: true, summary: output, engine: "claude" });
+          } else {
+            console.warn("[Summarizer] Claude CLI returned empty output.");
+            resolve({ success: false, summary: "", engine: "claude" });
+          }
+        }
+      );
+    } catch (err) {
+      console.warn("[Summarizer] Failed to execute Claude CLI:", err);
+      resolve({ success: false, summary: "", engine: "none" });
+    }
+  });
+}
+
+// src/side-panel.ts
 var SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
-var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
+var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.refreshInterval = null;
+    this.headerRefreshInterval = null;
     this.processing = false;
     this.serverProcess = null;
     this.selectedWavPath = "";
@@ -1132,6 +1271,13 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     await this.render();
   }
   async onClose() {
+    this.clearHeaderRefresh();
+  }
+  clearHeaderRefresh() {
+    if (this.headerRefreshInterval !== null) {
+      clearInterval(this.headerRefreshInterval);
+      this.headerRefreshInterval = null;
+    }
   }
   async render() {
     if (this.rendering) return;
@@ -1150,7 +1296,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     const headerRow = headerSection.createDiv({ cls: "meetnote-panel-header" });
     const titleEl = headerRow.createEl("span", { cls: "meetnote-panel-title" });
     const logoIcon = titleEl.createEl("span", { cls: "meetnote-logo-icon" });
-    (0, import_obsidian3.setIcon)(logoIcon, "mic");
+    (0, import_obsidian4.setIcon)(logoIcon, "mic");
     titleEl.createEl("span", { text: " MeetNote " });
     titleEl.createEl("span", { text: `v${this.plugin.manifest.version}`, cls: "meetnote-version" });
     const headerActions = headerRow.createDiv({ cls: "meetnote-header-actions" });
@@ -1162,155 +1308,68 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     });
     if (serverOnline) {
       const isRecording = this.plugin.isRecording;
+      const isPaused = this.plugin.isPaused;
       const recBtn = headerActions.createEl("button", {
-        text: isRecording ? "\u23F9" : "\u{1F399}",
         cls: "meetnote-header-btn",
         attr: { title: isRecording ? "\uB179\uC74C \uC911\uC9C0" : "\uB179\uC74C \uC2DC\uC791" }
       });
+      (0, import_obsidian4.setIcon)(recBtn, isRecording ? "square" : "mic");
       recBtn.addEventListener("click", () => {
         this.app.commands.executeCommandById(
           isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
         );
         setTimeout(() => this.render(), 1e3);
       });
+      if (isRecording) {
+        const pauseBtn = headerActions.createEl("button", {
+          cls: "meetnote-header-btn",
+          attr: { title: isPaused ? "\uB179\uC74C \uC7AC\uAC1C" : "\uB179\uC74C \uC77C\uC2DC\uC911\uC9C0" }
+        });
+        (0, import_obsidian4.setIcon)(pauseBtn, isPaused ? "play" : "pause");
+        pauseBtn.addEventListener("click", () => {
+          if (isPaused) {
+            this.plugin.resumeRecording();
+          } else {
+            this.plugin.pauseRecording();
+          }
+        });
+      }
     }
-    const dashBtn = headerActions.createEl("button", { text: "\u{1F4CA}", cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
+    const dashBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
+    (0, import_obsidian4.setIcon)(dashBtn, "bar-chart-2");
     dashBtn.addEventListener("click", () => {
       this.app.commands.executeCommandById("meetnote:meeting-dashboard");
     });
-    const refreshBtn = headerActions.createEl("button", { text: "\u21BB", cls: "meetnote-header-btn" });
+    const refreshBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "\uC0C8\uB85C\uACE0\uCE68" } });
+    (0, import_obsidian4.setIcon)(refreshBtn, "refresh-cw");
     refreshBtn.addEventListener("click", () => this.render());
-    let pendingCount = 0;
-    try {
-      const resp = await this.api(`/recordings/pending?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
-      const recordings = (resp.recordings || []).sort((a, b) => b.created - a.created);
-      pendingCount = recordings.length;
-      const pendingContent = this.createCollapsibleSection(container, "pending", "\uB300\uAE30 \uC911", pendingCount > 0 ? `${pendingCount}` : void 0);
-      if (recordings.length === 0) {
-        pendingContent.createEl("p", { text: "\uB300\uAE30 \uC911\uC778 \uB179\uC74C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-empty" });
-      } else {
-        const listContainer = pendingContent.createDiv({ cls: "meetnote-recording-list" });
-        for (const rec of recordings) {
-          const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
-          const info = item.createDiv({ cls: "meetnote-recording-info" });
-          if (rec.document_name) {
-            const titleEl2 = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
-            titleEl2.addEventListener("click", async (e) => {
-              e.preventDefault();
-              const docPath = rec.document_path || "";
-              if (docPath) {
-                const file = this.app.vault.getAbstractFileByPath(docPath);
-                if (file) {
-                  await this.app.workspace.getLeaf().openFile(file);
-                }
-              }
-            });
+    if (serverOnline && this.plugin.isRecording) {
+      const recStatus = headerSection.createDiv({ cls: `meetnote-rec-status ${this.plugin.isPaused ? "" : "meetnote-rec-pulse"}` });
+      const recStatusText = recStatus.createEl("span");
+      const updateHeaderTime = () => {
+        const elapsed = Math.floor(this.plugin.getRecordedElapsedMs() / 1e3);
+        const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+        const ss = String(elapsed % 60).padStart(2, "0");
+        recStatusText.setText(this.plugin.isPaused ? `\u23F8 \uC77C\uC2DC\uC911\uC9C0 ${mm}:${ss}` : `\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}`);
+      };
+      updateHeaderTime();
+      this.clearHeaderRefresh();
+      if (!this.plugin.isPaused) {
+        this.headerRefreshInterval = setInterval(() => {
+          if (!this.plugin.isRecording || this.plugin.isPaused) {
+            this.clearHeaderRefresh();
+            return;
           }
-          const date = new Date(rec.created * 1e3);
-          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-          const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
-          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \uC608\uC0C1 \uCC98\uB9AC\uC2DC\uAC04 ~${estMinutes}\uBD84`, cls: "meetnote-recording-meta" });
-          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
-          const btn = btnGroup.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
-          btn.addEventListener("click", () => this.processRecording(rec, btn));
-          const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
-          delBtn.addEventListener("click", async () => {
-            const docName = rec.document_name || rec.filename;
-            const confirmed = confirm(`"${docName}" \uB179\uC74C \uBC0F \uAD00\uB828 \uD30C\uC77C\uC744 \uBAA8\uB450 \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?
-
-\uC0AD\uC81C \uB300\uC0C1:
-- \uB179\uC74C \uD30C\uC77C (WAV)
-- \uBA54\uD0C0\uB370\uC774\uD130
-- \uC5F0\uACB0\uB41C \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C`);
-            if (!confirmed) return;
-            try {
-              await this.api("/recordings/delete", {
-                method: "POST",
-                body: { wav_path: rec.path }
-              });
-              if (rec.document_path) {
-                const file = this.app.vault.getAbstractFileByPath(rec.document_path);
-                if (file) {
-                  await this.app.vault.delete(file);
-                }
-              }
-              new import_obsidian3.Notice(`${docName} \uC0AD\uC81C \uC644\uB8CC`);
-              await this.render();
-            } catch {
-              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
-            }
-          });
-        }
-        if (recordings.length > 3) {
-          pendingContent.createEl("div", { text: `\u2193 ${recordings.length - 3}\uAC74 \uB354\uBCF4\uAE30 (\uC2A4\uD06C\uB864)`, cls: "meetnote-scroll-hint" });
-        }
+          updateHeaderTime();
+        }, 1e3);
       }
-    } catch (err) {
-      container.createEl("p", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "meetnote-error" });
+    } else {
+      this.clearHeaderRefresh();
     }
-    try {
-      const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
-      const allRecs = allResp.recordings || [];
-      const completed = allRecs.filter((r) => r.processed).sort((a, b) => b.created - a.created).slice(0, 10);
-      if (completed.length > 0) {
-        const completedContent = this.createCollapsibleSection(container, "completed", "\uCD5C\uADFC \uD68C\uC758", `${completed.length}`);
-        const completedList = completedContent.createDiv({ cls: "meetnote-recording-list" });
-        for (const rec of completed) {
-          const item = completedList.createDiv({ cls: "meetnote-recording-item meetnote-completed" });
-          const info = item.createDiv({ cls: "meetnote-recording-info" });
-          if (rec.document_name) {
-            const titleEl2 = info.createEl("a", { text: rec.document_name, cls: "meetnote-recording-title" });
-            titleEl2.addEventListener("click", async (e) => {
-              e.preventDefault();
-              const docPath = rec.document_path || "";
-              if (docPath) {
-                const file = this.app.vault.getAbstractFileByPath(docPath);
-                if (file) {
-                  await this.app.workspace.getLeaf().openFile(file);
-                }
-              }
-            });
-          }
-          const date = new Date(rec.created * 1e3);
-          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-          const statusIcon = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? "\u26A0" : "\u2713";
-          const statusText = rec.unregistered_speakers && rec.unregistered_speakers > 0 ? `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 ${statusIcon} \uBBF8\uB4F1\uB85D ${rec.unregistered_speakers}\uBA85` : `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \u2713`;
-          info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
-          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
-          const mapBtn = btnGroup.createEl("button", { text: "\uCC38\uC11D\uC790", cls: "meetnote-process-btn" });
-          mapBtn.addEventListener("click", async () => {
-            this.selectedWavPath = rec.path;
-            this.selectedDocName = rec.document_name || rec.filename;
-            const docPath = rec.document_path || "";
-            if (docPath) {
-              const file = this.app.vault.getAbstractFileByPath(docPath);
-              if (file) {
-                await this.app.workspace.getLeaf().openFile(file);
-              }
-            }
-            await this.render();
-          });
-          const requeueBtn = btnGroup.createEl("button", { text: "\uC7AC\uCC98\uB9AC", cls: "meetnote-edit-btn" });
-          requeueBtn.addEventListener("click", async () => {
-            const confirmed = confirm("\uC7AC\uCC98\uB9AC\uD558\uBA74 \uAE30\uC874 \uD654\uC790 \uB9E4\uD551 \uBC0F \uCC38\uC11D\uC790 \uC815\uBCF4\uAC00 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4.\n\uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?");
-            if (!confirmed) return;
-            try {
-              await this.api("/recordings/requeue", {
-                method: "POST",
-                body: { wav_path: rec.path }
-              });
-              new import_obsidian3.Notice("\uB300\uAE30 \uC911\uC73C\uB85C \uC774\uB3D9\uB428");
-              await this.render();
-            } catch {
-              new import_obsidian3.Notice("\uC774\uB3D9 \uC2E4\uD328");
-            }
-          });
-        }
-        if (completed.length > 3) {
-          completedContent.createEl("div", { text: `\u2193 ${completed.length - 3}\uAC74 \uB354\uBCF4\uAE30 (\uC2A4\uD06C\uB864)`, cls: "meetnote-scroll-hint" });
-        }
-      }
-    } catch {
+    if (!serverOnline) {
+      const offlineBanner = container.createDiv({ cls: "meetnote-offline-banner" });
+      offlineBanner.createEl("span", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC11C\uBC84\uB97C \uC2DC\uC791\uD558\uACE0 \uC0C8\uB85C\uACE0\uCE68\uD558\uC138\uC694." });
+      return;
     }
     if (this.processing) {
       const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
@@ -1335,211 +1394,377 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
         }
       }, 2e3);
     }
-    const speakerContent = this.createCollapsibleSection(container, "speakers", "\uD68C\uC758 \uCC38\uC11D\uC790");
-    if (this.cachedNames.length === 0) {
-      this.cachedNames = await this.loadSuggestNames();
-    }
+    let pendingCount = 0;
     try {
-      if (this.selectedWavPath) {
-        if (this.selectedDocName) {
-          speakerContent.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
-        }
-        const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
-        const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
-        const lastMeeting = lastResp;
-        const speakerInputs = [];
-        const rawEmailMap = lastMeeting.speaker_email_map || {};
-        const speakerEmailMap = {};
-        for (const label of lastMeeting.available_labels) {
-          const name = lastMeeting.speaker_map[label] || label;
-          speakerEmailMap[name] = rawEmailMap[label] || "";
-        }
-        const emailCheckboxes = [];
-        if (lastMeeting.available_labels.length > 0) {
-          speakerContent.createEl("div", { text: "\u{1F399} \uC74C\uC131 \uC778\uC2DD", cls: "meetnote-subsection" });
-          for (const label of lastMeeting.available_labels) {
-            const displayName = lastMeeting.speaker_map[label] || label;
-            const isUnregistered = displayName.startsWith("\uD654\uC790");
-            const email = speakerEmailMap[displayName] || "";
-            const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
-            const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
-            if (email) {
-              cb.checked = true;
-              emailCheckboxes.push({ email, checkbox: cb });
-            } else {
-              cb.disabled = true;
-            }
-            const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
-            nameCol.createEl("span", { text: displayName });
-            if (!isUnregistered) {
-              if (email) nameCol.createEl("span", { text: ` (${email})`, cls: "meetnote-speaker-email" });
-              nameCol.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
-            }
-            const actionCol = row.createDiv({ cls: "meetnote-participant-action" });
-            const inputWrapper = actionCol.createDiv({ cls: "meetnote-input-wrapper" });
-            const nameInput = inputWrapper.createEl("input", { type: "text", placeholder: isUnregistered ? "\uC774\uB984 \uC785\uB825" : "\uBCC0\uACBD\uD560 \uC774\uB984", cls: "meetnote-speaker-input" });
-            const emailInput = actionCol.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
-            if (!isUnregistered) {
-              nameInput.style.display = "none";
-              emailInput.style.display = "none";
-              const editBtn = actionCol.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
-              editBtn.addEventListener("click", () => {
-                nameInput.style.display = "";
-                emailInput.style.display = "";
-                editBtn.style.display = "none";
-                speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
-                this.addAutoSuggest(inputWrapper, nameInput, emailInput);
-              });
-            } else {
-              speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
-              this.addAutoSuggest(inputWrapper, nameInput, emailInput);
-            }
+      const resp = await this.api(`/recordings/pending?user_id=${encodeURIComponent(this.plugin.settings.emailFromAddress)}`);
+      const recordings = (resp.recordings || []).sort((a, b) => b.created - a.created);
+      pendingCount = recordings.length;
+      const pendingContent = this.createCollapsibleSection(container, "pending", "\uB300\uAE30 \uC911", pendingCount > 0 ? `${pendingCount}` : void 0);
+      if (recordings.length === 0) {
+        const emptyGuide = pendingContent.createDiv({ cls: "meetnote-empty-guide" });
+        const guideBtn = emptyGuide.createEl("button", { cls: "meetnote-guide-btn" });
+        (0, import_obsidian4.setIcon)(guideBtn, "mic");
+        guideBtn.appendText(" \uB179\uC74C\uC744 \uC2DC\uC791\uD574\uBCF4\uC138\uC694");
+        guideBtn.addEventListener("click", () => {
+          this.app.commands.executeCommandById("meetnote:start-recording");
+          setTimeout(() => this.render(), 1e3);
+        });
+      } else {
+        const listContainer = pendingContent.createDiv({ cls: "meetnote-recording-list" });
+        for (const rec of recordings) {
+          const item = listContainer.createDiv({ cls: "meetnote-recording-item" });
+          const info = item.createDiv({ cls: "meetnote-recording-info" });
+          const docDisplayName = rec.document_name || rec.filename || new Date(rec.created * 1e3).toLocaleDateString("ko-KR");
+          {
+            const titleEl2 = info.createEl("a", { text: docDisplayName, cls: "meetnote-recording-title" });
+            titleEl2.addEventListener("click", async (e) => {
+              e.preventDefault();
+              await this.openRecordingDocument(rec);
+            });
           }
-        }
-        if (lastMeeting.available_labels.length > 0) {
-          const btnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
-          const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
-          batchBtn.addEventListener("click", async () => {
-            const emptyInputs = speakerInputs.filter(
-              (s) => s.currentName.startsWith("\uD654\uC790") && !s.nameInput.value.trim()
-            );
-            if (emptyInputs.length > 0) {
-              const names = emptyInputs.map((s) => s.currentName).join(", ");
-              new import_obsidian3.Notice(`${names}\uC758 \uC774\uB984\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.`);
-              emptyInputs[0].nameInput.focus();
-              return;
-            }
-            const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
-            let count = 0;
-            for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
-              const newName = nameInput.value.trim();
-              if (!newName || newName === currentName) continue;
-              try {
-                if (currentName.startsWith("\uD654\uC790")) {
-                  await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
-                } else {
-                  await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
+          const date = new Date(rec.created * 1e3);
+          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+          const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
+          info.createEl("div", { text: `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \uC608\uC0C1 \uCC98\uB9AC\uC2DC\uAC04 ~${estMinutes}\uBD84`, cls: "meetnote-recording-meta" });
+          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+          if (rec.document_path) {
+            const continueBtn = btnGroup.createEl("button", { text: "\uC774\uC5B4 \uB179\uC74C", cls: "meetnote-edit-btn" });
+            continueBtn.addEventListener("click", async () => {
+              await this.plugin.startContinueRecording(rec.path, rec.document_path || "");
+              setTimeout(() => this.render(), 1e3);
+            });
+          }
+          const btn = btnGroup.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
+          btn.addEventListener("click", () => this.processRecording(rec, btn));
+          const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+          delBtn.addEventListener("click", () => {
+            const docName = rec.document_name || rec.filename;
+            this.showConfirmModal(
+              `"${docName}" \uC0AD\uC81C`,
+              "\uB179\uC74C \uD30C\uC77C(WAV), \uBA54\uD0C0\uB370\uC774\uD130, \uC5F0\uACB0\uB41C \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uAC00 \uBAA8\uB450 \uC0AD\uC81C\uB429\uB2C8\uB2E4.",
+              async () => {
+                try {
+                  await this.api("/recordings/delete", {
+                    method: "POST",
+                    body: { wav_path: rec.path }
+                  });
+                  if (rec.document_path) {
+                    const file = this.app.vault.getAbstractFileByPath(rec.document_path);
+                    if (file) {
+                      await this.app.vault.delete(file);
+                    }
+                  }
+                  new import_obsidian4.Notice(`${docName} \uC0AD\uC81C \uC644\uB8CC`);
+                  await this.render();
+                } catch {
+                  new import_obsidian4.Notice("\uC0AD\uC81C \uC2E4\uD328");
                 }
-                count++;
-              } catch {
               }
-            }
-            if (count > 0) {
-              new import_obsidian3.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
-              await this.render();
-            } else {
-              new import_obsidian3.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
-            }
+            );
           });
         }
-        speakerContent.createEl("div", { text: "\u{1F464} \uC218\uB3D9 \uCD94\uAC00", cls: "meetnote-subsection" });
+        if (recordings.length > 3) {
+          listContainer.addClass("meetnote-list-scrollable");
+        }
+      }
+    } catch (err) {
+    }
+    try {
+      const userId = this.plugin.settings.emailFromAddress;
+      const allResp = await this.api(`/recordings/all?user_id=${encodeURIComponent(userId)}`);
+      const allRecs = allResp.recordings || [];
+      const completed = allRecs.filter((r) => r.processed).sort((a, b) => b.created - a.created);
+      if (userId) {
         try {
-          const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
-          const manualList = manualResp.participants || [];
-          for (const p of manualList) {
-            const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
-            const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
-            if (p.email) {
-              cb.checked = true;
-              emailCheckboxes.push({ email: p.email, checkbox: cb });
-            } else {
-              cb.disabled = true;
-            }
-            const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
-            nameCol.createEl("span", { text: p.name });
-            if (p.email) nameCol.createEl("span", { text: ` (${p.email})`, cls: "meetnote-speaker-email" });
-            const actionCol = row.createDiv({ cls: "meetnote-participant-action" });
-            const removeBtn = actionCol.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
-            removeBtn.addEventListener("click", async () => {
-              await this.api("/participants/remove", { method: "POST", body: { wav_path: this.selectedWavPath, name: p.name } });
-              await this.updateDocumentParticipants();
-              new import_obsidian3.Notice(`${p.name} \uC81C\uAC70\uB428`);
-              await this.render();
+          const unfilteredResp = await this.api(`/recordings/all`);
+          const unfilteredRecs = unfilteredResp.recordings || [];
+          const hidden = unfilteredRecs.length - allRecs.length;
+          if (hidden > 0) {
+            const hint = container.createDiv({ cls: "meetnote-userid-hint" });
+            hint.createEl("span", {
+              text: `\uB2E4\uB978 \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uB85C \uB9CC\uB4E0 \uB179\uC74C ${hidden}\uAC74\uC774 \uC228\uACA8\uC838 \uC788\uC2B5\uB2C8\uB2E4. \uC124\uC815\uC758 '\uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C'\uC744 \uD655\uC778\uD558\uC138\uC694.`
             });
           }
         } catch {
         }
-        const addBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
-        const addWrapper = addBtnRow.createDiv({ cls: "meetnote-input-wrapper" });
-        const addInput = addWrapper.createEl("input", { type: "text", placeholder: "\uC774\uB984 \uC785\uB825", cls: "meetnote-speaker-input" });
-        const addEmailInput = addBtnRow.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
-        this.addAutoSuggest(addWrapper, addInput, addEmailInput);
-        const addBtn = addBtnRow.createEl("button", { text: "\uCD94\uAC00", cls: "meetnote-register-btn meetnote-batch-btn" });
-        addBtn.addEventListener("click", async () => {
-          const name = addInput.value.trim();
-          if (!name) {
-            new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
-            return;
-          }
-          const resp = await this.api("/participants/add", { method: "POST", body: { wav_path: this.selectedWavPath, name, email: addEmailInput.value.trim() } });
-          if (resp.ok) {
-            await this.updateDocumentParticipants();
-            new import_obsidian3.Notice(`${name} \uCD94\uAC00\uB428`);
-            await this.render();
-          } else {
-            new import_obsidian3.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
-          }
-        });
-        if (emailCheckboxes.length > 0) {
-          const emailBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
-          const emailBtn = emailBtnRow.createEl("button", { text: "\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1", cls: "meetnote-register-btn meetnote-batch-btn" });
-          emailBtn.addEventListener("click", async () => {
-            const selected = emailCheckboxes.filter((c) => c.checkbox.checked).map((c) => c.email);
-            if (selected.length === 0) {
-              new import_obsidian3.Notice("\uC804\uC1A1\uD560 \uCC38\uC11D\uC790\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
-              return;
-            }
-            const fromAddress = this.plugin.settings.emailFromAddress;
-            if (!fromAddress) {
-              new import_obsidian3.Notice("\uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD558\uC138\uC694.");
-              return;
-            }
-            const docPath = await this.getSelectedDocPath();
-            if (!docPath) {
-              new import_obsidian3.Notice("\uBB38\uC11C \uACBD\uB85C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-              return;
-            }
-            const file = this.app.vault.getAbstractFileByPath(docPath);
-            if (!file) {
-              new import_obsidian3.Notice("\uBB38\uC11C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-              return;
-            }
-            const content = await this.app.vault.read(file);
-            const meetnoteMatch = content.match(/<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|<!-- meetnote-end -->)/);
-            const emailBody = meetnoteMatch ? meetnoteMatch[1].trim() : content.slice(0, 3e3);
-            const docName = file.basename;
-            emailBtn.setText("\uC804\uC1A1 \uC911...");
-            emailBtn.setAttribute("disabled", "true");
-            try {
-              const vaultBasePath = this.app.vault.adapter?.basePath || "";
-              const vaultFilePath = vaultBasePath ? `${vaultBasePath}/${docPath}` : "";
-              const resp = await this.api("/email/send", {
-                method: "POST",
-                body: {
-                  recipients: selected,
-                  from_address: fromAddress,
-                  subject: `[MeetNote] ${docName}`,
-                  body: emailBody,
-                  vault_file_path: vaultFilePath,
-                  include_gitlab_link: this.plugin.settings.gitlabLinkEnabled
-                }
-              });
-              if (resp.ok) {
-                new import_obsidian3.Notice(`${resp.sent.length}\uBA85\uC5D0\uAC8C \uC804\uC1A1 \uC644\uB8CC!`);
-              } else {
-                new import_obsidian3.Notice(`\uC804\uC1A1 \uC2E4\uD328: ${resp.failed?.length || 0}\uBA85`);
+      }
+      if (completed.length > 0) {
+        const completedContent = this.createCollapsibleSection(container, "completed", "\uCD5C\uADFC \uD68C\uC758", `${completed.length}`);
+        const completedList = completedContent.createDiv({ cls: "meetnote-recording-list" });
+        for (const rec of completed) {
+          const item = completedList.createDiv({ cls: "meetnote-recording-item" });
+          const info = item.createDiv({ cls: "meetnote-recording-info" });
+          const cDocName = rec.document_name || rec.filename || new Date(rec.created * 1e3).toLocaleDateString("ko-KR");
+          const titleEl2 = info.createEl("a", { text: cDocName, cls: "meetnote-recording-title" });
+          titleEl2.addEventListener("click", async (e) => {
+            e.preventDefault();
+            await this.openRecordingDocument(rec);
+          });
+          const date = new Date(rec.created * 1e3);
+          const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+          const hasUnregistered = rec.unregistered_speakers && rec.unregistered_speakers > 0;
+          const statusText = hasUnregistered ? `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \u26A0 \uBBF8\uB4F1\uB85D ${rec.unregistered_speakers}\uBA85` : `${dateStr} \xB7 ${rec.duration_minutes}\uBD84 \xB7 \u2713 \uC644\uB8CC`;
+          info.createEl("div", { text: statusText, cls: "meetnote-recording-meta" });
+          const btnGroup = item.createDiv({ cls: "meetnote-btn-group" });
+          const mapBtn = btnGroup.createEl("button", { text: "\uCC38\uC11D\uC790", cls: "meetnote-process-btn" });
+          mapBtn.addEventListener("click", async () => {
+            this.selectedWavPath = rec.path;
+            this.selectedDocName = rec.document_name || rec.filename;
+            const docPath = rec.document_path || "";
+            if (docPath) {
+              const file = this.app.vault.getAbstractFileByPath(docPath);
+              if (file) {
+                await this.app.workspace.getLeaf().openFile(file);
               }
-            } catch {
-              new import_obsidian3.Notice("\uC804\uC1A1 \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
-            } finally {
-              emailBtn.setText("\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1");
-              emailBtn.removeAttribute("disabled");
             }
+            await this.render();
+          });
+          const requeueBtn = btnGroup.createEl("button", { text: "\uC7AC\uCC98\uB9AC", cls: "meetnote-edit-btn" });
+          requeueBtn.addEventListener("click", () => {
+            this.showConfirmModal(
+              "\uC7AC\uCC98\uB9AC \uD655\uC778",
+              "\uAE30\uC874 \uD654\uC790 \uB9E4\uD551 \uBC0F \uCC38\uC11D\uC790 \uC815\uBCF4\uAC00 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4.",
+              async () => {
+                try {
+                  await this.api("/recordings/requeue", {
+                    method: "POST",
+                    body: { wav_path: rec.path }
+                  });
+                  new import_obsidian4.Notice("\uB300\uAE30 \uC911\uC73C\uB85C \uC774\uB3D9\uB428");
+                  await this.render();
+                } catch {
+                  new import_obsidian4.Notice("\uC774\uB3D9 \uC2E4\uD328");
+                }
+              }
+            );
           });
         }
-      } else {
-        speakerContent.createEl("p", { text: "\uCD5C\uADFC \uD68C\uC758\uC5D0\uC11C '\uAD00\uB9AC' \uBC84\uD2BC\uC744 \uB20C\uB7EC\uC8FC\uC138\uC694.", cls: "meetnote-empty" });
+        if (completed.length > 3) {
+          completedList.addClass("meetnote-list-scrollable");
+        }
       }
+    } catch {
+    }
+    if (this.selectedWavPath) {
+      try {
+        const checkResp = await this.api(`/recordings/all`);
+        const exists = (checkResp.recordings || []).some((r) => r.path === this.selectedWavPath);
+        if (!exists) {
+          this.selectedWavPath = "";
+          this.selectedDocName = "";
+        }
+      } catch {
+      }
+    }
+    if (this.selectedWavPath) {
+      const speakerContent = this.createCollapsibleSection(container, "speakers", "\uD68C\uC758 \uCC38\uC11D\uC790");
+      if (this.cachedNames.length === 0) {
+        this.cachedNames = await this.loadSuggestNames();
+      }
+      try {
+        {
+          if (this.selectedDocName) {
+            speakerContent.createEl("div", { text: `\u{1F4CB} ${this.selectedDocName}`, cls: "meetnote-speaker-context" });
+          }
+          const wavParam = `?wav_path=${encodeURIComponent(this.selectedWavPath)}`;
+          const lastResp = await this.api(`/speakers/last-meeting${wavParam}`);
+          const lastMeeting = lastResp;
+          const speakerInputs = [];
+          const rawEmailMap = lastMeeting.speaker_email_map || {};
+          const speakerEmailMap = {};
+          for (const label of lastMeeting.available_labels) {
+            const name = lastMeeting.speaker_map[label] || label;
+            speakerEmailMap[name] = rawEmailMap[label] || "";
+          }
+          const emailCheckboxes = [];
+          if (lastMeeting.available_labels.length > 0) {
+            speakerContent.createEl("div", { text: "\u{1F399} \uC74C\uC131 \uC778\uC2DD", cls: "meetnote-subsection" });
+            for (const label of lastMeeting.available_labels) {
+              const displayName = lastMeeting.speaker_map[label] || label;
+              const isUnregistered = displayName.startsWith("\uD654\uC790");
+              const email = speakerEmailMap[displayName] || "";
+              const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
+              const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
+              if (email) {
+                cb.checked = true;
+                emailCheckboxes.push({ email, checkbox: cb });
+              } else {
+                cb.disabled = true;
+              }
+              const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
+              nameCol.createEl("span", { text: displayName });
+              if (!isUnregistered) {
+                if (email) nameCol.createEl("span", { text: ` (${email})`, cls: "meetnote-speaker-email" });
+                nameCol.createEl("span", { text: " \u2713", cls: "meetnote-matched" });
+              }
+              const actionCol = row.createDiv({ cls: "meetnote-participant-action" });
+              const inputWrapper = actionCol.createDiv({ cls: "meetnote-input-wrapper" });
+              const nameInput = inputWrapper.createEl("input", { type: "text", placeholder: isUnregistered ? "\uC774\uB984 \uC785\uB825" : "\uBCC0\uACBD\uD560 \uC774\uB984", cls: "meetnote-speaker-input" });
+              const emailInput = actionCol.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
+              if (!isUnregistered) {
+                nameInput.style.display = "none";
+                emailInput.style.display = "none";
+                const editBtn = actionCol.createEl("button", { text: "\uC218\uC815", cls: "meetnote-edit-btn" });
+                editBtn.addEventListener("click", () => {
+                  nameInput.style.display = "";
+                  emailInput.style.display = "";
+                  editBtn.style.display = "none";
+                  speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+                  this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+                });
+              } else {
+                speakerInputs.push({ label, currentName: displayName, nameInput, emailInput });
+                this.addAutoSuggest(inputWrapper, nameInput, emailInput);
+              }
+            }
+          }
+          if (lastMeeting.available_labels.length > 0) {
+            const btnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
+            const batchBtn = btnRow.createEl("button", { text: "\uC74C\uC131 \uCC38\uC11D\uC790 \uC800\uC7A5", cls: "meetnote-register-btn meetnote-batch-btn" });
+            batchBtn.addEventListener("click", async () => {
+              const emptyInputs = speakerInputs.filter(
+                (s) => s.currentName.startsWith("\uD654\uC790") && !s.nameInput.value.trim()
+              );
+              if (emptyInputs.length > 0) {
+                const names = emptyInputs.map((s) => s.currentName).join(", ");
+                new import_obsidian4.Notice(`${names}\uC758 \uC774\uB984\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.`);
+                emptyInputs[0].nameInput.focus();
+                return;
+              }
+              const wavPath = lastMeeting.wav_path || this.selectedWavPath || "";
+              let count = 0;
+              for (const { label, currentName, nameInput, emailInput } of speakerInputs) {
+                const newName = nameInput.value.trim();
+                if (!newName || newName === currentName) continue;
+                try {
+                  if (currentName.startsWith("\uD654\uC790")) {
+                    await this.api("/speakers/register", { method: "POST", body: { speaker_label: label, name: newName, email: emailInput.value.trim(), wav_path: wavPath } });
+                  } else {
+                    await this.api("/speakers/reassign", { method: "POST", body: { wav_path: wavPath, speaker_label: label, old_name: currentName, new_name: newName, new_email: emailInput.value.trim() } });
+                  }
+                  count++;
+                } catch {
+                }
+              }
+              if (count > 0) {
+                new import_obsidian4.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
+                await this.updateDocumentParticipants();
+                await this.render();
+              } else {
+                new import_obsidian4.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+              }
+            });
+          }
+          speakerContent.createEl("div", { text: "\u{1F464} \uC218\uB3D9 \uCD94\uAC00", cls: "meetnote-subsection" });
+          try {
+            const manualResp = await this.api(`/participants/manual?wav_path=${encodeURIComponent(this.selectedWavPath)}`);
+            const manualList = manualResp.participants || [];
+            for (const p of manualList) {
+              const row = speakerContent.createDiv({ cls: "meetnote-participant-row" });
+              const cb = row.createEl("input", { type: "checkbox", cls: "meetnote-participant-cb" });
+              if (p.email) {
+                cb.checked = true;
+                emailCheckboxes.push({ email: p.email, checkbox: cb });
+              } else {
+                cb.disabled = true;
+              }
+              const nameCol = row.createDiv({ cls: "meetnote-participant-name" });
+              nameCol.createEl("span", { text: p.name });
+              if (p.email) nameCol.createEl("span", { text: ` (${p.email})`, cls: "meetnote-speaker-email" });
+              const actionCol = row.createDiv({ cls: "meetnote-participant-action" });
+              const removeBtn = actionCol.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
+              removeBtn.addEventListener("click", async () => {
+                await this.api("/participants/remove", { method: "POST", body: { wav_path: this.selectedWavPath, name: p.name } });
+                await this.updateDocumentParticipants();
+                new import_obsidian4.Notice(`${p.name} \uC81C\uAC70\uB428`);
+                await this.render();
+              });
+            }
+          } catch {
+          }
+          const addBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
+          const addWrapper = addBtnRow.createDiv({ cls: "meetnote-input-wrapper" });
+          const addInput = addWrapper.createEl("input", { type: "text", placeholder: "\uC774\uB984 \uC785\uB825", cls: "meetnote-speaker-input" });
+          const addEmailInput = addBtnRow.createEl("input", { type: "text", placeholder: "\uC774\uBA54\uC77C", cls: "meetnote-speaker-input" });
+          this.addAutoSuggest(addWrapper, addInput, addEmailInput);
+          const addBtn = addBtnRow.createEl("button", { text: "\uCD94\uAC00", cls: "meetnote-register-btn meetnote-batch-btn" });
+          addBtn.addEventListener("click", async () => {
+            const name = addInput.value.trim();
+            if (!name) {
+              new import_obsidian4.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+              return;
+            }
+            const resp = await this.api("/participants/add", { method: "POST", body: { wav_path: this.selectedWavPath, name, email: addEmailInput.value.trim() } });
+            if (resp.ok) {
+              await this.updateDocumentParticipants();
+              new import_obsidian4.Notice(`${name} \uCD94\uAC00\uB428`);
+              await this.render();
+            } else {
+              new import_obsidian4.Notice(resp.message || "\uCD94\uAC00 \uC2E4\uD328");
+            }
+          });
+          if (emailCheckboxes.length > 0) {
+            const emailBtnRow = speakerContent.createDiv({ cls: "meetnote-batch-register" });
+            const emailBtn = emailBtnRow.createEl("button", { text: "\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1", cls: "meetnote-register-btn meetnote-batch-btn" });
+            emailBtn.addEventListener("click", async () => {
+              const selected = emailCheckboxes.filter((c) => c.checkbox.checked).map((c) => c.email);
+              if (selected.length === 0) {
+                new import_obsidian4.Notice("\uC804\uC1A1\uD560 \uCC38\uC11D\uC790\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
+                return;
+              }
+              const fromAddress = this.plugin.settings.emailFromAddress;
+              if (!fromAddress) {
+                new import_obsidian4.Notice("\uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD558\uC138\uC694.");
+                return;
+              }
+              const docPath = await this.getSelectedDocPath();
+              if (!docPath) {
+                new import_obsidian4.Notice("\uBB38\uC11C \uACBD\uB85C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+                return;
+              }
+              const file = this.app.vault.getAbstractFileByPath(docPath);
+              if (!file) {
+                new import_obsidian4.Notice("\uBB38\uC11C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+                return;
+              }
+              const content = await this.app.vault.read(file);
+              const meetnoteMatch = content.match(/<!-- meetnote-start -->\s*\n([\s\S]*?)(?=## 녹취록|<!-- meetnote-end -->)/);
+              const emailBody = meetnoteMatch ? meetnoteMatch[1].trim() : content.slice(0, 3e3);
+              const docName = file.basename;
+              emailBtn.setText("\uC804\uC1A1 \uC911...");
+              emailBtn.setAttribute("disabled", "true");
+              try {
+                const vaultBasePath = this.app.vault.adapter?.basePath || "";
+                const vaultFilePath = vaultBasePath ? `${vaultBasePath}/${docPath}` : "";
+                const resp = await this.api("/email/send", {
+                  method: "POST",
+                  body: {
+                    recipients: selected,
+                    from_address: fromAddress,
+                    subject: `[MeetNote] ${docName}`,
+                    body: emailBody,
+                    vault_file_path: vaultFilePath,
+                    include_gitlab_link: this.plugin.settings.gitlabLinkEnabled
+                  }
+                });
+                if (resp.ok) {
+                  new import_obsidian4.Notice(`${resp.sent.length}\uBA85\uC5D0\uAC8C \uC804\uC1A1 \uC644\uB8CC!`);
+                } else {
+                  new import_obsidian4.Notice(`\uC804\uC1A1 \uC2E4\uD328: ${resp.failed?.length || 0}\uBA85`);
+                }
+              } catch {
+                new import_obsidian4.Notice("\uC804\uC1A1 \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958");
+              } finally {
+                emailBtn.setText("\u{1F4E7} \uC120\uD0DD\uD55C \uCC38\uC11D\uC790\uC5D0\uAC8C \uD68C\uC758\uB85D \uC804\uC1A1");
+                emailBtn.removeAttribute("disabled");
+              }
+            });
+          }
+        }
+      } catch (err) {
+      }
+    }
+    try {
       const allSpeakersResp = await this.api("/speakers");
       const allDbSpeakers = allSpeakersResp || [];
       const dbContent = this.createCollapsibleSection(container, "speaker-db", "\uC74C\uC131 \uB4F1\uB85D \uC0AC\uC6A9\uC790", `${allDbSpeakers.length}\uBA85`);
@@ -1564,8 +1789,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           const detailParts = [];
           if (s.email) detailParts.push(s.email);
           if (s.last_matched_at) {
-            const d = s.last_matched_at.slice(0, 10);
-            detailParts.push(`\uCD5C\uADFC \uB9E4\uCE6D ${d}`);
+            detailParts.push(`\uCD5C\uADFC \uB9E4\uCE6D ${s.last_matched_at.slice(0, 10)}`);
           } else {
             detailParts.push("\uB9E4\uCE6D \uC774\uB825 \uC5C6\uC74C");
           }
@@ -1583,36 +1807,35 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
             saveBtn.addEventListener("click", async () => {
               const newName = nameInput.value.trim();
               if (!newName) {
-                new import_obsidian3.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
+                new import_obsidian4.Notice("\uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
                 return;
               }
               try {
-                await this.api(`/speakers/${s.id}`, {
-                  method: "PUT",
-                  body: { name: newName, email: emailInput.value.trim() }
-                });
-                new import_obsidian3.Notice(`${newName} \uC218\uC815 \uC644\uB8CC`);
+                await this.api(`/speakers/${s.id}`, { method: "PUT", body: { name: newName, email: emailInput.value.trim() } });
+                new import_obsidian4.Notice(`${newName} \uC218\uC815 \uC644\uB8CC`);
                 await this.render();
               } catch {
-                new import_obsidian3.Notice("\uC218\uC815 \uC2E4\uD328");
+                new import_obsidian4.Notice("\uC218\uC815 \uC2E4\uD328");
               }
             });
             const cancelBtn = btnCol.createEl("button", { text: "\uCDE8\uC18C", cls: "meetnote-delete-btn" });
-            cancelBtn.addEventListener("click", () => renderSpeakerList(speakers));
+            cancelBtn.addEventListener("click", () => renderSpeakerList(allDbSpeakers));
           });
           const delBtn = btnCol.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
-          delBtn.addEventListener("click", async () => {
-            const confirmed = confirm(`"${s.name}"\uC744(\uB97C) \uC74C\uC131 \uB4F1\uB85D\uC5D0\uC11C \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?
-
-\uC0AD\uC81C \uD6C4 \uD574\uB2F9 \uC0AC\uC6A9\uC790\uB294 \uB2E4\uC74C \uD68C\uC758\uC5D0\uC11C \uC790\uB3D9 \uC778\uC2DD\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`);
-            if (!confirmed) return;
-            try {
-              await this.api(`/speakers/${s.id}`, { method: "DELETE" });
-              new import_obsidian3.Notice(`${s.name} \uC0AD\uC81C\uB428`);
-              await this.render();
-            } catch {
-              new import_obsidian3.Notice("\uC0AD\uC81C \uC2E4\uD328");
-            }
+          delBtn.addEventListener("click", () => {
+            this.showConfirmModal(
+              `"${s.name}" \uC0AD\uC81C`,
+              "\uC0AD\uC81C \uD6C4 \uD574\uB2F9 \uC0AC\uC6A9\uC790\uB294 \uB2E4\uC74C \uD68C\uC758\uC5D0\uC11C \uC790\uB3D9 \uC778\uC2DD\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
+              async () => {
+                try {
+                  await this.api(`/speakers/${s.id}`, { method: "DELETE" });
+                  new import_obsidian4.Notice(`${s.name} \uC0AD\uC81C\uB428`);
+                  await this.render();
+                } catch {
+                  new import_obsidian4.Notice("\uC0AD\uC81C \uC2E4\uD328");
+                }
+              }
+            );
           });
         }
       };
@@ -1627,9 +1850,12 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
           ));
         }
       });
-    } catch (err) {
-      container.createEl("p", { text: "\uC11C\uBC84 \uC5F0\uACB0 \uD544\uC694", cls: "meetnote-error" });
+    } catch {
     }
+  }
+  showConfirmModal(title, message, onConfirm) {
+    const modal = new ConfirmModal(this.app, title, message, onConfirm);
+    modal.open();
   }
   /**
    * Create a collapsible section with toggle header.
@@ -1665,7 +1891,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
   }
   async processRecording(rec, btn) {
     if (this.processing) {
-      new import_obsidian3.Notice("\uB2E4\uB978 \uD68C\uC758\uB97C \uCC98\uB9AC \uC911\uC785\uB2C8\uB2E4. \uC644\uB8CC \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.");
+      new import_obsidian4.Notice("\uB2E4\uB978 \uD68C\uC758\uB97C \uCC98\uB9AC \uC911\uC785\uB2C8\uB2E4. \uC644\uB8CC \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.");
       return;
     }
     let vaultFilePath = "";
@@ -1679,7 +1905,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     if (!vaultFilePath) {
       const activeFile = this.app.workspace.getActiveFile();
       if (!activeFile || activeFile.extension !== "md") {
-        new import_obsidian3.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
+        new import_obsidian4.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
         return;
       }
       const adapter = this.app.vault.adapter;
@@ -1692,7 +1918,7 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
     await this.render();
     const docName = this.processingDocName;
     const estMinutes = Math.ceil(rec.duration_minutes * 0.2 + 3);
-    new import_obsidian3.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${docName} (\uC608\uC0C1 ~${estMinutes}\uBD84)`);
+    new import_obsidian4.Notice(`\uCC98\uB9AC \uC2DC\uC791: ${docName} (\uC608\uC0C1 ~${estMinutes}\uBD84)`);
     this.plugin.statusBar.setProgress("\uC900\uBE44 \uC911", 0);
     const progressTimer = setInterval(async () => {
       try {
@@ -1729,65 +1955,16 @@ var MeetNoteSidePanel = class extends import_obsidian3.ItemView {
               this.plugin.statusBar.setProgress("\uC694\uC57D \uC0DD\uC131 \uC911", 95);
               if (finalSegments.length > 0) {
                 const result = await summarize(finalSegments);
-                if (result.success && result.summary) {
-                  await this.app.vault.process(file, (content) => {
-                    const summaryMatch = result.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
-                    const decisionsMatch = result.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
-                    const actionsMatch = result.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
-                    const tagsMatch = result.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
-                    let updated = content;
-                    if (summaryMatch) {
-                      updated = updated.replace(
-                        /### 요약\n\n\(요약 생성 중\.\.\.\)/,
-                        `### \uC694\uC57D
-${summaryMatch[1].trimEnd()}`
-                      );
-                    }
-                    if (decisionsMatch) {
-                      updated = updated.replace(
-                        /### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/,
-                        `### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
-${decisionsMatch[1].trimEnd()}`
-                      );
-                    }
-                    if (actionsMatch) {
-                      updated = updated.replace(
-                        /### 액션아이템\n\n\(요약 생성 중\.\.\.\)/,
-                        `### \uC561\uC158\uC544\uC774\uD15C
-${actionsMatch[1].trimEnd()}`
-                      );
-                    }
-                    if (tagsMatch) {
-                      updated = updated.replace(
-                        /### 태그\n\n\(요약 생성 중\.\.\.\)/,
-                        `### \uD0DC\uADF8
-${tagsMatch[1].trimEnd()}`
-                      );
-                    }
-                    if (updated === content) {
-                      updated = updated.replace(
-                        /### 요약\n\n\(요약 생성 중\.\.\.\)\n\n### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)\n\n### 액션아이템\n\n\(요약 생성 중\.\.\.\)\n\n### 태그\n\n\(요약 생성 중\.\.\.\)/,
-                        result.summary.trim()
-                      );
-                    }
-                    return updated;
-                  });
-                  hasSummary = true;
-                } else if (result.engine === "none") {
-                  await this.app.vault.process(file, (content) => {
-                    return content.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
-                  });
-                  new import_obsidian3.Notice("Claude CLI\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
-                }
+                const applied = await applySummaryToVault(this.app, file, result);
+                hasSummary = applied.ok;
               }
             } catch (err) {
               console.error("[MeetNote] Summary generation failed:", err);
-              try {
-                await this.app.vault.process(file, (content) => {
-                  return content.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
-                });
-              } catch {
-              }
+              await applySummaryToVault(this.app, file, {
+                success: false,
+                summary: "",
+                engine: "claude"
+              });
             }
             try {
               const { MeetingWriter: MeetingWriter2 } = await Promise.resolve().then(() => (init_writer(), writer_exports));
@@ -1813,14 +1990,14 @@ ${tagsMatch[1].trimEnd()}`
         const parts = [`\uCC98\uB9AC \uC644\uB8CC! (${elapsedStr})`, `${resp.segments}\uAC1C \uC138\uADF8\uBA3C\uD2B8`];
         if (hasSummary) parts.push("\uC694\uC57D \uD3EC\uD568");
         if (linkedCount > 0) parts.push(`${linkedCount}\uAC1C \uC5F0\uAD00 \uD68C\uC758 \uB9C1\uD06C`);
-        new import_obsidian3.Notice(parts.join("\n"), 8e3);
+        new import_obsidian4.Notice(parts.join("\n"), 8e3);
         this.selectedWavPath = rec.path;
         this.selectedDocName = rec.document_name || rec.filename;
       } else {
-        new import_obsidian3.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.message}`, 1e4);
+        new import_obsidian4.Notice(`\uCC98\uB9AC \uC2E4\uD328: ${resp.message}`, 1e4);
       }
     } catch (err) {
-      new import_obsidian3.Notice("\uCC98\uB9AC \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958\n\uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.", 1e4);
+      new import_obsidian4.Notice("\uCC98\uB9AC \uC2E4\uD328: \uC11C\uBC84 \uC624\uB958\n\uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.", 1e4);
     } finally {
       clearInterval(progressTimer);
       this.plugin.statusBar.setIdle();
@@ -1843,6 +2020,26 @@ ${tagsMatch[1].trimEnd()}`
       this.lastHealthData = null;
       return false;
     }
+  }
+  /**
+   * Open the MD file for a recording entry. If the document_path is empty
+   * or the file no longer exists in the vault, show a Notice and refresh
+   * the panel so the stale entry can be reconciled with server state.
+   */
+  async openRecordingDocument(rec) {
+    const docPath = rec.document_path || "";
+    if (!docPath) {
+      new import_obsidian4.Notice("\uC774 \uB179\uC74C\uC5D0 \uC5F0\uACB0\uB41C \uD68C\uC758\uB85D \uBB38\uC11C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", 5e3);
+      await this.render();
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(docPath);
+    if (!file) {
+      new import_obsidian4.Notice(`\uD68C\uC758\uB85D \uD30C\uC77C\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4: ${docPath}`, 6e3);
+      await this.render();
+      return;
+    }
+    await this.app.workspace.getLeaf().openFile(file);
   }
   getServerLabel() {
     const url = this.plugin.settings.serverUrl;
@@ -1988,7 +2185,7 @@ ${tagsMatch[1].trimEnd()}`
         const partLines = allParticipants.map((n) => `  - ${n}`).join("\n");
         if (fm.includes("participants:")) {
           fm = fm.replace(
-            /participants:\n(?:\s+-\s+.+\n?)*/,
+            /participants:\s*\[?\]?\n(?:\s+-\s+.+\n?)*/,
             `participants:
 ${partLines}
 `
@@ -2138,23 +2335,70 @@ ${partLines}
     return resp.json();
   }
 };
+var ConfirmModal = class extends import_obsidian4.Modal {
+  constructor(app, title, message, onConfirm) {
+    super(app);
+    this.title = title;
+    this.message = message;
+    this.onConfirm = onConfirm;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+    contentEl.createEl("p", { text: this.message, cls: "meetnote-confirm-message" });
+    const btnRow = contentEl.createDiv({ cls: "meetnote-confirm-actions" });
+    const cancelBtn = btnRow.createEl("button", { text: "\uCDE8\uC18C" });
+    cancelBtn.addEventListener("click", () => this.close());
+    const confirmBtn = btnRow.createEl("button", { text: "\uC0AD\uC81C", cls: "mod-warning" });
+    confirmBtn.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 
 // src/main.ts
-init_summarizer();
-var MeetNotePlugin = class extends import_obsidian4.Plugin {
+var MeetNotePlugin = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.isRecording = false;
+    this.isPaused = false;
     this.ribbonIconEl = null;
+    // Test hooks — exposed for E2E specs (S32~S35, S38) + happy-path verification
+    this.parseSummaryText = parseSummaryText;
+    this.applySummaryToVault = applySummaryToVault;
+    this.summarize = summarize;
     this.audioCapture = null;
     this.recordingStartTime = null;
+    // 실제 녹음 경과 시간 (일시중지 시간 제외) — 사이드패널 헤더와 상태바가 모두
+    // 이 값을 읽어 동일한 값을 표시한다. `recordingElapsedMs`는 이전 세그먼트들의
+    // 누적, `recordingSegmentStart`는 현재 실행 중인 세그먼트의 시작 시각.
+    this.recordingElapsedMs = 0;
+    this.recordingSegmentStart = null;
     this._sidePanelRefreshTimer = null;
+    /** Continue recording option — set by side panel "이어 녹음" */
+    this.continueFromWavPath = "";
+    this.continueFromDocPath = "";
+  }
+  /**
+   * 실제 녹음된 시간(ms). 일시중지된 동안은 증가하지 않는다.
+   * 사이드패널 헤더/상태바 모두 이 값을 사용하여 표시를 통일한다.
+   */
+  getRecordedElapsedMs() {
+    if (!this.isRecording) return 0;
+    const base = this.recordingElapsedMs;
+    if (this.recordingSegmentStart === null) return base;
+    return base + (Date.now() - this.recordingSegmentStart);
   }
   async onload() {
     await this.loadSettings();
     this.backendClient = new BackendClient(this.settings.serverUrl);
     this.writer = new MeetingWriter(this.app);
     this.statusBar = new RecorderStatusBar(this.addStatusBarItem());
+    this.statusBar.setElapsedProvider(() => this.getRecordedElapsedMs());
     this.backendClient.onChunk((segments) => {
       this.writer.appendChunk(segments);
       this.statusBar.addChunk();
@@ -2174,20 +2418,24 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         const result = await summarize(segments);
         if (result.success) {
           summaryText = result.summary;
-        } else if (result.engine === "none") {
-          new import_obsidian4.Notice("Claude CLI\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
+        } else if (result.reason === "no-transcript") {
+        } else if (result.reason === "engine-missing" || result.engine === "none") {
+          new import_obsidian5.Notice("Claude CLI/Ollama\uAC00 \uC124\uCE58\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC544 \uC694\uC57D\uC744 \uC0DD\uB7B5\uD569\uB2C8\uB2E4.", 5e3);
+        } else {
+          new import_obsidian5.Notice("\uC694\uC57D \uC0DD\uC131\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uCF58\uC194 \uB85C\uADF8\uB97C \uD655\uC778\uD574\uC8FC\uC138\uC694.", 8e3);
         }
       } catch (err) {
         console.error("[MeetNote] \uC694\uC57D \uC0DD\uC131 \uC2E4\uD328:", err);
+        new import_obsidian5.Notice("\uC694\uC57D \uC0DD\uC131 \uC911 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4.", 8e3);
       }
-      const startTime = this.recordingStartTime ?? /* @__PURE__ */ new Date();
+      const startTime = this.recordingStartTime ? new Date(this.recordingStartTime) : /* @__PURE__ */ new Date();
       const endTime = /* @__PURE__ */ new Date();
       await this.writer.writeFinal(segments, startTime, endTime, summaryText, speakingStats);
       if (this.settings.autoLinkEnabled && this.writer.tags.length > 0) {
         try {
           const linked = await this.writer.linkRelatedMeetings();
           if (linked > 0) {
-            new import_obsidian4.Notice(`${linked}\uAC1C \uC5F0\uAD00 \uD68C\uC758\uB97C \uB9C1\uD06C\uD588\uC2B5\uB2C8\uB2E4.`);
+            new import_obsidian5.Notice(`${linked}\uAC1C \uC5F0\uAD00 \uD68C\uC758\uB97C \uB9C1\uD06C\uD588\uC2B5\uB2C8\uB2E4.`);
           }
         } catch (err) {
           console.error("[MeetNote] \uC5F0\uAD00 \uD68C\uC758 \uB9C1\uD06C \uC2E4\uD328:", err);
@@ -2203,7 +2451,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       if (this.writer.tags.length > 0) {
         parts.push(`\uD0DC\uADF8: ${this.writer.tags.slice(0, 5).map((t) => `#${t}`).join(" ")}`);
       }
-      new import_obsidian4.Notice(parts.join("\n"), 8e3);
+      new import_obsidian5.Notice(parts.join("\n"), 8e3);
       this.writer.reset();
       this.recordingStartTime = null;
     }).onStatus((status) => {
@@ -2219,7 +2467,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     }).onProgress((stage, percent) => {
       this.statusBar.setProgress(stage, percent);
     }).onError((message) => {
-      new import_obsidian4.Notice(`MeetNote \uC624\uB958: ${message}`);
+      new import_obsidian5.Notice(`MeetNote \uC624\uB958: ${message}`);
       console.error("[MeetNote]", message);
     }).onConnectionChange((connected) => {
       this.statusBar.setConnectionStatus(connected);
@@ -2261,6 +2509,28 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       callback: () => this.stopRecording()
     });
     this.addCommand({
+      id: "pause-recording",
+      name: "\uB179\uC74C \uC77C\uC2DC\uC911\uC9C0",
+      checkCallback: (checking) => {
+        if (this.isRecording && !this.isPaused) {
+          if (!checking) this.pauseRecording();
+          return true;
+        }
+        return false;
+      }
+    });
+    this.addCommand({
+      id: "resume-recording",
+      name: "\uB179\uC74C \uC7AC\uAC1C",
+      checkCallback: (checking) => {
+        if (this.isRecording && this.isPaused) {
+          if (!checking) this.resumeRecording();
+          return true;
+        }
+        return false;
+      }
+    });
+    this.addCommand({
       id: "search-meetings",
       name: "\uACFC\uAC70 \uD68C\uC758 \uAC80\uC0C9",
       callback: () => this.searchMeetings()
@@ -2289,6 +2559,10 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
           });
           if (resp.ok) {
             console.log("[MeetNote] Meta sync OK:", file.path);
+            const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+            for (const leaf of leaves) {
+              leaf.view.render();
+            }
           } else {
             console.warn("[MeetNote] Meta sync failed:", resp.status, await resp.text());
           }
@@ -2325,50 +2599,100 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.app.workspace.detachLeavesOfType(SIDE_PANEL_VIEW_TYPE);
     console.log("MeetNote plugin unloaded");
   }
+  /** Start continue recording from an existing pending recording */
+  async startContinueRecording(wavPath, docPath) {
+    this.continueFromWavPath = wavPath;
+    this.continueFromDocPath = docPath;
+    await this.startRecording();
+  }
+  async createMeetingDocument() {
+    const now = /* @__PURE__ */ new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mi = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const folder = this.settings.meetingFolder || "meetings";
+    const fileName = `\uD68C\uC758_${yyyy}-${mm}-${dd}_${hh}${mi}${ss}.md`;
+    const filePath = `${folder}/${fileName}`;
+    const folderObj = this.app.vault.getAbstractFileByPath(folder);
+    if (!folderObj) {
+      await this.app.vault.createFolder(folder);
+    }
+    const frontmatter = `---
+type: meeting
+tags:
+  - \uD68C\uC758
+date: ${yyyy}-${mm}-${dd}
+participants: []
+---
+
+`;
+    const file = await this.app.vault.create(filePath, frontmatter);
+    return file;
+  }
   async startRecording() {
     if (this.isRecording) {
-      new import_obsidian4.Notice("\uC774\uBBF8 \uB179\uC74C \uC911\uC785\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uC774\uBBF8 \uB179\uC74C \uC911\uC785\uB2C8\uB2E4.");
       return;
     }
     if (!this.backendClient.connected) {
-      new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       return;
     }
     if (!this.settings.emailFromAddress) {
-      new import_obsidian4.Notice("MeetNote \uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.");
+      new import_obsidian5.Notice("MeetNote \uC124\uC815\uC5D0\uC11C \uBC1C\uC2E0\uC790 \uC774\uBA54\uC77C\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.");
       return;
     }
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
-      new import_obsidian4.Notice("\uD68C\uC758\uB85D\uC744 \uC791\uC131\uD560 \uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uB97C \uBA3C\uC800 \uC5F4\uC5B4\uC8FC\uC138\uC694.");
-      return;
+    let targetFile;
+    if (this.continueFromDocPath) {
+      const existing = this.app.vault.getAbstractFileByPath(this.continueFromDocPath);
+      if (!existing || !(existing instanceof import_obsidian5.TFile)) {
+        new import_obsidian5.Notice("\uC774\uC5B4 \uB179\uC74C\uD560 \uBB38\uC11C\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        this.continueFromWavPath = "";
+        this.continueFromDocPath = "";
+        return;
+      }
+      targetFile = existing;
+    } else {
+      targetFile = await this.createMeetingDocument();
     }
+    await this.app.workspace.getLeaf().openFile(targetFile);
     this.isRecording = true;
-    this.recordingStartTime = /* @__PURE__ */ new Date();
+    this.recordingStartTime = Date.now();
+    this.recordingElapsedMs = 0;
+    this.recordingSegmentStart = Date.now();
     this.updateRibbonIcon();
-    await this.writer.init(activeFile, this.recordingStartTime);
+    await this.writer.init(targetFile, new Date(this.recordingStartTime));
     this.statusBar.startRecording();
-    this.backendClient.sendStart({
-      document_name: activeFile.basename,
-      document_path: activeFile.path,
-      user_id: this.settings.emailFromAddress || require("os").userInfo().username
-    });
+    const startConfig = {
+      document_name: targetFile.basename,
+      document_path: targetFile.path,
+      user_id: this.settings.emailFromAddress
+    };
+    if (this.continueFromWavPath) {
+      startConfig.continue_from = this.continueFromWavPath;
+    }
+    this.backendClient.sendStart(startConfig);
+    this.continueFromWavPath = "";
+    this.continueFromDocPath = "";
     this.audioCapture = new AudioCapture({
       onChunk: (pcmData) => {
         this.backendClient.sendAudioChunk(pcmData);
       },
       onError: (message) => {
-        new import_obsidian4.Notice(`\uC624\uB514\uC624 \uCEA1\uCC98 \uC624\uB958: ${message}`);
+        new import_obsidian5.Notice(`\uC624\uB514\uC624 \uCEA1\uCC98 \uC624\uB958: ${message}`);
         console.error("[MeetNote] Audio capture error:", message);
       }
     });
     const deviceId = this.settings.audioDevice || void 0;
     await this.audioCapture.start(deviceId);
-    new import_obsidian4.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
+    new import_obsidian5.Notice("\uB179\uC74C\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
   }
   async stopRecording() {
     if (!this.isRecording) {
-      new import_obsidian4.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uD604\uC7AC \uB179\uC74C \uC911\uC774 \uC544\uB2D9\uB2C8\uB2E4.");
       return;
     }
     if (this.audioCapture) {
@@ -2378,6 +2702,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     this.backendClient.sendStop();
     this.statusBar.stopRecording();
     this.isRecording = false;
+    this.isPaused = false;
     this.updateRibbonIcon();
     if (this.writer.currentFile) {
       try {
@@ -2394,8 +2719,10 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     }
     this.writer.reset();
     this.recordingStartTime = null;
+    this.recordingElapsedMs = 0;
+    this.recordingSegmentStart = null;
     this.statusBar.setIdle();
-    new import_obsidian4.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
+    new import_obsidian5.Notice("\uB179\uC74C \uC800\uC7A5 \uC644\uB8CC. \uC0AC\uC774\uB4DC \uD328\uB110\uC5D0\uC11C \uD6C4\uCC98\uB9AC\uB97C \uC2DC\uC791\uD558\uC138\uC694.");
     let retries = 0;
     const pollPending = setInterval(async () => {
       retries++;
@@ -2419,6 +2746,41 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       }
     }, 1e3);
   }
+  pauseRecording() {
+    if (!this.isRecording || this.isPaused) return;
+    if (this.recordingSegmentStart !== null) {
+      this.recordingElapsedMs += Date.now() - this.recordingSegmentStart;
+      this.recordingSegmentStart = null;
+    }
+    this.isPaused = true;
+    if (this.audioCapture) {
+      this.audioCapture.pause();
+    }
+    this.backendClient.sendPause();
+    this.statusBar.setPaused();
+    this.updateRibbonIcon();
+    new import_obsidian5.Notice("\uB179\uC74C\uC774 \uC77C\uC2DC\uC911\uC9C0\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+    const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+    for (const leaf of leaves) {
+      leaf.view.render();
+    }
+  }
+  resumeRecording() {
+    if (!this.isRecording || !this.isPaused) return;
+    this.recordingSegmentStart = Date.now();
+    this.isPaused = false;
+    if (this.audioCapture) {
+      this.audioCapture.resume();
+    }
+    this.backendClient.sendResume();
+    this.statusBar.resumeRecording();
+    this.updateRibbonIcon();
+    new import_obsidian5.Notice("\uB179\uC74C\uC774 \uC7AC\uAC1C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+    const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+    for (const leaf of leaves) {
+      leaf.view.render();
+    }
+  }
   async activateSidePanel() {
     const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
     if (existing.length > 0) {
@@ -2435,10 +2797,10 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     if (!this.ribbonIconEl) return;
     if (this.isRecording) {
       this.ribbonIconEl.ariaLabel = "\uB179\uC74C \uC911\uC9C0";
-      (0, import_obsidian4.setIcon)(this.ribbonIconEl, "square");
+      (0, import_obsidian5.setIcon)(this.ribbonIconEl, "square");
     } else {
       this.ribbonIconEl.ariaLabel = "MeetNote";
-      (0, import_obsidian4.setIcon)(this.ribbonIconEl, "mic");
+      (0, import_obsidian5.setIcon)(this.ribbonIconEl, "mic");
     }
   }
   /**
@@ -2495,7 +2857,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       });
     }
     if (meetings.length === 0) {
-      new import_obsidian4.Notice("\uBD84\uC11D\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uBD84\uC11D\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     meetings.sort((a, b) => a.date.localeCompare(b.date));
@@ -2593,16 +2955,16 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
     const dashboardContent = lines.join("\n");
     const dashboardPath = "MeetNote Dashboard.md";
     const existingFile = this.app.vault.getAbstractFileByPath(dashboardPath);
-    if (existingFile instanceof import_obsidian4.TFile) {
+    if (existingFile instanceof import_obsidian5.TFile) {
       await this.app.vault.modify(existingFile, dashboardContent);
     } else {
       await this.app.vault.create(dashboardPath, dashboardContent);
     }
     const dashFile = this.app.vault.getAbstractFileByPath(dashboardPath);
-    if (dashFile instanceof import_obsidian4.TFile) {
+    if (dashFile instanceof import_obsidian5.TFile) {
       await this.app.workspace.getLeaf().openFile(dashFile);
     }
-    new import_obsidian4.Notice(`\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC\uAC00 \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4. (${totalMeetings}\uAC1C \uD68C\uC758 \uBD84\uC11D)`);
+    new import_obsidian5.Notice(`\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC\uAC00 \uC0DD\uC131\uB418\uC5C8\uC2B5\uB2C8\uB2E4. (${totalMeetings}\uAC1C \uD68C\uC758 \uBD84\uC11D)`);
   }
   async searchMeetings() {
     const mdFiles = this.app.vault.getMarkdownFiles();
@@ -2614,27 +2976,27 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
       }
     }
     if (Object.keys(meetings).length === 0) {
-      new import_obsidian4.Notice("\uAC80\uC0C9\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uAC80\uC0C9\uD560 \uD68C\uC758\uB85D\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     try {
       const baseUrl = this.getHttpBaseUrl();
-      await (0, import_obsidian4.requestUrl)({
+      await (0, import_obsidian5.requestUrl)({
         url: `${baseUrl}/search/index`,
         method: "POST",
         contentType: "application/json",
         body: JSON.stringify({ meetings })
       });
     } catch {
-      new import_obsidian4.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uBC31\uC5D4\uB4DC \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       return;
     }
     const question = await this.promptUser("\uACFC\uAC70 \uD68C\uC758 \uAC80\uC0C9", "\uC9C8\uBB38\uC744 \uC785\uB825\uD558\uC138\uC694 (\uC608: \uC9C0\uB09C \uB2EC API \uC131\uB2A5 \uC774\uC288 \uAD00\uB828 \uB17C\uC758)");
     if (!question) return;
-    new import_obsidian4.Notice("\uAC80\uC0C9 \uC911...");
+    new import_obsidian5.Notice("\uAC80\uC0C9 \uC911...");
     try {
       const baseUrl = this.getHttpBaseUrl();
-      const resp = await (0, import_obsidian4.requestUrl)({
+      const resp = await (0, import_obsidian5.requestUrl)({
         url: `${baseUrl}/search/query`,
         method: "POST",
         contentType: "application/json",
@@ -2661,12 +3023,12 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
             return content + "\n\n" + answerContent;
           });
         }
-        new import_obsidian4.Notice("\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uBB38\uC11C\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        new import_obsidian5.Notice("\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uBB38\uC11C\uC5D0 \uCD94\uAC00\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       } else {
-        new import_obsidian4.Notice(result.error || "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        new import_obsidian5.Notice(result.error || "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
       }
     } catch (err) {
-      new import_obsidian4.Notice("\uAC80\uC0C9 \uC2E4\uD328: \uBC31\uC5D4\uB4DC \uC11C\uBC84 \uC624\uB958");
+      new import_obsidian5.Notice("\uAC80\uC0C9 \uC2E4\uD328: \uBC31\uC5D4\uB4DC \uC11C\uBC84 \uC624\uB958");
     }
   }
   promptUser(title, placeholder) {
@@ -2718,7 +3080,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         if (!fmMatch) continue;
         const dateMatch = fmMatch[1].match(/^date:\s*(.+)$/m);
         if (dateMatch) {
-          const sameFolder = activeFolder && file.parent?.path === activeFolder;
+          const sameFolder = !!(activeFolder && file.parent?.path === activeFolder);
           meetingFiles.push({ file, date: dateMatch[1].trim(), sameFolder });
         }
       }
@@ -2773,7 +3135,7 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
         const content = await this.app.vault.cachedRead(file);
         if (content.includes("## \uB179\uCDE8\uB85D") && !content.includes("(\uC694\uC57D \uC0DD\uC131 \uC911...)")) continue;
         console.log(`[MeetNote] Picking up offline results for: ${docPath}`);
-        new import_obsidian4.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC\uB97C \uBC18\uC601\uD569\uB2C8\uB2E4: ${rec.document_name}`);
+        new import_obsidian5.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC\uB97C \uBC18\uC601\uD569\uB2C8\uB2E4: ${rec.document_name}`);
         const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
         if (leaves.length > 0) {
           const panel = leaves[0].view;
@@ -2783,41 +3145,37 @@ var MeetNotePlugin = class extends import_obsidian4.Plugin {
             results.speaking_stats || []
           );
           try {
-            const { summarize: summarize2 } = await Promise.resolve().then(() => (init_summarizer(), summarizer_exports));
-            const summaryResult = await summarize2(results.segments_data);
-            if (summaryResult.success && summaryResult.summary) {
-              await this.app.vault.process(file, (c) => {
-                const summaryMatch = summaryResult.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
-                const decisionsMatch = summaryResult.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
-                const actionsMatch = summaryResult.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
-                const tagsMatch = summaryResult.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
-                let u = c;
-                if (summaryMatch) u = u.replace(/### 요약\n\n\(요약 생성 중\.\.\.\)/, `### \uC694\uC57D
-${summaryMatch[1].trimEnd()}`);
-                if (decisionsMatch) u = u.replace(/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/, `### \uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D
-${decisionsMatch[1].trimEnd()}`);
-                if (actionsMatch) u = u.replace(/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/, `### \uC561\uC158\uC544\uC774\uD15C
-${actionsMatch[1].trimEnd()}`);
-                if (tagsMatch) u = u.replace(/### 태그\n\n\(요약 생성 중\.\.\.\)/, `### \uD0DC\uADF8
-${tagsMatch[1].trimEnd()}`);
-                if (u === c) u = u.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)");
-                return u;
-              });
-            } else {
-              await this.app.vault.process(
-                file,
-                (c) => c.replace(/\(요약 생성 중\.\.\.\)/g, "(\uC5C6\uC74C)")
-              );
-            }
+            const summaryResult = await summarize(results.segments_data);
+            await applySummaryToVault(this.app, file, summaryResult);
           } catch (err) {
             console.error("[MeetNote] Offline summary failed:", err);
+            await applySummaryToVault(this.app, file, {
+              success: false,
+              summary: "",
+              engine: "claude"
+            });
           }
           await fetch(`${baseUrl}/recordings/results/${filename}/written`, { method: "POST" });
-          new import_obsidian4.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC \uBC18\uC601 \uC644\uB8CC: ${rec.document_name}`);
+          new import_obsidian5.Notice(`\uC624\uD504\uB77C\uC778 \uCC98\uB9AC \uACB0\uACFC \uBC18\uC601 \uC644\uB8CC: ${rec.document_name}`);
+          try {
+            panel.render();
+          } catch {
+          }
         }
       }
     } catch (err) {
       console.debug("[MeetNote] Pending results check failed:", err);
+    }
+  }
+  /** Force-render all open MeetNote side panels (e.g. after settings change). */
+  refreshSidePanels() {
+    const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+    for (const leaf of leaves) {
+      try {
+        leaf.view.render();
+      } catch (err) {
+        console.warn("[MeetNote] refreshSidePanels failed:", err);
+      }
     }
   }
   async loadSettings() {
@@ -2835,7 +3193,7 @@ ${tagsMatch[1].trimEnd()}`);
     modal.open();
   }
 };
-var OnboardingModal = class extends import_obsidian4.Modal {
+var OnboardingModal = class extends import_obsidian5.Modal {
   constructor(app, plugin) {
     super(app);
     this.plugin = plugin;
@@ -2912,7 +3270,7 @@ var OnboardingModal = class extends import_obsidian4.Modal {
       this.plugin.settings.participantSuggestPath = participantInput.value.trim();
       this.plugin.settings.onboardingDone = true;
       await this.plugin.saveSettings();
-      new import_obsidian4.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian5.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       this.close();
       this.app.commands.executeCommandById("meetnote:open-side-panel");
     });

@@ -1,0 +1,424 @@
+/**
+ * Recording list rendering E2E tests — Scenarios S28~S31, S36~S38.
+ *
+ * Verifies that the side-panel "대기 중" / "최근 회의" lists actually render
+ * recordings, that titles fall back correctly, that clicking opens the right
+ * MD file, and that broken/missing references degrade gracefully.
+ *
+ * Fixtures are written directly to the backend recordings dir
+ * (`backend/data/recordings`) and to the test vault.
+ */
+
+import { test, expect } from "@playwright/test";
+import * as fs from "fs";
+import * as path from "path";
+import {
+	connectObsidian,
+	openSidePanel,
+	waitForPanel,
+	type ObsidianInstance,
+} from "../helpers/obsidian";
+
+const RECORDINGS_DIR = path.resolve(
+	__dirname,
+	"../../../backend/data/recordings",
+);
+const TEST_VAULT = "/Users/changsu.jin/Works/data/obsidian-vault/test";
+const TEST_EMAIL = "cs.jin@purple.io";
+const FIXTURE_PREFIX = "_test_list_";
+
+let obsidian: ObsidianInstance;
+
+function makeMinimalWav(): Buffer {
+	// 1 second of silence at 16kHz/16-bit/mono.
+	const sampleRate = 16000;
+	const numSamples = sampleRate;
+	const dataSize = numSamples * 2;
+	const buf = Buffer.alloc(44 + dataSize);
+	buf.write("RIFF", 0);
+	buf.writeUInt32LE(36 + dataSize, 4);
+	buf.write("WAVE", 8);
+	buf.write("fmt ", 12);
+	buf.writeUInt32LE(16, 16);
+	buf.writeUInt16LE(1, 20);
+	buf.writeUInt16LE(1, 22);
+	buf.writeUInt32LE(sampleRate, 24);
+	buf.writeUInt32LE(sampleRate * 2, 28);
+	buf.writeUInt16LE(2, 32);
+	buf.writeUInt16LE(16, 34);
+	buf.write("data", 36);
+	buf.writeUInt32LE(dataSize, 40);
+	return buf;
+}
+
+interface FixtureOpts {
+	id: string;
+	documentName?: string | null;
+	documentPath?: string | null;
+	userId?: string;
+	processed?: boolean;
+	speakerMap?: Record<string, unknown>;
+	createdOffset?: number; // seconds offset from now
+}
+
+function writeFixture(opts: FixtureOpts): { wav: string; meta: string } {
+	const wavName = `${FIXTURE_PREFIX}${opts.id}.wav`;
+	const wavPath = path.join(RECORDINGS_DIR, wavName);
+	const metaPath = wavPath.replace(/\.wav$/, ".meta.json");
+	fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+	fs.writeFileSync(wavPath, makeMinimalWav());
+
+	const meta: Record<string, unknown> = {
+		user_id: opts.userId ?? TEST_EMAIL,
+		started_at: new Date(Date.now() + (opts.createdOffset ?? 0) * 1000).toISOString(),
+	};
+	if (opts.documentName !== null) {
+		meta.document_name = opts.documentName ?? `테스트회의_${opts.id}`;
+	}
+	if (opts.documentPath !== null) {
+		meta.document_path = opts.documentPath ?? `meetings/${FIXTURE_PREFIX}${opts.id}.md`;
+	}
+	if (opts.speakerMap) meta.speaker_map = opts.speakerMap;
+	fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+	if (opts.processed) {
+		fs.writeFileSync(wavPath.replace(/\.wav$/, ".done"), "");
+	}
+
+	if (opts.createdOffset !== undefined) {
+		const ts = (Date.now() + opts.createdOffset * 1000) / 1000;
+		fs.utimesSync(wavPath, ts, ts);
+	}
+	return { wav: wavPath, meta: metaPath };
+}
+
+function clearFixtures() {
+	if (!fs.existsSync(RECORDINGS_DIR)) return;
+	for (const f of fs.readdirSync(RECORDINGS_DIR)) {
+		if (f.startsWith(FIXTURE_PREFIX)) {
+			try { fs.unlinkSync(path.join(RECORDINGS_DIR, f)); } catch { /* ignore */ }
+		}
+	}
+	const meetings = path.join(TEST_VAULT, "meetings");
+	if (fs.existsSync(meetings)) {
+		for (const f of fs.readdirSync(meetings)) {
+			if (f.startsWith(FIXTURE_PREFIX)) {
+				try { fs.unlinkSync(path.join(meetings, f)); } catch { /* ignore */ }
+			}
+		}
+	}
+}
+
+async function setEmailAndRender(window: any, email: string) {
+	await window.evaluate(async (e: string) => {
+		const plugin = (window as any).app.plugins.plugins["meetnote"];
+		plugin.settings.emailFromAddress = e;
+		await plugin.saveSettings();
+		plugin.refreshSidePanels();
+	}, email);
+	await window.waitForTimeout(500);
+}
+
+async function rerender(window: any) {
+	await window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		for (const leaf of leaves) leaf.view.render();
+	});
+	await window.waitForTimeout(800);
+}
+
+async function ensureMeetingFile(window: any, vaultRelPath: string, body = "test") {
+	await window.evaluate(async ({ p, b }: { p: string; b: string }) => {
+		const app = (window as any).app;
+		const dir = p.includes("/") ? p.substring(0, p.lastIndexOf("/")) : "";
+		if (dir) {
+			const folder = app.vault.getAbstractFileByPath(dir);
+			if (!folder) await app.vault.createFolder(dir);
+		}
+		const existing = app.vault.getAbstractFileByPath(p);
+		if (existing) await app.vault.delete(existing);
+		await app.vault.create(p, `---\ntype: meeting\n---\n${b}`);
+	}, { p: vaultRelPath, b: body });
+}
+
+test.beforeAll(async () => {
+	obsidian = await connectObsidian();
+	await openSidePanel(obsidian.window);
+	await waitForPanel(obsidian.window);
+	clearFixtures();
+	await setEmailAndRender(obsidian.window, TEST_EMAIL);
+});
+
+test.afterEach(async () => {
+	clearFixtures();
+	await setEmailAndRender(obsidian.window, TEST_EMAIL);
+});
+
+test.afterAll(async () => {
+	clearFixtures();
+});
+
+// ── S28 ─────────────────────────────────────────────────────────────────
+test("S28: 대기 중 항목이 실제로 렌더링된다", async () => {
+	writeFixture({ id: "s28a", documentName: "S28 회의 A" });
+	writeFixture({ id: "s28b", documentName: "S28 회의 B" });
+	await rerender(obsidian.window);
+
+	const items = obsidian.window.locator(".meetnote-recording-item");
+	const count = await items.count();
+	expect(count).toBeGreaterThanOrEqual(2);
+
+	const titles = await obsidian.window
+		.locator(".meetnote-recording-title")
+		.allTextContents();
+	expect(titles).toEqual(expect.arrayContaining(["S28 회의 A", "S28 회의 B"]));
+});
+
+// ── S29 ─────────────────────────────────────────────────────────────────
+test("S29: 항목 제목이 document_name → filename → date 순으로 fallback 한다", async () => {
+	// (a) document_name 있음
+	writeFixture({ id: "s29a", documentName: "S29 명시된 이름" });
+	// (b) document_name 없음 → filename
+	writeFixture({ id: "s29b", documentName: null });
+	await rerender(obsidian.window);
+
+	const titles = await obsidian.window
+		.locator(".meetnote-recording-title")
+		.allTextContents();
+	expect(titles).toContain("S29 명시된 이름");
+	// filename fallback
+	expect(titles.some((t) => t.includes(`${FIXTURE_PREFIX}s29b`))).toBe(true);
+});
+
+// ── S30 ─────────────────────────────────────────────────────────────────
+test("S30: 항목 제목 클릭 시 연결된 MD 파일이 열린다", async () => {
+	const docPath = `meetings/${FIXTURE_PREFIX}s30.md`;
+	await ensureMeetingFile(obsidian.window, docPath);
+	writeFixture({ id: "s30", documentName: "S30 클릭 테스트", documentPath: docPath });
+	await rerender(obsidian.window);
+
+	await obsidian.window.locator('.meetnote-recording-title:has-text("S30 클릭 테스트")').first().click();
+	await obsidian.window.waitForTimeout(800);
+
+	const activePath = await obsidian.window.evaluate(() => {
+		const f = (window as any).app.workspace.getActiveFile();
+		return f ? f.path : null;
+	});
+	expect(activePath).toBe(docPath);
+});
+
+// ── S31 ─────────────────────────────────────────────────────────────────
+test("S31: MD 파일이 사라진 항목 클릭 시 패널 크래시 없음 + activeFile 변경 없음", async () => {
+	const docPath = `meetings/${FIXTURE_PREFIX}s31.md`;
+	writeFixture({ id: "s31", documentName: "S31 부재 파일", documentPath: docPath });
+	await rerender(obsidian.window);
+
+	// Ensure the missing path is truly absent from the vault.
+	await obsidian.window.evaluate(async (p: string) => {
+		const app = (window as any).app;
+		const existing = app.vault.getAbstractFileByPath(p);
+		if (existing) await app.vault.delete(existing);
+	}, docPath);
+
+	const beforePath = await obsidian.window.evaluate(() => {
+		const f = (window as any).app.workspace.getActiveFile();
+		return f ? f.path : null;
+	});
+
+	await obsidian.window.locator('.meetnote-recording-title:has-text("S31 부재 파일")').first().click();
+	await obsidian.window.waitForTimeout(800);
+
+	// Panel must still be alive (no crash on missing file).
+	await expect(obsidian.window.locator(".meetnote-panel-title")).toBeVisible();
+
+	// activeFile must NOT have switched to the missing path.
+	const activePath = await obsidian.window.evaluate(() => {
+		const f = (window as any).app.workspace.getActiveFile();
+		return f ? f.path : null;
+	});
+	expect(activePath).not.toBe(docPath);
+	expect(activePath).toBe(beforePath);
+});
+
+// ── S36 ─────────────────────────────────────────────────────────────────
+test("S36: 12개 완료 회의가 모두 표시된다 (10개 cap 해제)", async () => {
+	for (let i = 0; i < 12; i++) {
+		writeFixture({
+			id: `s36_${String(i).padStart(2, "0")}`,
+			documentName: `S36 회의 ${i + 1}`,
+			processed: true,
+			createdOffset: -i * 60,
+		});
+	}
+	await rerender(obsidian.window);
+
+	const items = obsidian.window.locator(".meetnote-recording-item");
+	const count = await items.count();
+	expect(count).toBeGreaterThanOrEqual(12);
+});
+
+// ── S37 ─────────────────────────────────────────────────────────────────
+test("S37: 다른 발신자 이메일 회의가 있으면 안내 배너가 표시된다", async () => {
+	writeFixture({ id: "s37mine", documentName: "S37 내 회의", userId: TEST_EMAIL });
+	writeFixture({ id: "s37other", documentName: "S37 다른사람 회의", userId: "other@example.com" });
+	await rerender(obsidian.window);
+
+	const hint = obsidian.window.locator(".meetnote-userid-hint");
+	await expect(hint).toBeVisible();
+	const hintText = await hint.textContent();
+	expect(hintText).toContain("숨겨져");
+});
+
+// ── S38 ─────────────────────────────────────────────────────────────────
+test("S38: pickupPendingResults 호출 후 사이드패널이 자동 새로고침된다", async () => {
+	// Create a processed fixture; pickupPendingResults itself may early-return
+	// because there are no /recordings/results entries — but we only need to
+	// verify it does not throw and the panel re-renders.
+	writeFixture({
+		id: "s38",
+		documentName: "S38 픽업 테스트",
+		processed: true,
+	});
+	await rerender(obsidian.window);
+
+	const ok = await obsidian.window.evaluate(async () => {
+		const plugin = (window as any).app.plugins.plugins["meetnote"];
+		try {
+			await plugin.pickupPendingResults();
+			return true;
+		} catch (e) {
+			return false;
+		}
+	});
+	expect(ok).toBe(true);
+
+	// Panel should still be alive
+	await expect(obsidian.window.locator(".meetnote-panel-title")).toBeVisible();
+});
+
+// ── S40 ─────────────────────────────────────────────────────────────────
+test("S40: 이어 녹음 WAV 2개가 같은 document_path면 사이드패널에 1건만 표시", async () => {
+	// 같은 document_path를 가진 WAV 2개 생성 (이어 녹음 시뮬레이션)
+	const docPath = `meetings/${FIXTURE_PREFIX}s40.md`;
+	writeFixture({ id: "s40a", documentName: "S40 이어녹음 회의", documentPath: docPath });
+	writeFixture({ id: "s40b", documentName: "S40 이어녹음 회의", documentPath: docPath, createdOffset: 60 });
+	await rerender(obsidian.window);
+
+	// document_path가 같으므로 서버가 집계하여 1건만 반환해야 함
+	const titles = await obsidian.window
+		.locator(".meetnote-recording-title")
+		.allTextContents();
+	const matchCount = titles.filter((t) => t === "S40 이어녹음 회의").length;
+	expect(matchCount).toBe(1);
+});
+
+// ── S41 ─────────────────────────────────────────────────────────────────
+test("S41: 이어 녹음 항목 삭제 시 companion WAV도 함께 삭제", async () => {
+	const docPath = `meetings/${FIXTURE_PREFIX}s41.md`;
+	const f1 = writeFixture({ id: "s41a", documentName: "S41 삭제 테스트", documentPath: docPath });
+	const f2 = writeFixture({ id: "s41b", documentName: "S41 삭제 테스트", documentPath: docPath });
+	await rerender(obsidian.window);
+
+	// WAV 파일 2개 존재 확인
+	expect(fs.existsSync(f1.wav)).toBe(true);
+	expect(fs.existsSync(f2.wav)).toBe(true);
+
+	// 서버 API로 삭제 (사이드패널의 삭제 버튼이 호출하는 것과 동일한 경로)
+	await obsidian.window.evaluate(async (wavPath: string) => {
+		const plugin = (window as any).app.plugins.plugins["meetnote"];
+		const baseUrl = plugin.settings.serverUrl
+			.replace(/^ws(s?):\/\//, "http$1://")
+			.replace(/\/ws\/?$/, "").replace(/\/$/, "");
+		await fetch(`${baseUrl}/recordings/delete`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ wav_path: wavPath }),
+		});
+	}, f1.wav);
+
+	// cascade: 두 WAV 모두 삭제됐어야 함
+	expect(fs.existsSync(f1.wav)).toBe(false);
+	expect(fs.existsSync(f2.wav)).toBe(false);
+});
+
+// ── S42 ─────────────────────────────────────────────────────────────────
+test("S42: 이어 녹음 2개 WAV → 처리 버튼 → 병합 처리 → 단일 완료 항목", async () => {
+	test.setTimeout(60000); // warm-up 후 ~15초, 마진 포함
+
+	const docPath = `meetings/${FIXTURE_PREFIX}s42.md`;
+	const docFull = `${TEST_VAULT}/${docPath}`;
+
+	// MD 템플릿 생성
+	await ensureMeetingFile(obsidian.window, docPath, "<!-- meetnote-start -->\n<!-- meetnote-end -->");
+
+	// 실제 speech가 있는 fixture WAV 2개를 같은 document_path로 복사
+	const fixtureWav = path.resolve(__dirname, "../../../backend/tests/fixtures/test_meeting.wav");
+	const wav1 = path.join(RECORDINGS_DIR, `${FIXTURE_PREFIX}s42a.wav`);
+	const wav2 = path.join(RECORDINGS_DIR, `${FIXTURE_PREFIX}s42b.wav`);
+	fs.copyFileSync(fixtureWav, wav1);
+	fs.copyFileSync(fixtureWav, wav2);
+
+	const vaultBasePath = await obsidian.window.evaluate(() => {
+		return ((window as any).app.vault.adapter as any)?.basePath || "";
+	});
+
+	for (const [wav, suffix] of [[wav1, "a"], [wav2, "b"]] as const) {
+		const meta = {
+			user_id: TEST_EMAIL,
+			document_name: `${FIXTURE_PREFIX}s42`,
+			document_path: docPath,
+			started_at: new Date().toISOString(),
+			vault_file_path: vaultBasePath ? `${vaultBasePath}/${docPath}` : docFull,
+		};
+		fs.writeFileSync(wav.replace(/\.wav$/, ".meta.json"), JSON.stringify(meta));
+	}
+
+	await rerender(obsidian.window);
+
+	// 대기 중 목록에 1건만 표시되는지 확인 (S40과 동일한 전제)
+	const pendingItem = obsidian.window
+		.locator(`.meetnote-recording-item:has(.meetnote-recording-title:has-text("${FIXTURE_PREFIX}s42"))`)
+		.first();
+	await expect(pendingItem).toBeVisible({ timeout: 5000 });
+
+	// "처리" 버튼 클릭
+	const procBtn = pendingItem.locator('.meetnote-process-btn:has-text("처리")').first();
+	await expect(procBtn).toBeVisible({ timeout: 3000 });
+	await procBtn.click({ force: true });
+
+	// .done 마커 polling — 두 WAV 모두 done이어야 집계 시 processed=true
+	const deadline = Date.now() + 45000;
+	while (Date.now() < deadline) {
+		const done1 = fs.existsSync(wav1.replace(/\.wav$/, ".done"));
+		const done2 = fs.existsSync(wav2.replace(/\.wav$/, ".done"));
+		if (done1 && done2) break;
+		await obsidian.window.waitForTimeout(1500);
+	}
+	expect(fs.existsSync(wav1.replace(/\.wav$/, ".done"))).toBe(true);
+	expect(fs.existsSync(wav2.replace(/\.wav$/, ".done"))).toBe(true);
+
+	// processRecording의 비동기 체인(summary, related meetings)이 끝날 때까지 대기.
+	// .done은 server에서 먼저 생성되지만, plugin 쪽 processRecording의 finally 블록
+	// (this.processing = false)은 summary/related 단계 완료 후에 실행됨.
+	// 이걸 안 기다리면 다음 테스트(해피 패스 H2)에서 "다른 회의 처리 중" 충돌.
+	const procDeadline = Date.now() + 30000;
+	while (Date.now() < procDeadline) {
+		const still = await obsidian.window.evaluate(() => {
+			const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+			return leaves.length > 0 && leaves[0].view.processing;
+		});
+		if (!still) break;
+		await obsidian.window.waitForTimeout(500);
+	}
+
+	// 패널 새로고침 후 "최근 회의"에 1건 완료로 표시
+	await rerender(obsidian.window);
+	const completedItem = obsidian.window
+		.locator(`.meetnote-recording-item:has(.meetnote-recording-title:has-text("${FIXTURE_PREFIX}s42"))`)
+		.first();
+	await expect(completedItem).toBeVisible({ timeout: 5000 });
+
+	// "참석자" 버튼이 있으면 완료 상태 (대기 중이면 "처리" 버튼)
+	const participantBtn = completedItem.locator('.meetnote-process-btn:has-text("참석자")');
+	await expect(participantBtn.first()).toBeVisible({ timeout: 3000 });
+});

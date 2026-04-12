@@ -2,6 +2,46 @@
 
 All notable changes to MeetNote are documented here.
 
+## [Unreleased] — bugfix/from-master (Phase 3)
+
+### Added
+- 녹음 일시중지/재개 기능 (REC-88) [ADR-004]
+- 녹음 시작 시 새 MD 문서 자동 생성 — 1 MD = 1 녹음 원칙 (REC-92) [ADR-003]
+- 이어 녹음 — 사이드패널 "이어 녹음" 버튼 + WAV 병합 처리 (REC-92) [ADR-003]
+- 사이드패널 UI 개선 10건 — lucide 아이콘, 오프라인 배너, 경과시간, Modal 등 (REC-90)
+- 테스트 자동화 — Backend pytest 68개 + Playwright E2E 23개 + pre-commit hook (REC-89)
+- 최종 해피 패스 검증 — `run-tests.sh`의 [4/4] 스테이지가 `plugin/tests/e2e/99-happy-path.spec.ts`를 실행. 실제 fixture WAV로 UI 직접 구동 (처리 버튼 → 화자 등록 폼 입력 → 수동 참석자 추가 → Claude CLI 요약 → 이메일 발송 → 완성 MD 워크스페이스 오픈) H1~H8. 운영 흐름과 동일한 순서 보장. `--full` 플래그 폐지 (REC-97)
+- REC-97: 요약 파서 robust화 (##/### 헤딩, 코드펜스, preamble, 라벨 `|` alternation 처리). `SummaryFailureReason` 타입으로 no-transcript / engine-missing / generation-failed / parse-failed 4가지 구분 + 각각 별도 MD 메시지
+- REC-97: 사이드패널 — 10개 cap 해제, 이메일 변경 시 가시성 배너, pickupPendingResults 후 자동 render, MD 부재 클릭 시 Notice + render
+- REC-97: `SCENARIOS.md` S28~S39 + H1~H8 추가 (47개 시나리오 100% 자동화)
+- REC-97: 신규 E2E spec `07-recording-list.spec.ts`, `08-summary-rendering.spec.ts`, `99-happy-path.spec.ts`
+- 시나리오 레지스트리 `plugin/tests/SCENARIOS.md` — 27개 100% 자동화
+- 참석자 변경 시 문서 frontmatter 자동 갱신 (REC-94)
+- 설정: meetingFolder (회의록 저장 폴더)
+- ADR (Architecture Decision Records) 도입
+
+### Fixed
+- 파일 rename 시 사이드패널 미갱신 (REC-87)
+- 삭제된 녹음의 참석자 섹션 잔존
+- .env 따옴표 자동 제거 — SMTP 인식 수정 [ADR-002]
+- participants: [] 빈 배열 frontmatter 정규식
+- REC-96/97: 화자 등록 후 `unregistered_speakers` 카운트 — `isinstance(val, dict)` 기반으로 변경 (등록된 rich entry를 미등록으로 오집계하지 않음)
+- REC-97: 한국어 조사 붙은 화자 라벨 교체 누락 — `update_document_speaker`에 negative-lookahead catch-all regex 추가 (`화자1이`, `화자1의` 교체, `화자10` 안전)
+- REC-97: 일시중지/재개 타이머 불일치 — 사이드패널 헤더(wall-clock 점프) vs 상태바(0 리셋) 두 경로를 `plugin.getRecordedElapsedMs()` 단일 소스로 통일
+- REC-97: `run-tests.sh` 프로세스 격리 — 서버/Obsidian `nohup ... < /dev/null` + 올바른 `$!`/disown으로 `Killed: 9` dangling 메시지 제거. Obsidian CDP 자동 재시작. `(cmd &)` subshell 패턴으로 `$TAIL_PID`가 watcher PID를 가리키던 버그 수정
+- REC-98: 이어 녹음 사이드패널 중복 표시 (ADR-003 Amendment) — `/recordings/all`과 `/recordings/pending`이 WAV 단위로 나열하던 것을 `_aggregate_recordings_by_document()`로 `document_path` 기반 집계하도록 변경. `/recordings/delete`와 `/recordings/requeue`도 `_find_related_recordings(skip_done=False)`로 같은 document의 모든 WAV를 cascade 처리. 이전에는 이어 녹음 후 같은 회의록이 두 번 나타나 참석자 관리가 모호해지던 버그 해결
+
+### Changed
+- ~~process-file HTTP-only 모드 지원 [ADR-001]~~ (폐기 — 동시 처리 방어 무력화)
+- 삭제 확인: browser confirm → Obsidian Modal
+- 빌드에 TypeScript 타입 체크 포함
+
+### Docs
+- 오디오 파일 생명주기 (ARCHITECTURE.md) (REC-93)
+- PRD 사용 흐름 갱신
+
+---
+
 ## [0.1.0] - 2026-03-30
 
 ### Added

@@ -25,6 +25,7 @@ export class AudioCapture {
 	private samplesCollected = 0;
 	private callbacks: AudioCaptureCallbacks;
 	private _isCapturing = false;
+	private _isPaused = false;
 
 	constructor(callbacks: AudioCaptureCallbacks) {
 		this.callbacks = callbacks;
@@ -32,6 +33,26 @@ export class AudioCapture {
 
 	get isCapturing(): boolean {
 		return this._isCapturing;
+	}
+
+	get isPaused(): boolean {
+		return this._isPaused;
+	}
+
+	pause(): void {
+		if (this._isCapturing && !this._isPaused) {
+			this._isPaused = true;
+			// Flush any buffered audio before pausing
+			if (this.samplesCollected > 0) {
+				this.flushChunk();
+			}
+		}
+	}
+
+	resume(): void {
+		if (this._isCapturing && this._isPaused) {
+			this._isPaused = false;
+		}
 	}
 
 	/**
@@ -68,7 +89,7 @@ export class AudioCapture {
 			this.samplesCollected = 0;
 
 			this.scriptProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
-				if (!this._isCapturing) return;
+				if (!this._isCapturing || this._isPaused) return;
 
 				const inputData = event.inputBuffer.getChannelData(0);
 
@@ -103,6 +124,7 @@ export class AudioCapture {
 	stop(): void {
 		if (!this._isCapturing) return;
 		this._isCapturing = false;
+		this._isPaused = false;
 
 		// Flush remaining buffer
 		if (this.samplesCollected > 0) {
@@ -151,7 +173,7 @@ export class AudioCapture {
 		this.buffer = [];
 		this.samplesCollected = 0;
 
-		this.callbacks.onChunk(pcm.buffer);
+		this.callbacks.onChunk(pcm.buffer as ArrayBuffer);
 	}
 
 	private float32ToInt16(float32: Float32Array): Int16Array {

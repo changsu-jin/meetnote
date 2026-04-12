@@ -9,19 +9,42 @@ import { MeetingWriter } from "./writer";
 import { RecorderStatusBar } from "./recorder-view";
 import { MeetNoteSidePanel, SIDE_PANEL_VIEW_TYPE } from "./side-panel";
 import { AudioCapture } from "./audio-capture";
-import { summarize } from "./summarizer";
+import { summarize, applySummaryToVault, parseSummaryText } from "./summarizer";
+
 
 export default class MeetNotePlugin extends Plugin {
 	settings: MeetNoteSettings;
 	isRecording = false;
+	isPaused = false;
 	ribbonIconEl: HTMLElement | null = null;
+
+	// Test hooks — exposed for E2E specs (S32~S35, S38) + happy-path verification
+	readonly parseSummaryText = parseSummaryText;
+	readonly applySummaryToVault = applySummaryToVault;
+	readonly summarize = summarize;
 
 	private backendClient: BackendClient;
 	private writer: MeetingWriter;
 	private audioCapture: AudioCapture | null = null;
 	statusBar: RecorderStatusBar;
-	private recordingStartTime: Date | null = null;
+	recordingStartTime: number | null = null;
+	// 실제 녹음 경과 시간 (일시중지 시간 제외) — 사이드패널 헤더와 상태바가 모두
+	// 이 값을 읽어 동일한 값을 표시한다. `recordingElapsedMs`는 이전 세그먼트들의
+	// 누적, `recordingSegmentStart`는 현재 실행 중인 세그먼트의 시작 시각.
+	private recordingElapsedMs = 0;
+	private recordingSegmentStart: number | null = null;
 	private _sidePanelRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * 실제 녹음된 시간(ms). 일시중지된 동안은 증가하지 않는다.
+	 * 사이드패널 헤더/상태바 모두 이 값을 사용하여 표시를 통일한다.
+	 */
+	getRecordedElapsedMs(): number {
+		if (!this.isRecording) return 0;
+		const base = this.recordingElapsedMs;
+		if (this.recordingSegmentStart === null) return base; // paused
+		return base + (Date.now() - this.recordingSegmentStart);
+	}
 
 	async onload() {
 		await this.loadSettings();
@@ -30,6 +53,8 @@ export default class MeetNotePlugin extends Plugin {
 		this.backendClient = new BackendClient(this.settings.serverUrl);
 		this.writer = new MeetingWriter(this.app);
 		this.statusBar = new RecorderStatusBar(this.addStatusBarItem());
+		// 상태바가 plugin의 단일 경과시간 소스를 읽도록 연결
+		this.statusBar.setElapsedProvider(() => this.getRecordedElapsedMs());
 
 		// ── Wire up backend callbacks ──────────────────────────────────
 		this.backendClient
@@ -58,14 +83,19 @@ export default class MeetNotePlugin extends Plugin {
 					const result = await summarize(segments);
 					if (result.success) {
 						summaryText = result.summary;
-					} else if (result.engine === "none") {
-						new Notice("Claude CLI가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+					} else if (result.reason === "no-transcript") {
+						// 녹취 내용이 없으면 조용히 넘어감 — placeholder에 "(녹취 내용 없음)" 이 기록됨
+					} else if (result.reason === "engine-missing" || result.engine === "none") {
+						new Notice("Claude CLI/Ollama가 설치되어 있지 않아 요약을 생략합니다.", 5000);
+					} else {
+						new Notice("요약 생성에 실패했습니다. 콘솔 로그를 확인해주세요.", 8000);
 					}
 				} catch (err) {
 					console.error("[MeetNote] 요약 생성 실패:", err);
+					new Notice("요약 생성 중 오류가 발생했습니다.", 8000);
 				}
 
-				const startTime = this.recordingStartTime ?? new Date();
+				const startTime = this.recordingStartTime ? new Date(this.recordingStartTime) : new Date();
 				const endTime = new Date();
 				await this.writer.writeFinal(segments, startTime, endTime, summaryText, speakingStats);
 
@@ -165,6 +195,30 @@ export default class MeetNotePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "pause-recording",
+			name: "녹음 일시중지",
+			checkCallback: (checking) => {
+				if (this.isRecording && !this.isPaused) {
+					if (!checking) this.pauseRecording();
+					return true;
+				}
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: "resume-recording",
+			name: "녹음 재개",
+			checkCallback: (checking) => {
+				if (this.isRecording && this.isPaused) {
+					if (!checking) this.resumeRecording();
+					return true;
+				}
+				return false;
+			},
+		});
+
+		this.addCommand({
 			id: "search-meetings",
 			name: "과거 회의 검색",
 			callback: () => this.searchMeetings(),
@@ -175,6 +229,7 @@ export default class MeetNotePlugin extends Plugin {
 			name: "회의 트렌드 대시보드",
 			callback: () => this.generateDashboard(),
 		});
+
 
 		// ── File rename sync ───────────────────────────────────────────
 		this.registerEvent(
@@ -197,6 +252,10 @@ export default class MeetNotePlugin extends Plugin {
 					});
 					if (resp.ok) {
 						console.log("[MeetNote] Meta sync OK:", file.path);
+						const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+						for (const leaf of leaves) {
+							(leaf.view as MeetNoteSidePanel).render();
+						}
 					} else {
 						console.warn("[MeetNote] Meta sync failed:", resp.status, await resp.text());
 					}
@@ -242,6 +301,41 @@ export default class MeetNotePlugin extends Plugin {
 		console.log("MeetNote plugin unloaded");
 	}
 
+	/** Start continue recording from an existing pending recording */
+	async startContinueRecording(wavPath: string, docPath: string): Promise<void> {
+		this.continueFromWavPath = wavPath;
+		this.continueFromDocPath = docPath;
+		await this.startRecording();
+	}
+
+	private async createMeetingDocument(): Promise<TFile> {
+		const now = new Date();
+		const yyyy = now.getFullYear();
+		const mm = String(now.getMonth() + 1).padStart(2, "0");
+		const dd = String(now.getDate()).padStart(2, "0");
+		const hh = String(now.getHours()).padStart(2, "0");
+		const mi = String(now.getMinutes()).padStart(2, "0");
+		const ss = String(now.getSeconds()).padStart(2, "0");
+
+		const folder = this.settings.meetingFolder || "meetings";
+		const fileName = `회의_${yyyy}-${mm}-${dd}_${hh}${mi}${ss}.md`;
+		const filePath = `${folder}/${fileName}`;
+
+		// Ensure folder exists
+		const folderObj = this.app.vault.getAbstractFileByPath(folder);
+		if (!folderObj) {
+			await this.app.vault.createFolder(folder);
+		}
+
+		const frontmatter = `---\ntype: meeting\ntags:\n  - 회의\ndate: ${yyyy}-${mm}-${dd}\nparticipants: []\n---\n\n`;
+		const file = await this.app.vault.create(filePath, frontmatter);
+		return file;
+	}
+
+	/** Continue recording option — set by side panel "이어 녹음" */
+	private continueFromWavPath: string = "";
+	private continueFromDocPath: string = "";
+
 	private async startRecording() {
 		if (this.isRecording) {
 			new Notice("이미 녹음 중입니다.");
@@ -253,35 +347,56 @@ export default class MeetNotePlugin extends Plugin {
 			return;
 		}
 
-		// Ensure email is configured (used as user_id)
 		if (!this.settings.emailFromAddress) {
 			new Notice("MeetNote 설정에서 발신자 이메일을 입력해주세요.");
 			return;
 		}
 
-		// Ensure there is an active markdown file
-		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile || activeFile.extension !== "md") {
-			new Notice("회의록을 작성할 마크다운 문서를 먼저 열어주세요.");
-			return;
+		let targetFile: TFile;
+
+		if (this.continueFromDocPath) {
+			// "이어 녹음" — 기존 문서 사용
+			const existing = this.app.vault.getAbstractFileByPath(this.continueFromDocPath);
+			if (!existing || !(existing instanceof TFile)) {
+				new Notice("이어 녹음할 문서를 찾을 수 없습니다.");
+				this.continueFromWavPath = "";
+				this.continueFromDocPath = "";
+				return;
+			}
+			targetFile = existing;
+		} else {
+			// 새 문서 자동 생성
+			targetFile = await this.createMeetingDocument();
 		}
 
+		// Open the file
+		await this.app.workspace.getLeaf().openFile(targetFile);
+
 		this.isRecording = true;
-		this.recordingStartTime = new Date();
+		this.recordingStartTime = Date.now();
+		this.recordingElapsedMs = 0;
+		this.recordingSegmentStart = Date.now();
 		this.updateRibbonIcon();
 
-		// Initialize writer with the active file
-		await this.writer.init(activeFile, this.recordingStartTime);
+		// Initialize writer (skips markers if already present)
+		await this.writer.init(targetFile, new Date(this.recordingStartTime));
 
-		// Start status bar timer
 		this.statusBar.startRecording();
 
 		// Send start command to server
-		this.backendClient.sendStart({
-			document_name: activeFile.basename,
-			document_path: activeFile.path,
-			user_id: this.settings.emailFromAddress || require("os").userInfo().username,
-		});
+		const startConfig: Record<string, unknown> = {
+			document_name: targetFile.basename,
+			document_path: targetFile.path,
+			user_id: this.settings.emailFromAddress,
+		};
+		if (this.continueFromWavPath) {
+			startConfig.continue_from = this.continueFromWavPath;
+		}
+		this.backendClient.sendStart(startConfig);
+
+		// Reset continue state
+		this.continueFromWavPath = "";
+		this.continueFromDocPath = "";
 
 		// Start audio capture from local microphone
 		this.audioCapture = new AudioCapture({
@@ -316,6 +431,7 @@ export default class MeetNotePlugin extends Plugin {
 		this.backendClient.sendStop();
 		this.statusBar.stopRecording();
 		this.isRecording = false;
+		this.isPaused = false;
 		this.updateRibbonIcon();
 
 		// Keep live transcription and add notice (will be replaced after processing)
@@ -336,6 +452,8 @@ export default class MeetNotePlugin extends Plugin {
 		}
 		this.writer.reset();
 		this.recordingStartTime = null;
+		this.recordingElapsedMs = 0;
+		this.recordingSegmentStart = null;
 		this.statusBar.setIdle();
 		new Notice("녹음 저장 완료. 사이드 패널에서 후처리를 시작하세요.");
 
@@ -358,6 +476,48 @@ export default class MeetNotePlugin extends Plugin {
 				}
 			} catch { /* server might be reconnecting */ }
 		}, 1000);
+	}
+
+	pauseRecording(): void {
+		if (!this.isRecording || this.isPaused) return;
+		// 현재 세그먼트의 경과분을 누적에 더하고 세그먼트를 닫는다.
+		// 이후 getRecordedElapsedMs()는 누적값만 반환 → 타이머가 멈춘 것처럼 보임.
+		if (this.recordingSegmentStart !== null) {
+			this.recordingElapsedMs += Date.now() - this.recordingSegmentStart;
+			this.recordingSegmentStart = null;
+		}
+		this.isPaused = true;
+		if (this.audioCapture) {
+			this.audioCapture.pause();
+		}
+		this.backendClient.sendPause();
+		this.statusBar.setPaused();
+		this.updateRibbonIcon();
+		new Notice("녹음이 일시중지되었습니다.");
+
+		const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+		for (const leaf of leaves) {
+			(leaf.view as MeetNoteSidePanel).render();
+		}
+	}
+
+	resumeRecording(): void {
+		if (!this.isRecording || !this.isPaused) return;
+		// 새 세그먼트 시작. 누적값은 유지 → 타이머가 멈춘 자리에서 이어서 증가.
+		this.recordingSegmentStart = Date.now();
+		this.isPaused = false;
+		if (this.audioCapture) {
+			this.audioCapture.resume();
+		}
+		this.backendClient.sendResume();
+		this.statusBar.resumeRecording();
+		this.updateRibbonIcon();
+		new Notice("녹음이 재개되었습니다.");
+
+		const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+		for (const leaf of leaves) {
+			(leaf.view as MeetNoteSidePanel).render();
+		}
 	}
 
 	private async activateSidePanel(): Promise<void> {
@@ -736,7 +896,7 @@ export default class MeetNotePlugin extends Plugin {
 				if (!fmMatch) continue;
 				const dateMatch = fmMatch[1].match(/^date:\s*(.+)$/m);
 				if (dateMatch) {
-					const sameFolder = activeFolder && file.parent?.path === activeFolder;
+					const sameFolder = !!(activeFolder && file.parent?.path === activeFolder);
 					meetingFiles.push({ file, date: dateMatch[1].trim(), sameFolder });
 				}
 			}
@@ -790,7 +950,7 @@ export default class MeetNotePlugin extends Plugin {
 	 * Check for processing results that were completed while plugin was offline.
 	 * Writes results to vault documents that haven't been updated yet.
 	 */
-	private async pickupPendingResults(): Promise<void> {
+	async pickupPendingResults(): Promise<void> {
 		try {
 			const baseUrl = this.getHttpBaseUrl();
 			const userId = encodeURIComponent(this.settings.emailFromAddress || "");
@@ -829,42 +989,44 @@ export default class MeetNotePlugin extends Plugin {
 						results.speaking_stats || [],
 					);
 
-					// Generate summary
+					// Generate summary via shared helper (handles parse/generation failures + Notices)
 					try {
-						const { summarize } = await import("./summarizer");
 						const summaryResult = await summarize(results.segments_data);
-						if (summaryResult.success && summaryResult.summary) {
-							await this.app.vault.process(file as TFile, (c) => {
-								const summaryMatch = summaryResult.summary.match(/### 요약\n([\s\S]*?)(?=\n### |$)/);
-								const decisionsMatch = summaryResult.summary.match(/### 주요 결정사항\n([\s\S]*?)(?=\n### |$)/);
-								const actionsMatch = summaryResult.summary.match(/### 액션아이템\n([\s\S]*?)(?=\n### |$)/);
-								const tagsMatch = summaryResult.summary.match(/### 태그\n([\s\S]*?)(?=\n### |\n---|$)/);
-
-								let u = c;
-								if (summaryMatch) u = u.replace(/### 요약\n\n\(요약 생성 중\.\.\.\)/, `### 요약\n${summaryMatch[1].trimEnd()}`);
-								if (decisionsMatch) u = u.replace(/### 주요 결정사항\n\n\(요약 생성 중\.\.\.\)/, `### 주요 결정사항\n${decisionsMatch[1].trimEnd()}`);
-								if (actionsMatch) u = u.replace(/### 액션아이템\n\n\(요약 생성 중\.\.\.\)/, `### 액션아이템\n${actionsMatch[1].trimEnd()}`);
-								if (tagsMatch) u = u.replace(/### 태그\n\n\(요약 생성 중\.\.\.\)/, `### 태그\n${tagsMatch[1].trimEnd()}`);
-								if (u === c) u = u.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)");
-								return u;
-							});
-						} else {
-							await this.app.vault.process(file as TFile, (c) =>
-								c.replace(/\(요약 생성 중\.\.\.\)/g, "(없음)")
-							);
-						}
+						await applySummaryToVault(this.app, file as TFile, summaryResult);
 					} catch (err) {
 						console.error("[MeetNote] Offline summary failed:", err);
+						await applySummaryToVault(this.app, file as TFile, {
+							success: false,
+							summary: "",
+							engine: "claude",
+						});
 					}
 
 					// Mark as written
 					await fetch(`${baseUrl}/recordings/results/${filename}/written`, { method: "POST" });
 					new Notice(`오프라인 처리 결과 반영 완료: ${rec.document_name}`);
+
+					// Auto-refresh side panel so the recording moves from "대기 중" to "최근 회의"
+					try {
+						(panel as MeetNoteSidePanel).render();
+					} catch { /* ignore */ }
 				}
 			}
 		} catch (err) {
 			// Server might not be ready yet
 			console.debug("[MeetNote] Pending results check failed:", err);
+		}
+	}
+
+	/** Force-render all open MeetNote side panels (e.g. after settings change). */
+	refreshSidePanels(): void {
+		const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
+		for (const leaf of leaves) {
+			try {
+				(leaf.view as MeetNoteSidePanel).render();
+			} catch (err) {
+				console.warn("[MeetNote] refreshSidePanels failed:", err);
+			}
 		}
 	}
 

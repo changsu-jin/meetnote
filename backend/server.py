@@ -325,12 +325,15 @@ class RecordingSession:
         self._document_name: str = ""
         self._document_path: str = ""
         self._user_id: str = ""
+        self._continue_from: str = ""
+        self.paused: bool = False
         self._processing_lock = asyncio.Lock()
 
     def reset(self) -> None:
         self.recording = False
         self.processing = False
         self.stopping = False
+        self.paused = False
         self.chunk_index = 0
         self.chunk_segments = []
         self.audio_buffer = bytearray()
@@ -538,108 +541,107 @@ async def get_processing_progress():
 # Recording queue endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/recordings/pending")
-async def get_pending_recordings(user_id: str = ""):
-    """List WAV recordings that haven't been processed yet."""
+def _aggregate_recordings_by_document(
+    recordings_dir: Path, user_id: str = ""
+) -> list[dict]:
+    """
+    ADR-003 "1 MD = 1 녹음" 원칙에 따라 같은 document_path를 공유하는 WAV들을
+    하나의 논리적 녹음 항목으로 통합한다. 이어 녹음(continue_from)으로 생긴
+    여러 WAV가 사이드패널에 중복으로 표시되지 않도록 한다.
+
+    Primary WAV 선택 규칙 (표시/조작의 대표 WAV):
+    1. processing_results(transcription 결과)가 저장된 WAV — 처리 후 canonical
+    2. 없으면 가장 최근 mtime의 WAV
+
+    duration/size는 그룹 전체 합산. processed는 모든 WAV에 .done이 있을 때만 true.
+    document_path가 없는 WAV(edge case)는 개별 항목으로 반환한다.
+    """
     import json as _json
 
-    recordings_dir = Path(_app_config.recordings_path)
-    if not recordings_dir.exists():
-        return {"recordings": []}
-
-    pending = []
-    for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
-        done_marker = f.with_suffix(".done")
-        if done_marker.exists():
-            continue
-        stat = f.stat()
-        duration_est = stat.st_size / (16000 * 2)
-
+    entries = []
+    for f in sorted(recordings_dir.glob("*.wav")):
         meta_path = f.with_suffix(".meta.json")
-        document_name = ""
-        document_path = ""
-        meta_user_id = ""
+        meta: dict = {}
         if meta_path.exists():
             try:
                 meta = _json.loads(meta_path.read_text())
-                document_name = meta.get("document_name", "")
-                document_path = meta.get("document_path", "")
-                meta_user_id = meta.get("user_id", "")
             except Exception:
                 pass
-
-        # Filter by user_id if provided
-        if user_id and meta_user_id != user_id:
-            continue
-
-        pending.append({
-            "filename": f.name,
-            "path": str(f.resolve()),
-            "size_mb": round(stat.st_size / 1024 / 1024, 1),
-            "duration_minutes": round(duration_est / 60, 1),
-            "created": stat.st_mtime,
-            "document_name": document_name,
-            "document_path": document_path,
+        stat = f.stat()
+        entries.append({
+            "path": f,
+            "meta": meta,
+            "stat": stat,
+            "has_results": "processing_results" in meta,
+            "done": f.with_suffix(".done").exists(),
         })
 
+    groups: dict[str, list[dict]] = {}
+    for e in entries:
+        if user_id and e["meta"].get("user_id", "") != user_id:
+            continue
+        doc_path = e["meta"].get("document_path", "")
+        key = doc_path if doc_path else f"__orphan__::{e['path']}"
+        groups.setdefault(key, []).append(e)
+
+    results: list[dict] = []
+    for members in groups.values():
+        primary = next((m for m in members if m["has_results"]), None)
+        if primary is None:
+            primary = max(members, key=lambda m: m["stat"].st_mtime)
+
+        total_size = sum(m["stat"].st_size for m in members)
+        total_duration = total_size / (16000 * 2)  # 16kHz * 2bytes (estimate)
+        all_done = all(m["done"] for m in members)
+        latest_mtime = max(m["stat"].st_mtime for m in members)
+
+        meta = primary["meta"]
+        sp_map = meta.get("speaker_map", {})
+        embs = meta.get("embeddings", {})
+        unregistered_speakers = 0
+        if sp_map:
+            for val in sp_map.values():
+                if not isinstance(val, dict):
+                    unregistered_speakers += 1
+        elif embs:
+            unregistered_speakers = len(embs)
+
+        results.append({
+            "filename": primary["path"].name,
+            "path": str(primary["path"].resolve()),
+            "size_mb": round(total_size / 1024 / 1024, 1),
+            "duration_minutes": round(total_duration / 60, 1),
+            "created": latest_mtime,
+            "processed": all_done,
+            "document_name": meta.get("document_name", ""),
+            "document_path": meta.get("document_path", ""),
+            "unregistered_speakers": unregistered_speakers,
+            # 그룹 내 모든 WAV 절대경로 — delete/requeue cascade에 사용
+            "related_paths": [str(m["path"].resolve()) for m in members],
+        })
+
+    results.sort(key=lambda r: r["created"], reverse=True)
+    return results
+
+
+@app.get("/recordings/pending")
+async def get_pending_recordings(user_id: str = ""):
+    """List WAV recordings that haven't been processed yet (document-level 집계)."""
+    recordings_dir = Path(_app_config.recordings_path)
+    if not recordings_dir.exists():
+        return {"recordings": []}
+    all_recs = _aggregate_recordings_by_document(recordings_dir, user_id)
+    pending = [r for r in all_recs if not r["processed"]]
     return {"recordings": pending}
 
 
 @app.get("/recordings/all")
 async def get_all_recordings(user_id: str = ""):
-    """List all recordings with their processing status."""
-    import json as _json
-
+    """List all recordings with their processing status (document-level 집계)."""
     recordings_dir = Path(_app_config.recordings_path)
     if not recordings_dir.exists():
         return {"recordings": []}
-
-    all_recs = []
-    for f in sorted(recordings_dir.glob("*.wav"), reverse=True):
-        done_marker = f.with_suffix(".done")
-        stat = f.stat()
-        duration_est = stat.st_size / (16000 * 2)
-
-        meta_path = f.with_suffix(".meta.json")
-        document_name = ""
-        document_path = ""
-        meta_user_id = ""
-        unregistered_speakers = 0
-        if meta_path.exists():
-            try:
-                meta = _json.loads(meta_path.read_text())
-                document_name = meta.get("document_name", "")
-                document_path = meta.get("document_path", "")
-                meta_user_id = meta.get("user_id", "")
-                sp_map = meta.get("speaker_map", {})
-                embs = meta.get("embeddings", {})
-                if sp_map:
-                    name_map, _ = _parse_speaker_map(sp_map)
-                    for display in name_map.values():
-                        if display.startswith("화자"):
-                            unregistered_speakers += 1
-                elif embs:
-                    unregistered_speakers = len(embs)
-            except Exception:
-                pass
-
-        # Filter by user_id if provided
-        if user_id and meta_user_id != user_id:
-            continue
-
-        all_recs.append({
-            "filename": f.name,
-            "path": str(f.resolve()),
-            "size_mb": round(stat.st_size / 1024 / 1024, 1),
-            "duration_minutes": round(duration_est / 60, 1),
-            "created": stat.st_mtime,
-            "processed": done_marker.exists(),
-            "document_name": document_name,
-            "document_path": document_path,
-            "unregistered_speakers": unregistered_speakers,
-        })
-
-    return {"recordings": all_recs}
+    return {"recordings": _aggregate_recordings_by_document(recordings_dir, user_id)}
 
 
 def _validate_recording_path(wav_path: str) -> Path:
@@ -658,16 +660,23 @@ class RecordingDeleteRequest(BaseModel):
 
 @app.post("/recordings/delete")
 async def delete_recording(req: RecordingDeleteRequest):
-    """Delete WAV + meta + done marker files."""
-    _validate_recording_path(req.wav_path)
-    deleted = []
-    for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
-        p = Path(req.wav_path).with_suffix(suffix)
-        if p.exists():
-            p.unlink()
-            deleted.append(p.name)
+    """Delete WAV + meta + done marker files.
 
-    logger.info("Deleted recording files: %s", deleted)
+    ADR-003 1 MD = 1 녹음 — same document_path를 공유하는 모든 이어 녹음 WAV들을
+    cascade 삭제한다. 그렇지 않으면 primary WAV만 삭제되고 나머지는 다음 render에
+    새 primary로 승격되어 "삭제한 줄 알았는데 여전히 남아있는" UX 버그가 생긴다.
+    """
+    _validate_recording_path(req.wav_path)
+    targets = _find_related_recordings(req.wav_path, skip_done=False)
+    deleted: list[str] = []
+    for wav in targets:
+        for suffix in [".wav", ".meta.json", ".done", ".wav.enc"]:
+            p = wav.with_suffix(suffix)
+            if p.exists():
+                p.unlink()
+                deleted.append(p.name)
+
+    logger.info("Deleted recording files (cascade %d WAVs): %s", len(targets), deleted)
     return {"ok": True, "deleted": deleted}
 
 
@@ -677,30 +686,40 @@ class RecordingRequeueRequest(BaseModel):
 
 @app.post("/recordings/requeue")
 async def requeue_recording(req: RecordingRequeueRequest):
-    """Move a completed recording back to pending."""
+    """Move a completed recording back to pending.
+
+    ADR-003 cascade — 이어 녹음으로 묶인 모든 WAV의 .done 마커를 함께 해제하고
+    processing_results/speaker_map 등 처리 산출물을 정리한다. primary만 재큐하면
+    일부 WAV는 여전히 done 상태라 집계 시 'processed'로 분류되는 문제가 생긴다.
+    """
     _validate_recording_path(req.wav_path)
     import json as _json
 
-    done_marker = Path(req.wav_path).with_suffix(".done")
-    if not done_marker.exists():
+    targets = _find_related_recordings(req.wav_path, skip_done=False)
+    done_found = [t for t in targets if t.with_suffix(".done").exists()]
+    if not done_found:
         return {"ok": False, "message": "이미 대기 중입니다."}
 
-    done_marker.unlink()
+    for wav in targets:
+        done_marker = wav.with_suffix(".done")
+        if done_marker.exists():
+            done_marker.unlink()
 
-    meta_path = Path(req.wav_path).with_suffix(".meta.json")
-    if meta_path.exists():
-        try:
-            meta = _json.loads(meta_path.read_text())
-            meta.pop("speaker_map", None)
-            meta.pop("embeddings", None)
-            meta.pop("manual_participants", None)
-            meta.pop("skip_speaker_matching", None)
-            meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
-        except Exception:
-            pass
+        meta_path = wav.with_suffix(".meta.json")
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text())
+                meta.pop("speaker_map", None)
+                meta.pop("embeddings", None)
+                meta.pop("manual_participants", None)
+                meta.pop("skip_speaker_matching", None)
+                meta.pop("processing_results", None)
+                meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+            except Exception:
+                pass
 
-    logger.info("Requeued recording: %s", req.wav_path)
-    return {"ok": True}
+    logger.info("Requeued recording (cascade %d WAVs): %s", len(targets), req.wav_path)
+    return {"ok": True, "requeued": len(targets)}
 
 
 class RecordingUpdateMetaRequest(BaseModel):
@@ -775,6 +794,69 @@ async def mark_results_written(filename: str):
     return {"ok": True}
 
 
+def _find_related_recordings(wav_path: str, skip_done: bool = True) -> list[Path]:
+    """Find all WAV files linked to the same document_path (for 이어 녹음 merge/cascade).
+
+    skip_done=True: process-file의 merge 로직용 — 이미 처리된 WAV는 제외 (중복 처리 방지).
+    skip_done=False: delete/requeue cascade용 — done 마커 여부와 무관하게 모두 포함.
+    """
+    import json as _json
+    target_path = Path(wav_path)
+    meta_path = target_path.with_suffix(".meta.json")
+    if not meta_path.exists():
+        return [target_path]
+
+    try:
+        meta = _json.loads(meta_path.read_text())
+    except Exception:
+        return [target_path]
+
+    doc_path = meta.get("document_path", "")
+    if not doc_path:
+        return [target_path]
+
+    # Search all meta files in the same directory for matching document_path
+    recordings_dir = target_path.parent
+    related = []
+    for f in sorted(recordings_dir.glob("*.wav")):
+        m = f.with_suffix(".meta.json")
+        if not m.exists():
+            continue
+        if skip_done and f.with_suffix(".done").exists():
+            continue
+        try:
+            fm = _json.loads(m.read_text())
+            if fm.get("document_path") == doc_path:
+                related.append(f)
+        except Exception:
+            continue
+
+    return related if related else [target_path]
+
+
+def _concatenate_wavs(wav_paths: list[Path]) -> str:
+    """Concatenate multiple WAV files into a single temporary WAV file."""
+    import tempfile
+    all_frames = bytearray()
+    params = None
+
+    for wp in wav_paths:
+        with wave.open(str(wp), "rb") as wf:
+            if params is None:
+                params = wf.getparams()
+            all_frames.extend(wf.readframes(wf.getnframes()))
+
+    if params is None:
+        return str(wav_paths[0])
+
+    merged_path = str(wav_paths[0].parent / f"_merged_{wav_paths[0].stem}.wav")
+    with wave.open(merged_path, "wb") as wf:
+        wf.setparams(params)
+        wf.writeframes(bytes(all_frames))
+
+    return merged_path
+
+
 class ProcessFileRequest(BaseModel):
     file_path: str
     vault_file_path: str = ""
@@ -787,6 +869,13 @@ async def process_file(req: ProcessFileRequest):
     wav_path = req.file_path
     if not Path(wav_path).exists():
         return {"ok": False, "message": f"File not found: {wav_path}"}
+
+    # Find related recordings (이어 녹음) and merge if needed
+    related_wavs = _find_related_recordings(wav_path)
+    merged_wav_path = wav_path
+    if len(related_wavs) > 1:
+        merged_wav_path = _concatenate_wavs(related_wavs)
+        logger.info("Merged %d WAV files for processing", len(related_wavs))
 
     # Find the requesting session (use the first connected session)
     ws = None
@@ -824,9 +913,10 @@ async def process_file(req: ProcessFileRequest):
 
     try:
         # Transcription
+        process_wav = merged_wav_path  # Use merged WAV if available
         await progress("transcription", 10.0)
         transcription_segments = await asyncio.to_thread(
-            state.transcriber.transcribe_file, wav_path
+            state.transcriber.transcribe_file, process_wav
         )
         await progress("transcription", 50.0)
 
@@ -836,13 +926,13 @@ async def process_file(req: ProcessFileRequest):
         speaker_map: dict[str, str] = {}
         try:
             await progress("diarization", 55.0)
-            diarization_segments = await asyncio.to_thread(state.diarizer.run, wav_path)
+            diarization_segments = await asyncio.to_thread(state.diarizer.run, process_wav)
             await progress("diarization", 75.0)
 
             if diarization_segments:
                 await progress("speaker_embedding", 78.0)
                 speaker_embeddings = await asyncio.to_thread(
-                    state.diarizer.extract_embeddings, wav_path, diarization_segments,
+                    state.diarizer.extract_embeddings, process_wav, diarization_segments,
                 )
                 await progress("speaker_embedding", 82.0)
 
@@ -951,9 +1041,14 @@ async def process_file(req: ProcessFileRequest):
         except Exception as meta_exc:
             logger.warning("Failed to save results to meta: %s", meta_exc)
 
-        # Mark as processed
-        done_marker = Path(req.file_path).with_suffix(".done")
-        done_marker.write_text(f"processed at {__import__('datetime').datetime.now().isoformat()}")
+        # Mark as processed (all related WAVs if merged)
+        processed_at = __import__('datetime').datetime.now().isoformat()
+        for related_wav in (related_wavs if len(related_wavs) > 1 else [Path(req.file_path)]):
+            done = related_wav.with_suffix(".done")
+            done.write_text(f"processed at {processed_at}")
+        # Clean up merged temp file
+        if merged_wav_path != wav_path and Path(merged_wav_path).exists():
+            Path(merged_wav_path).unlink()
 
         return {
             "ok": True,
@@ -1020,10 +1115,12 @@ async def handle_start(ws: WebSocket, config_overrides: dict[str, Any] | None = 
     session._document_name = ""
     session._document_path = ""
     session._user_id = ""
+    session._continue_from = ""
     if config_overrides:
         session._document_name = config_overrides.pop("document_name", "")
         session._document_path = config_overrides.pop("document_path", "")
         session._user_id = config_overrides.pop("user_id", "")
+        session._continue_from = config_overrides.pop("continue_from", "")
 
     session.recording = True
     session.audio_buffer = bytearray()
@@ -1091,6 +1188,34 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
         await ws_send(ws, {"type": "error", "message": f"Chunk transcription error: {exc}"})
 
 
+async def handle_pause(ws: WebSocket):
+    """Pause the current recording session."""
+    session = state.get_session(ws)
+    if not session.recording:
+        await ws_send(ws, {"type": "error", "message": "No recording in progress"})
+        return
+    if session.paused:
+        await ws_send(ws, {"type": "error", "message": "Already paused"})
+        return
+    session.paused = True
+    logger.info("Recording paused.")
+    await ws_send(ws, {"type": "status", "recording": True, "processing": False, "paused": True})
+
+
+async def handle_resume(ws: WebSocket):
+    """Resume a paused recording session."""
+    session = state.get_session(ws)
+    if not session.recording:
+        await ws_send(ws, {"type": "error", "message": "No recording in progress"})
+        return
+    if not session.paused:
+        await ws_send(ws, {"type": "error", "message": "Not paused"})
+        return
+    session.paused = False
+    logger.info("Recording resumed.")
+    await ws_send(ws, {"type": "status", "recording": True, "processing": False, "paused": False})
+
+
 async def handle_stop(ws: WebSocket):
     """Stop recording and run post-processing pipeline (queue mode only — save WAV)."""
     session = state.get_session(ws)
@@ -1133,6 +1258,8 @@ async def handle_stop(ws: WebSocket):
         "document_path": session._document_path,
         "started_at": datetime.now().isoformat(),
     }
+    if session._continue_from:
+        meta["continued_from"] = session._continue_from
     meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Queue mode: save WAV only, skip post-processing
@@ -1222,6 +1349,12 @@ async def websocket_endpoint(ws: WebSocket):
 
                     elif msg_type == "stop":
                         await handle_stop(ws)
+
+                    elif msg_type == "pause":
+                        await handle_pause(ws)
+
+                    elif msg_type == "resume":
+                        await handle_resume(ws)
 
                     elif msg_type == "pong":
                         pass

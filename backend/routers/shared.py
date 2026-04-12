@@ -108,12 +108,21 @@ def update_document_speaker(document_path: str, old_name: str, new_name: str) ->
     try:
         content = full_path.read_text(encoding="utf-8")
         updated = content
+        # Specific patterns (bold/blockquote/yaml list/punctuation-bounded)
         updated = updated.replace(f"**{old_name}**", f"**{new_name}**")
         updated = re.sub(rf"> {re.escape(old_name)} ", f"> {new_name} ", updated)
         updated = updated.replace(f"  - {old_name}", f"  - {new_name}")
         updated = re.sub(
             rf"({re.escape(old_name)})(,|\s|\()",
             rf"{new_name}\2",
+            updated,
+        )
+        # Catch-all for Claude-generated summary text where the label is followed by
+        # Korean particles (이/가/을/를/은/는/의/에/에서 ...) — negative lookahead on
+        # digits so "화자1" does not also match "화자10", "화자11" ...
+        updated = re.sub(
+            rf"{re.escape(old_name)}(?!\d)",
+            new_name,
             updated,
         )
         if updated != content:
