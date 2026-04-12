@@ -61,6 +61,7 @@ Obsidian → BRAT 플러그인 → `changsu-jin/meetnote` 추가
 ## 개발 후기
 
 - [MeetNote 개발 회고](https://42class.com/posts/meetnote-retrospective/)
+- [v0.3.0 개선 사항](https://42class.com/posts/meetnote-v030-improvements/)
 
 ## 라이선스
 
