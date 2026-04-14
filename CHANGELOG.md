@@ -2,7 +2,12 @@
 
 All notable changes to MeetNote are documented here.
 
-## [Unreleased] — bugfix/from-master (Phase 3)
+## [Unreleased] — bugfix/summary-depth
+
+### Changed
+- 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
+
+## [0.3.0] — 2026-04-12 (Phase 3)
 
 ### Added
 - 녹음 일시중지/재개 기능 (REC-88) [ADR-004]
