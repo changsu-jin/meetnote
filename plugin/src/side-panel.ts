@@ -9,7 +9,7 @@
 
 import { ItemView, Modal, Notice, WorkspaceLeaf, TFile, requestUrl, setIcon } from "obsidian";
 import type MeetNotePlugin from "./main";
-import { summarize, applySummaryToVault } from "./summarizer";
+import { summarize, applySummaryToVault, type FinalSegment } from "./summarizer";
 
 export const SIDE_PANEL_VIEW_TYPE = "meetnote-side-panel";
 
@@ -379,6 +379,13 @@ export class MeetNoteSidePanel extends ItemView {
 								}
 							},
 						);
+					});
+					// 요약 재생성 — STT/화자구분은 건너뛰고 Claude CLI 요약만 다시.
+					// MD의 "## 녹취록" 섹션을 파싱해서 segments 복원 → summarize → applySummaryToVault.
+					// 전체 재처리(40-60초) 대비 빠름(15-30초)이고 화자 등록/수동 참석자/수동 편집 보존.
+					const resummarizeBtn = btnGroup.createEl("button", { text: "요약 재생성", cls: "meetnote-edit-btn" });
+					resummarizeBtn.addEventListener("click", async () => {
+						await this.resummarizeFromDocument(rec, resummarizeBtn);
 					});
 				}
 				if (completed.length > 3) {
@@ -915,6 +922,73 @@ export class MeetNoteSidePanel extends ItemView {
 			this.lastHealthData = null;
 			return false;
 		}
+	}
+
+	/**
+	 * Re-run Claude CLI summary without redoing STT/diarization. Parses the MD
+	 * transcript section to reconstruct segments, then calls summarize +
+	 * applySummaryToVault. Use case: prompt改善 이후 기존 회의 요약만 갱신.
+	 * 전체 재처리(40-60초) 대비 빠름(15-30초) + 화자 등록/수동 참석자/사용자가
+	 * 수동 편집한 transcript 모두 보존.
+	 */
+	private async resummarizeFromDocument(rec: PendingRecording, btn: HTMLElement): Promise<void> {
+		const docPath = rec.document_path || "";
+		if (!docPath) {
+			new Notice("이 녹음에 연결된 회의록이 없습니다.", 5000);
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(docPath);
+		if (!file) {
+			new Notice(`회의록 파일을 찾을 수 없습니다: ${docPath}`, 6000);
+			return;
+		}
+
+		const content = await this.app.vault.read(file as TFile);
+		const segments = this.parseTranscriptSegments(content);
+		if (segments.length === 0) {
+			new Notice("녹취록에서 segments를 찾을 수 없습니다. '## 녹취록' 섹션 형식을 확인해주세요.", 8000);
+			return;
+		}
+
+		const originalText = btn.textContent || "요약 재생성";
+		btn.setText("요약 생성 중...");
+		btn.setAttribute("disabled", "true");
+		try {
+			const result = await summarize(segments);
+			const applied = await applySummaryToVault(this.app, file as TFile, result);
+			if (applied.ok) {
+				new Notice("요약이 재생성됐습니다.", 5000);
+			}
+			// 실패 시 applySummaryToVault 내부에서 이미 Notice + MD placeholder 처리
+		} catch (err) {
+			console.error("[MeetNote] Resummarize failed:", err);
+			new Notice("요약 재생성 중 오류가 발생했습니다.", 8000);
+		} finally {
+			btn.setText(originalText);
+			btn.removeAttribute("disabled");
+		}
+	}
+
+	/**
+	 * Parse the "## 녹취록" section of a meeting MD into FinalSegment[].
+	 * Supported format:
+	 *   ### HH:MM:SS [~ HH:MM:SS]
+	 *   **speaker**: text
+	 */
+	private parseTranscriptSegments(content: string): FinalSegment[] {
+		const transcriptMatch = content.match(/##\s*녹취록\s*\n([\s\S]*?)(?=\n##\s|$)/);
+		if (!transcriptMatch) return [];
+		const body = transcriptMatch[1];
+		const segments: FinalSegment[] = [];
+		// `### HH:MM:SS [~ HH:MM:SS]\n**speaker**: text`
+		const re = /###\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s*~\s*\d{1,2}:\d{2}:\d{2})?\s*\n\*\*(.+?)\*\*:\s*([^\n]+(?:\n(?!###\s|\*\*|##\s)[^\n]+)*)/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(body)) !== null) {
+			const [, h, mm, s, speaker, text] = m;
+			const timestamp = Number(h) * 3600 + Number(mm) * 60 + Number(s);
+			segments.push({ timestamp, speaker: speaker.trim(), text: text.trim() });
+		}
+		return segments;
 	}
 
 	/**

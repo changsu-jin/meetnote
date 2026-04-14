@@ -422,3 +422,52 @@ test("S42: 이어 녹음 2개 WAV → 처리 버튼 → 병합 처리 → 단일
 	const participantBtn = completedItem.locator('.meetnote-process-btn:has-text("참석자")');
 	await expect(participantBtn.first()).toBeVisible({ timeout: 3000 });
 });
+
+// ── S43 ─────────────────────────────────────────────────────────────────
+test("S43: 완료 녹음 항목에 '요약 재생성' 버튼 존재 + transcript 파서 동작", async () => {
+	const docPath = `meetings/${FIXTURE_PREFIX}s43.md`;
+	writeFixture({ id: "s43", documentName: "S43 재요약 테스트", documentPath: docPath, processed: true });
+	await rerender(obsidian.window);
+
+	// 1. 버튼 존재 확인
+	const completedItem = obsidian.window
+		.locator(`.meetnote-recording-item:has(.meetnote-recording-title:has-text("S43 재요약 테스트"))`)
+		.first();
+	await expect(completedItem).toBeVisible({ timeout: 5000 });
+	const resumBtn = completedItem.locator('.meetnote-edit-btn:has-text("요약 재생성")');
+	await expect(resumBtn.first()).toBeVisible({ timeout: 3000 });
+
+	// 2. parseTranscriptSegments 파서 동작 확인 (CDP로 private 메서드 호출)
+	const parsed = await obsidian.window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		if (leaves.length === 0) return null;
+		const view = leaves[0].view;
+		const sample = `## 회의 녹취록
+
+### 발언 비율
+> 홍길동 50%
+
+### 요약
+- 이전 요약
+
+## 녹취록
+
+### 00:00:00 ~ 00:00:06
+**홍길동**: 안녕하세요. 첫 번째 발언입니다.
+
+### 00:00:10
+**이순신**: 두 번째 발언입니다.
+
+### 00:01:30 ~ 00:01:45
+**홍길동**: 세 번째 발언. 여러 줄도
+이어질 수 있습니다.
+`;
+		return view.parseTranscriptSegments(sample);
+	});
+	expect(parsed).not.toBeNull();
+	expect(parsed).toHaveLength(3);
+	expect(parsed![0]).toEqual({ timestamp: 0, speaker: "홍길동", text: "안녕하세요. 첫 번째 발언입니다." });
+	expect(parsed![1]).toEqual({ timestamp: 10, speaker: "이순신", text: "두 번째 발언입니다." });
+	expect(parsed![2].timestamp).toBe(90); // 00:01:30 = 90s
+	expect(parsed![2].speaker).toBe("홍길동");
+});

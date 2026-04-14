@@ -7,7 +7,7 @@
 		"typecheck": "tsc --noEmit",
 		"build": "tsc --noEmit && esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node && npm run deploy",
 		"dev": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --platform=node --watch",
-		"deploy": "if [ -n \"$MEETNOTE_VAULT\" ]; then cp main.js styles.css \"$MEETNOTE_VAULT/.obsidian/plugins/meetnote/\"; elif [ -f .vault_path ]; then cp main.js styles.css \"$(cat .vault_path)/.obsidian/plugins/meetnote/\"; else echo 'MEETNOTE_VAULT 미설정 — .vault_path 파일 또는 환경변수를 설정하세요'; fi"
+		"deploy": "if [ -n \"$MEETNOTE_VAULT\" ]; then cp main.js styles.css manifest.json \"$MEETNOTE_VAULT/.obsidian/plugins/meetnote/\"; elif [ -f .vault_path ]; then cp main.js styles.css manifest.json \"$(cat .vault_path)/.obsidian/plugins/meetnote/\"; else echo 'MEETNOTE_VAULT 미설정 — .vault_path 파일 또는 환경변수를 설정하세요'; fi"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.59.1",
