@@ -96,11 +96,11 @@ def correct_transcript(
     CorrectionResult
         Corrected text and metadata. If no LLM available, returns original unchanged.
     """
-    # Format transcript
+    # Format transcript (apply hallucination filter before sending to LLM)
     lines = []
     for seg in segments:
         speaker = seg.get("speaker", "?")
-        text = seg.get("text", "").strip()
+        text = filter_hallucination(seg.get("text", "").strip())
         if text:
             lines.append(f"[{speaker}] {text}")
 
