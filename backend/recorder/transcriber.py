@@ -296,6 +296,7 @@ class Transcriber:
         segments_iter, info = model.transcribe(
             audio,
             language=self._language,
+            initial_prompt=self._initial_prompt,
             beam_size=5,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
@@ -325,6 +326,7 @@ class Transcriber:
         segments_iter, info = model.transcribe(
             str(file_path),
             language=self._language,
+            initial_prompt=self._initial_prompt,
             beam_size=5,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
