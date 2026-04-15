@@ -7,8 +7,10 @@ by sending the raw transcript to Claude CLI or Ollama.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
@@ -30,6 +32,42 @@ CORRECTION_PROMPT = """\
 
 {transcript}
 """
+
+
+def filter_hallucination(text: str) -> str:
+    """Filter common Whisper hallucination patterns from transcribed text.
+
+    Handles:
+    - Single/short character repetition: "ㅇㅇㅇㅇ", "QA QA QA QA QA QA QA QA QA QA"
+    - Comma/space separated token repetition: "네, 네, 네, 네, 네, 네"
+    - Digit-only sequences: "2, 2, 3, 4, 4, 5, 5, 5, 6"
+    - Word-level repetition: "QA QA" → "QA"
+    - Phrase repetition with punctuation: "이렇게, 이렇게, 이렇게" → "이렇게"
+    """
+    if not text:
+        return text
+
+    # 1. Short pattern repeated 10+ times
+    if re.search(r'(.{1,3})\1{9,}', text):
+        return ''
+
+    # 2. Repeated tokens making up 40%+ of content
+    tokens = [t.strip() for t in re.split(r'[,\s?!]+', text) if t.strip()]
+    if len(tokens) >= 6:
+        most_common_token, count = Counter(tokens).most_common(1)[0]
+        if count / len(tokens) >= 0.4:
+            return most_common_token
+        # Digit-only sequences
+        if sum(1 for t in tokens if t.isdigit()) / len(tokens) >= 0.8:
+            return ''
+
+    # 3. Space-separated word repetition: "QA QA" → "QA"
+    text = re.sub(r'\b(\w+)( \1){1,}\b', r'\1', text)
+
+    # 4. Comma/question-mark separated phrase repetition (3+ times)
+    text = re.sub(r'(.{1,}?)[,?]\s*(?:\1[,?]\s*){2,}', r'\1', text)
+
+    return text
 
 
 @dataclass
