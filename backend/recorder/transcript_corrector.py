@@ -6,13 +6,24 @@ by sending the raw transcript to Claude CLI or Ollama.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Ollama HTTP API configuration
+_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "exaone3.5:7.8b-instruct-q4_K_M")
+_OLLAMA_SYSTEM_PROMPT = (
+    "당신은 한국어 STT 후처리 교정 전문가입니다. "
+    "반드시 한국어로 답변하고, 교정된 텍스트만 출력하세요."
+)
 
 CORRECTION_PROMPT = """\
 당신은 음성 인식(STT) 후처리 교정 전문가입니다. 아래 텍스트는 음성 인식으로 생성된 회의 녹취록입니다.
@@ -86,22 +97,46 @@ def correct_transcript(
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("Claude CLI correction failed: %s", exc)
 
-    # Try Ollama
-    if shutil.which("ollama"):
-        try:
-            result = subprocess.run(
-                ["ollama", "run", "llama3.1:8b", prompt],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                corrected = result.stdout.strip()
-                logger.info("Transcript corrected via Ollama (%d chars).", len(corrected))
-                return CorrectionResult(corrected=corrected, success=True, engine="ollama")
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.warning("Ollama correction failed: %s", exc)
+    # Try Ollama HTTP API (Korean-optimized, no subprocess overhead)
+    corrected = _ollama_correct(prompt, timeout=timeout)
+    if corrected:
+        return CorrectionResult(corrected=corrected, success=True, engine="ollama")
 
     logger.info("No LLM available for transcript correction — skipping.")
     return CorrectionResult(corrected=transcript, success=False, engine="none")
+
+
+def _ollama_correct(prompt: str, timeout: int = 60) -> Optional[str]:
+    """Call Ollama HTTP API for transcript correction.
+
+    Uses /api/chat with a Korean system prompt for better Korean output quality.
+    Returns corrected text or None if unavailable/failed.
+    """
+    url = f"{_OLLAMA_BASE_URL}/api/chat"
+    payload = json.dumps({
+        "model": _OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": _OLLAMA_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 2048},
+        "keep_alive": "10m",
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+            text = data.get("message", {}).get("content", "").strip()
+            if text:
+                logger.info("Transcript corrected via Ollama HTTP (%d chars).", len(text))
+            return text or None
+    except Exception as exc:
+        logger.warning("Ollama HTTP correction failed: %s", exc)
+        return None
 
 
 def apply_correction(
