@@ -7,6 +7,7 @@ by sending the raw transcript to Claude CLI or Ollama.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -14,6 +15,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Ollama model selection — override via OLLAMA_MODEL env var.
+# Default: exaone3.5:7.8b-instruct-q4_K_M (LG AI Research, Korean-optimized)
+# Alternatives: qwen2.5:7b (multilingual), llama3.1:8b (English-focused)
+_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "exaone3.5:7.8b-instruct-q4_K_M")
 
 CORRECTION_PROMPT = """\
 당신은 음성 인식(STT) 후처리 교정 전문가입니다. 아래 텍스트는 음성 인식으로 생성된 회의 녹취록입니다.
@@ -99,7 +105,7 @@ def correct_transcript(
         for attempt in range(3):
             try:
                 result = subprocess.run(
-                    ["ollama", "run", "llama3.1:8b", prompt],
+                    ["ollama", "run", _OLLAMA_MODEL, prompt],
                     capture_output=True, text=True, timeout=timeout,
                 )
                 if result.returncode == 0 and result.stdout.strip():
