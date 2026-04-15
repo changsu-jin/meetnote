@@ -1062,7 +1062,7 @@ function parseSummaryText(raw) {
   if (fenceMatch) text = fenceMatch[1].trim();
   const section = (label) => {
     const re = new RegExp(
-      `^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[\uAC00-\uD7A3A-Za-z]|\\n---|$)`,
+      `^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[\uAC00-\uD7A3A-Za-z]|\\n---|(?![\\s\\S]))`,
       "m"
     );
     const m = text.match(re);
@@ -1108,9 +1108,14 @@ async function applySummaryToVault(app, file, result) {
     await app.vault.process(file, (content) => {
       let u = content;
       const repl = (label, val) => {
-        const re = new RegExp(`### ${label}\\n\\n\\(\uC694\uC57D \uC0DD\uC131 \uC911\\.\\.\\.\\)`);
-        u = u.replace(re, `### ${label}
-${val.trim() || "(\uC5C6\uC74C)"}`);
+        const re = new RegExp(
+          `(### ${label})\\n[\\s\\S]*?(?=\\n### |\\n## |\\n---\\n|\\n---$)`,
+          "m"
+        );
+        const body = val.trim() || "(\uC5C6\uC74C)";
+        u = u.replace(re, `$1
+${body}
+`);
       };
       repl("\uC694\uC57D", parsed.summary);
       repl("\uC8FC\uC694 \uACB0\uC815\uC0AC\uD56D", parsed.decisions);

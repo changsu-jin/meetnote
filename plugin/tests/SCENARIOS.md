@@ -75,6 +75,7 @@
 | ID | 시나리오 | 테스트 파일 | 자동화 |
 |----|---------|-----------|:------:|
 | S32 | 요약 placeholder가 실제로 채워짐 | 08-summary-rendering.spec.ts | O |
+| S32b | 재요약 시 기존 본문 → 새 내용 교체 (placeholder 없는 상태) | 08-summary-rendering.spec.ts | O |
 | S33 | 요약 파싱 실패 시 `(요약 파싱 실패)` + Notice | 08-summary-rendering.spec.ts | O |
 | S34 | 요약 생성 실패 시 `(요약 생성 실패)` + Notice | 08-summary-rendering.spec.ts | O |
 | S35 | 라이브 녹음 종료 시 MD에 요약 섹션 적용 | 08-summary-rendering.spec.ts | O |
@@ -118,7 +119,7 @@
 | H7 | 운영 코드와 동일한 포맷으로 /email/send 호출 — meetnote 섹션만 body (녹취록 제외), `[MeetNote] ${docName}` subject, `vault_file_path` + `include_gitlab_link` 전달 (SMTP 미설정 시 SKIP) | 99-happy-path.spec.ts | O |
 | H8 | 완성된 회의록을 Obsidian workspace activeFile로 열기 | 99-happy-path.spec.ts | O |
 
-**커버리지: 51/51 (100%)**
+**커버리지: 52/52 (100%)**
 
 ## 시나리오 상세
 

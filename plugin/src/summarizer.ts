@@ -110,8 +110,14 @@ export function parseSummaryText(raw: string): ParsedSummary {
 		// Allow ## or ### headings, optional whitespace, optional **bold**.
 		// Wrap label in a non-capturing group so `|` alternation inside the label
 		// doesn't split the whole regex and leave the capture group undefined.
+		//
+		// `m` 플래그는 `^`를 line-start로 쓰기 위함이지만, lookahead의 `$`가
+		// 각 줄 끝에 매치되어 첫 번째 줄만 캡처되는 심각한 버그가 있었음 —
+		// Claude가 12개 bullet을 반환해도 파서가 1개만 건지고 나머지를 버림.
+		// `$`를 `(?![\s\S])`(end-of-string)로 교체하여 multiline 모드에서도
+		// 문자열 끝에서만 lookahead가 매치되도록 수정.
 		const re = new RegExp(
-			`^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[가-힣A-Za-z]|\\n---|$)`,
+			`^[ \\t]*#{2,3}[ \\t]*\\**(?:${label})\\**[ \\t]*\\n([\\s\\S]*?)(?=\\n[ \\t]*#{2,3}[ \\t]*\\**[가-힣A-Za-z]|\\n---|(?![\\s\\S]))`,
 			"m",
 		);
 		const m = text.match(re);
@@ -179,9 +185,15 @@ export async function applySummaryToVault(
 	try {
 		await app.vault.process(file, (content) => {
 			let u = content;
+			// ### {label} 헤딩 다음 → 다음 `### `/`## `/`---` 구분까지를 새 내용으로 교체.
+			// 초기 processing (placeholder `(요약 생성 중...)`)과 재요약(기존 내용 있음) 모두 동작.
 			const repl = (label: string, val: string) => {
-				const re = new RegExp(`### ${label}\\n\\n\\(요약 생성 중\\.\\.\\.\\)`);
-				u = u.replace(re, `### ${label}\n${val.trim() || "(없음)"}`);
+				const re = new RegExp(
+					`(### ${label})\\n[\\s\\S]*?(?=\\n### |\\n## |\\n---\\n|\\n---$)`,
+					"m",
+				);
+				const body = (val.trim() || "(없음)");
+				u = u.replace(re, `$1\n${body}\n`);
 			};
 			repl("요약", parsed.summary);
 			repl("주요 결정사항", parsed.decisions);

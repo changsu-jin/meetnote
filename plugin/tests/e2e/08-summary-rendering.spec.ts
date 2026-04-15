@@ -203,6 +203,72 @@ test("S32: 정상 요약 적용 시 placeholder가 모두 사라지고 본문이
 	expect(content).toContain("#회의");
 });
 
+// ── S32b: 재요약 (기존 내용 → 새 내용 교체) ────────────────────────────
+
+test("S32b: 재요약 시 기존 본문 내용이 새 내용으로 교체된다 (placeholder 아닌 상태)", async () => {
+	const docPath = await createDoc(obsidian.window, "s32b");
+
+	// 첫 번째 적용: placeholder → "old" 내용
+	await obsidian.window.evaluate(async (path: string) => {
+		const app = (window as any).app;
+		const file = app.vault.getAbstractFileByPath(path);
+		const plugin = app.plugins.plugins["meetnote"];
+		await plugin.applySummaryToVault(app, file, {
+			success: true,
+			engine: "claude",
+			summary: `### 요약
+- 옛날 요점
+
+### 주요 결정사항
+- 옛날 결정
+
+### 액션아이템
+- [ ] 옛날 할일
+
+### 태그
+#옛날태그
+`,
+		});
+	}, docPath);
+
+	// 두 번째 적용: "old" 내용 → "new" 내용 (placeholder 없는 상태에서 재요약)
+	const result = await obsidian.window.evaluate(async (path: string) => {
+		const app = (window as any).app;
+		const file = app.vault.getAbstractFileByPath(path);
+		const plugin = app.plugins.plugins["meetnote"];
+		return await plugin.applySummaryToVault(app, file, {
+			success: true,
+			engine: "claude",
+			summary: `### 요약
+- 새로운 요점 1
+- 새로운 요점 2
+
+### 주요 결정사항
+- 새로운 결정
+
+### 액션아이템
+- [ ] 새로운 할일
+
+### 태그
+#새태그
+`,
+		});
+	}, docPath);
+
+	expect(result.ok).toBe(true);
+	const content = await readDoc(obsidian.window, docPath);
+	// 새 내용 포함
+	expect(content).toContain("새로운 요점 1");
+	expect(content).toContain("새로운 결정");
+	expect(content).toContain("새로운 할일");
+	expect(content).toContain("#새태그");
+	// 옛 내용 제거
+	expect(content).not.toContain("옛날 요점");
+	expect(content).not.toContain("옛날 결정");
+	expect(content).not.toContain("옛날 할일");
+	expect(content).not.toContain("#옛날태그");
+});
+
 // ── S33: 파싱 실패 fallback ─────────────────────────────────────────────
 
 test("S33: 파싱 실패 시 (요약 파싱 실패) 표시", async () => {
