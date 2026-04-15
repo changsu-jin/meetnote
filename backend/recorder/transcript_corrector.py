@@ -6,13 +6,36 @@ by sending the raw transcript to Claude CLI or Ollama.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# TTL-based LLM response cache (5 minutes)
+_cache: dict[str, tuple[str, float]] = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 300
+
+
+def _cache_get(key: str) -> Optional[str]:
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and (time.monotonic() - entry[1]) < _CACHE_TTL:
+            return entry[0]
+        if entry:
+            del _cache[key]
+    return None
+
+
+def _cache_set(key: str, value: str) -> None:
+    with _cache_lock:
+        _cache[key] = (value, time.monotonic())
 
 CORRECTION_PROMPT = """\
 당신은 음성 인식(STT) 후처리 교정 전문가입니다. 아래 텍스트는 음성 인식으로 생성된 회의 녹취록입니다.
@@ -72,6 +95,13 @@ def correct_transcript(
     transcript = "\n".join(lines)
     prompt = CORRECTION_PROMPT.format(transcript=transcript)
 
+    # Check cache (MD5 of prompt)
+    cache_key = hashlib.md5(prompt.encode()).hexdigest()
+    cached = _cache_get(cache_key)
+    if cached:
+        logger.debug("Correction cache hit.")
+        return CorrectionResult(corrected=cached, success=True, engine="cache")
+
     # Try Claude CLI
     if shutil.which("claude"):
         try:
@@ -82,6 +112,7 @@ def correct_transcript(
             if result.returncode == 0 and result.stdout.strip():
                 corrected = result.stdout.strip()
                 logger.info("Transcript corrected via Claude CLI (%d chars).", len(corrected))
+                _cache_set(cache_key, corrected)
                 return CorrectionResult(corrected=corrected, success=True, engine="claude")
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("Claude CLI correction failed: %s", exc)
@@ -96,6 +127,7 @@ def correct_transcript(
             if result.returncode == 0 and result.stdout.strip():
                 corrected = result.stdout.strip()
                 logger.info("Transcript corrected via Ollama (%d chars).", len(corrected))
+                _cache_set(cache_key, corrected)
                 return CorrectionResult(corrected=corrected, success=True, engine="ollama")
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("Ollama correction failed: %s", exc)
