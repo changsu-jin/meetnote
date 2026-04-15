@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Ollama HTTP API configuration
 _OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "exaone3.5:7.8b-instruct-q4_K_M")
+_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 _OLLAMA_SYSTEM_PROMPT = (
     "당신은 한국어 STT 후처리 교정 전문가입니다. "
     "반드시 한국어로 답변하고, 교정된 텍스트만 출력하세요."
