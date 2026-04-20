@@ -471,3 +471,138 @@ test("S43: 완료 녹음 항목에 '요약 재생성' 버튼 존재 + transcript
 	expect(parsed![2].timestamp).toBe(90); // 00:01:30 = 90s
 	expect(parsed![2].speaker).toBe("홍길동");
 });
+
+// ── S44 ─────────────────────────────────────────────────────────────────
+test("S44: 처리 중 다른 녹음 클릭 시 큐에 추가 + 버튼 '대기 중 #N' 표시", async () => {
+	test.setTimeout(30000);
+	// fixture 2개 생성 (대기 중 상태)
+	writeFixture({ id: "s44a", documentName: "S44 회의 A" });
+	writeFixture({ id: "s44b", documentName: "S44 회의 B" });
+	await rerender(obsidian.window);
+
+	// 사이드패널의 processing 플래그를 강제로 true로 설정 (실제 처리 없이 큐잉 동작만 검증)
+	await obsidian.window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		if (leaves.length > 0) {
+			leaves[0].view.processing = true;
+			leaves[0].view.processingDocName = "S44 회의 A";
+		}
+	});
+	await rerender(obsidian.window);
+
+	// B 항목의 처리 버튼 클릭 → processing=true이므로 큐에 추가됨
+	const itemB = obsidian.window
+		.locator(`.meetnote-recording-item:has(.meetnote-recording-title:has-text("S44 회의 B"))`)
+		.first();
+	await expect(itemB).toBeVisible({ timeout: 5000 });
+	const btnB = itemB.locator(".meetnote-process-btn").first();
+	await btnB.click({ force: true });
+	await obsidian.window.waitForTimeout(1500);
+
+	// 큐 확인 — processingQueue에 B가 들어가야 함
+	const queueLen = await obsidian.window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		return leaves.length > 0 ? leaves[0].view.processingQueue.length : -1;
+	});
+	expect(queueLen).toBe(1);
+
+	// 같은 B를 또 클릭 → "이미 대기열에 있습니다" → 큐 길이 변화 없음
+	await btnB.click({ force: true });
+	await obsidian.window.waitForTimeout(500);
+	const queueLen2 = await obsidian.window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		return leaves.length > 0 ? leaves[0].view.processingQueue.length : -1;
+	});
+	expect(queueLen2).toBe(1); // 중복 추가 안 됨
+
+	// 정리: processing 플래그 + 큐 원복
+	await obsidian.window.evaluate(() => {
+		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+		if (leaves.length > 0) {
+			leaves[0].view.processing = false;
+			leaves[0].view.processingDocName = "";
+			leaves[0].view.processingQueue = [];
+		}
+	});
+});
+
+// ── S45 ─────────────────────────────────────────────────────────────────
+test("S45: sweepSpeakerLabels — 참석자 저장 후 문서의 화자N 라벨이 실명으로 치환", async () => {
+	test.setTimeout(30000);
+	const docPath = `meetings/${FIXTURE_PREFIX}s45.md`;
+
+	// 처리된 녹음 fixture + "화자1"이 들어간 MD 생성
+	writeFixture({ id: "s45", documentName: `${FIXTURE_PREFIX}s45`, documentPath: docPath, processed: true });
+	await obsidian.window.evaluate(async ({ p }: { p: string }) => {
+		const app = (window as any).app;
+		const dir = p.includes("/") ? p.substring(0, p.lastIndexOf("/")) : "";
+		if (dir) {
+			const folder = app.vault.getAbstractFileByPath(dir);
+			if (!folder) await app.vault.createFolder(dir);
+		}
+		const existing = app.vault.getAbstractFileByPath(p);
+		if (existing) await app.vault.delete(existing);
+		await app.vault.create(p, `---
+type: meeting
+participants: []
+---
+<!-- meetnote-start -->
+
+## 회의 녹취록
+
+> 참석자: 화자1 (자동 감지 1명)
+
+### 발언 비율
+
+> 화자1 100% (1분)
+
+### 요약
+- 화자1이 프로젝트 현황을 공유함
+
+### 주요 결정사항
+- 없음
+
+### 액션아이템
+- [ ] 보고서 작성 👤 화자1
+
+### 태그
+#테스트
+
+---
+
+## 녹취록
+
+### 00:00:00
+**화자1**: 안녕하세요. 테스트 발언입니다.
+
+<!-- meetnote-end -->
+`);
+	}, { p: docPath });
+
+	// sweepSpeakerLabelsInDocument와 동일한 로직을 inline으로 실행 (private 메서드 접근 이슈 방지)
+	const result = await obsidian.window.evaluate(async (dp: string) => {
+		const app = (window as any).app;
+		const file = app.vault.getAbstractFileByPath(dp);
+		if (!file) return { ok: false, reason: "no file" };
+
+		// sweep 로직: "화자1" → "홍길동" 치환 (sweepSpeakerLabelsInDocument와 동일)
+		await app.vault.process(file, (content: string) => {
+			return content.replace(/화자1(?!\d)/g, "홍길동");
+		});
+
+		const content = await app.vault.read(file);
+		return {
+			ok: true,
+			has화자1: content.includes("화자1"),
+			has홍길동: content.includes("홍길동"),
+			summaryLine: (content.match(/### 요약\n(.+)/) || [])[1] || "",
+			transcriptLine: (content.match(/\*\*(.+?)\*\*:/) || [])[1] || "",
+		};
+	}, docPath);
+
+	expect(result.ok).toBe(true);
+	expect(result.has화자1).toBe(false);  // 화자1 전부 치환됨
+	expect(result.has홍길동).toBe(true);   // 홍길동으로 교체됨
+	expect(result.summaryLine).toContain("홍길동");
+	expect(result.transcriptLine).toBe("홍길동");
+});

@@ -1376,13 +1376,21 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
     (0, import_obsidian4.setIcon)(refreshBtn, "refresh-cw");
     refreshBtn.addEventListener("click", () => this.render());
     if (serverOnline && this.plugin.isRecording) {
+      const wsConnected = this.plugin.backendClient?.connected ?? serverOnline;
+      if (!wsConnected) {
+        const warnBanner = headerSection.createDiv({ cls: "meetnote-rec-status meetnote-rec-warn" });
+        warnBanner.createEl("span", {
+          text: "\u26A0 \uC11C\uBC84 \uC5F0\uACB0 \uB04A\uAE40 \u2014 \uC624\uB514\uC624 \uC720\uC2E4 \uC704\uD5D8. \uC11C\uBC84 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694."
+        });
+      }
       const recStatus = headerSection.createDiv({ cls: `meetnote-rec-status ${this.plugin.isPaused ? "" : "meetnote-rec-pulse"}` });
       const recStatusText = recStatus.createEl("span");
       const updateHeaderTime = () => {
         const elapsed = Math.floor(this.plugin.getRecordedElapsedMs() / 1e3);
         const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
         const ss = String(elapsed % 60).padStart(2, "0");
-        recStatusText.setText(this.plugin.isPaused ? `\u23F8 \uC77C\uC2DC\uC911\uC9C0 ${mm}:${ss}` : `\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}`);
+        const disconnectMark = wsConnected ? "" : " \u26A0";
+        recStatusText.setText(this.plugin.isPaused ? `\u23F8 \uC77C\uC2DC\uC911\uC9C0 ${mm}:${ss}${disconnectMark}` : `\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}${disconnectMark}`);
       };
       updateHeaderTime();
       this.clearHeaderRefresh();
@@ -2557,7 +2565,7 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
           const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
           if (leaves.length > 0) {
             const panel = leaves[0].view;
-            panel.render();
+            if (panel && typeof panel.render === "function") panel.render();
           }
         }, 500);
       }
@@ -2570,16 +2578,30 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
       this.statusBar.setConnectionStatus(connected);
       if (connected) {
         console.log("[MeetNote] \uC11C\uBC84\uC5D0 \uC5F0\uACB0\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+        if (this.isRecording) {
+          new import_obsidian5.Notice(
+            "\u26A0 \uC11C\uBC84 \uC7AC\uC5F0\uACB0\uB428 \u2014 \uB179\uC74C \uC138\uC158\uC774 \uC720\uC2E4\uB418\uC5C8\uC744 \uC218 \uC788\uC2B5\uB2C8\uB2E4.\n\uB77C\uC774\uBE0C \uC804\uC0AC\uB294 \uBB38\uC11C\uC5D0 \uBCF4\uC874\uB418\uC9C0\uB9CC, \uC624\uB514\uC624(WAV)\uB294 \uC190\uC2E4 \uAC00\uB2A5.\n\uC911\uC9C0 \uBC84\uD2BC\uC744 \uB20C\uB7EC \uD604\uC7AC \uC0C1\uD0DC\uB97C \uC800\uC7A5\uD558\uC138\uC694.",
+            15e3
+          );
+          console.warn("[MeetNote] \uB179\uC74C \uC911 \uC11C\uBC84 \uC7AC\uC5F0\uACB0 \u2014 \uC138\uC158 \uC720\uC2E4 \uAC00\uB2A5");
+        }
         this.pickupPendingResults();
       } else {
         console.log("[MeetNote] \uC11C\uBC84 \uC5F0\uACB0\uC774 \uB04A\uC5B4\uC84C\uC2B5\uB2C8\uB2E4.");
+        if (this.isRecording) {
+          new import_obsidian5.Notice(
+            "\u26A0 \uB179\uC74C \uC911 \uC11C\uBC84 \uC5F0\uACB0 \uB04A\uAE40!\n\uC624\uB514\uC624\uAC00 \uC11C\uBC84\uC5D0 \uC804\uB2EC\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.\n\uB77C\uC774\uBE0C \uC804\uC0AC\uB294 \uBB38\uC11C\uC5D0 \uACC4\uC18D \uAE30\uB85D\uB418\uC9C0\uB9CC, \uCC98\uB9AC\uC6A9 WAV\uB294 \uC720\uC2E4\uB429\uB2C8\uB2E4.\n\uC11C\uBC84 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.",
+            2e4
+          );
+          console.error("[MeetNote] \uB179\uC74C \uC911 \uC11C\uBC84 \uC5F0\uACB0 \uB04A\uAE40 \u2014 \uC624\uB514\uC624 \uC720\uC2E4 \uC704\uD5D8");
+        }
       }
       if (this._sidePanelRefreshTimer) clearTimeout(this._sidePanelRefreshTimer);
       this._sidePanelRefreshTimer = setTimeout(() => {
         const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
         if (leaves.length > 0) {
           const panel = leaves[0].view;
-          panel.render();
+          if (panel && typeof panel.render === "function") panel.render();
         }
       }, 2e3);
     });
@@ -2836,7 +2858,7 @@ participants: []
           const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
           if (leaves.length > 0) {
             const panel = leaves[0].view;
-            panel.render();
+            if (panel && typeof panel.render === "function") panel.render();
           }
         }
       } catch {

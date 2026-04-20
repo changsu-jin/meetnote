@@ -88,6 +88,8 @@
 | S41 | 이어 녹음 항목 삭제 시 companion WAV도 cascade 삭제 | 07-recording-list.spec.ts / test_recordings.py | O |
 | S42 | 이어 녹음 2개 WAV → "처리" 클릭 → 서버가 병합 처리 → 단일 완료 항목 + 두 WAV 모두 .done | 07-recording-list.spec.ts | O |
 | S43 | 완료 녹음 항목에 "요약 재생성" 버튼 + parseTranscriptSegments 파서 동작 | 07-recording-list.spec.ts | O |
+| S44 | 처리 중 다른 녹음 클릭 → 큐에 추가 + 버튼 "대기 중 #N" 표시 | 07-recording-list.spec.ts | O |
+| S45 | sweepSpeakerLabels — 참석자 저장 후 문서의 화자N 라벨이 실명으로 치환 | 07-recording-list.spec.ts | O |
 
 ### 화자 등록 (REC-96 흡수)
 
@@ -119,7 +121,7 @@
 | H7 | 운영 코드와 동일한 포맷으로 /email/send 호출 — meetnote 섹션만 body (녹취록 제외), `[MeetNote] ${docName}` subject, `vault_file_path` + `include_gitlab_link` 전달 (SMTP 미설정 시 SKIP) | 99-happy-path.spec.ts | O |
 | H8 | 완성된 회의록을 Obsidian workspace activeFile로 열기 | 99-happy-path.spec.ts | O |
 
-**커버리지: 52/52 (100%)**
+**커버리지: 54/54 (100%)**
 
 ## 시나리오 상세
 

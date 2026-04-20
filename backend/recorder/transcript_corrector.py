@@ -7,12 +7,19 @@ by sending the raw transcript to Claude CLI or Ollama.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Ollama model selection — override via OLLAMA_MODEL env var.
+# Default: exaone3.5:7.8b-instruct-q4_K_M (LG AI Research, Korean-optimized)
+# Alternatives: qwen2.5:7b (multilingual), llama3.1:8b (English-focused)
+_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "exaone3.5:7.8b-instruct-q4_K_M")
 
 CORRECTION_PROMPT = """\
 당신은 음성 인식(STT) 후처리 교정 전문가입니다. 아래 텍스트는 음성 인식으로 생성된 회의 녹취록입니다.
@@ -72,33 +79,47 @@ def correct_transcript(
     transcript = "\n".join(lines)
     prompt = CORRECTION_PROMPT.format(transcript=transcript)
 
-    # Try Claude CLI
+    # Try Claude CLI (with retry + exponential backoff)
     if shutil.which("claude"):
-        try:
-            result = subprocess.run(
-                ["claude", "-p", prompt],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                corrected = result.stdout.strip()
-                logger.info("Transcript corrected via Claude CLI (%d chars).", len(corrected))
-                return CorrectionResult(corrected=corrected, success=True, engine="claude")
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.warning("Claude CLI correction failed: %s", exc)
+        for attempt in range(3):
+            try:
+                result = subprocess.run(
+                    ["claude", "-p", prompt],
+                    capture_output=True, text=True, timeout=timeout,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    corrected = result.stdout.strip()
+                    logger.info("Transcript corrected via Claude CLI (%d chars).", len(corrected))
+                    return CorrectionResult(corrected=corrected, success=True, engine="claude")
+                logger.warning("Claude CLI attempt %d/%d: empty response.", attempt + 1, 3)
+            except subprocess.TimeoutExpired:
+                logger.warning("Claude CLI attempt %d/%d: timeout.", attempt + 1, 3)
+            except OSError as exc:
+                logger.warning("Claude CLI attempt %d/%d: %s", attempt + 1, 3, exc)
+                break  # Binary not found — no point retrying
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1s, 2s backoff
 
-    # Try Ollama
+    # Try Ollama (with retry + exponential backoff)
     if shutil.which("ollama"):
-        try:
-            result = subprocess.run(
-                ["ollama", "run", "llama3.1:8b", prompt],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                corrected = result.stdout.strip()
-                logger.info("Transcript corrected via Ollama (%d chars).", len(corrected))
-                return CorrectionResult(corrected=corrected, success=True, engine="ollama")
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.warning("Ollama correction failed: %s", exc)
+        for attempt in range(3):
+            try:
+                result = subprocess.run(
+                    ["ollama", "run", _OLLAMA_MODEL, prompt],
+                    capture_output=True, text=True, timeout=timeout,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    corrected = result.stdout.strip()
+                    logger.info("Transcript corrected via Ollama (%d chars).", len(corrected))
+                    return CorrectionResult(corrected=corrected, success=True, engine="ollama")
+                logger.warning("Ollama attempt %d/%d: empty response.", attempt + 1, 3)
+            except subprocess.TimeoutExpired:
+                logger.warning("Ollama attempt %d/%d: timeout.", attempt + 1, 3)
+            except OSError as exc:
+                logger.warning("Ollama attempt %d/%d: %s", attempt + 1, 3, exc)
+                break
+            if attempt < 2:
+                time.sleep(2 ** attempt)
 
     logger.info("No LLM available for transcript correction — skipping.")
     return CorrectionResult(corrected=transcript, success=False, engine="none")

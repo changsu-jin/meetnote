@@ -45,6 +45,9 @@ export class MeetNoteSidePanel extends ItemView {
 	private refreshInterval: ReturnType<typeof setInterval> | null = null;
 	private headerRefreshInterval: ReturnType<typeof setInterval> | null = null;
 	private processing = false;
+	// 자동 처리 큐 — 현재 처리 중일 때 추가 클릭은 이 큐에 쌓이고,
+	// processRecording finally에서 다음 항목을 자동으로 꺼내 처리한다.
+	private processingQueue: PendingRecording[] = [];
 	private serverProcess: any = null;
 	private selectedWavPath: string = "";  // WAV path for speaker mapping context
 	private selectedDocName: string = "";  // Document name for display
@@ -166,13 +169,23 @@ export class MeetNoteSidePanel extends ItemView {
 		// #1: Recording elapsed time display — plugin의 단일 경과시간 소스 사용
 		// (일시중지 시간은 경과에 포함하지 않음 → 상태바와 항상 일치)
 		if (serverOnline && this.plugin.isRecording) {
+			// 녹음 중 + 서버 연결 끊김 → 경고 배너
+			const wsConnected = this.plugin.backendClient?.connected ?? serverOnline;
+			if (!wsConnected) {
+				const warnBanner = headerSection.createDiv({ cls: "meetnote-rec-status meetnote-rec-warn" });
+				warnBanner.createEl("span", {
+					text: "⚠ 서버 연결 끊김 — 오디오 유실 위험. 서버 상태를 확인하세요.",
+				});
+			}
 			const recStatus = headerSection.createDiv({ cls: `meetnote-rec-status ${this.plugin.isPaused ? "" : "meetnote-rec-pulse"}` });
 			const recStatusText = recStatus.createEl("span");
+			const wsConnectedForTimer = this.plugin.backendClient?.connected ?? serverOnline;
 			const updateHeaderTime = () => {
 				const elapsed = Math.floor(this.plugin.getRecordedElapsedMs() / 1000);
 				const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
 				const ss = String(elapsed % 60).padStart(2, "0");
-				recStatusText.setText(this.plugin.isPaused ? `⏸ 일시중지 ${mm}:${ss}` : `🔴 녹음 중 ${mm}:${ss}`);
+				const disconnectMark = wsConnectedForTimer ? "" : " ⚠";
+				recStatusText.setText(this.plugin.isPaused ? `⏸ 일시중지 ${mm}:${ss}${disconnectMark}` : `🔴 녹음 중 ${mm}:${ss}${disconnectMark}`);
 			};
 			updateHeaderTime();
 			// 1초마다 텍스트만 업데이트. 다음 render() 시 이전 타이머는 clearHeaderRefresh로 정리.
@@ -200,7 +213,10 @@ export class MeetNoteSidePanel extends ItemView {
 		// #5: Progress section right after header
 		if (this.processing) {
 			const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
-			const title = this.processingDocName ? `처리 중: ${this.processingDocName}` : "처리 중...";
+			const queueSuffix = this.processingQueue.length > 0 ? ` (+${this.processingQueue.length}건 대기)` : "";
+			const title = this.processingDocName
+				? `처리 중: ${this.processingDocName}${queueSuffix}`
+				: `처리 중...${queueSuffix}`;
 			progressSection.createEl("h4", { text: title });
 			const stageEl = progressSection.createEl("div", { text: "준비 중...", cls: "meetnote-progress-stage" });
 			const progressBar = progressSection.createDiv({ cls: "meetnote-progress" });
@@ -264,7 +280,14 @@ export class MeetNoteSidePanel extends ItemView {
 							setTimeout(() => this.render(), 1000);
 						});
 					}
-					const btn = btnGroup.createEl("button", { text: "처리", cls: "meetnote-process-btn" });
+					// 큐 위치에 따라 버튼 텍스트/상태 결정. 1번째 큐 = "대기 중 #1", 처리 중인 것은 "처리 중..."
+					const queueIdx = this.processingQueue.findIndex((q) => q.path === rec.path);
+					const isProcessingThis = this.processing && this.processingDocName === (rec.document_name || rec.filename);
+					let btnText = "처리";
+					if (isProcessingThis) btnText = "처리 중...";
+					else if (queueIdx >= 0) btnText = `대기 중 #${queueIdx + 1}`;
+					const btn = btnGroup.createEl("button", { text: btnText, cls: "meetnote-process-btn" });
+					if (isProcessingThis || queueIdx >= 0) btn.setAttribute("disabled", "true");
 					btn.addEventListener("click", () => this.processRecording(rec, btn));
 					const delBtn = btnGroup.createEl("button", { text: "삭제", cls: "meetnote-delete-btn" });
 					delBtn.addEventListener("click", () => {
@@ -516,9 +539,17 @@ export class MeetNoteSidePanel extends ItemView {
 								count++;
 							} catch { /* skip */ }
 						}
-						// Server handles meta + document + DB update atomically
-						if (count > 0) { new Notice(`${count}명 처리 완료!`); await this.updateDocumentParticipants(); await this.render(); }
-						else { new Notice("변경할 이름을 입력하세요."); }
+						if (count > 0) {
+							// 서버의 update_document_speaker는 meta speaker_map의 old_name을 기준으로
+							// 교체하는데, DB 매칭 결과로 meta에 이미 실명이 들어간 경우 old==new → skip되어
+							// 문서의 "화자N" 라벨이 그대로 남는 버그가 있다. 플러그인이 직접 sweep.
+							await this.sweepSpeakerLabelsInDocument(speakerInputs);
+							await this.updateDocumentParticipants();
+							new Notice(`${count}명 처리 완료!`);
+							await this.render();
+						} else {
+							new Notice("변경할 이름을 입력하세요.");
+						}
 					});
 				}
 
@@ -769,8 +800,18 @@ export class MeetNoteSidePanel extends ItemView {
 	}
 
 	private async processRecording(rec: PendingRecording, btn: HTMLElement): Promise<void> {
+		// 이미 큐에 있거나 현재 처리 중인 녹음이면 중복 추가 방지
+		if (this.processingQueue.some((q) => q.path === rec.path)) {
+			new Notice("이미 대기열에 있습니다.");
+			return;
+		}
 		if (this.processing) {
-			new Notice("다른 회의를 처리 중입니다. 완료 후 다시 시도해주세요.");
+			// 현재 처리 중이면 큐에 추가하고 UI 갱신 (버튼이 "대기 중 #N"으로 바뀜)
+			this.processingQueue.push(rec);
+			new Notice(
+				`대기열 추가: ${rec.document_name || rec.filename} (${this.processingQueue.length}번째)`,
+			);
+			await this.render();
 			return;
 		}
 
@@ -903,6 +944,12 @@ export class MeetNoteSidePanel extends ItemView {
 			this.processing = false;
 			this.processingDocName = "";
 			await this.render();
+			// 큐에 다음 항목 있으면 자동으로 시작 (render가 버튼을 다시 렌더했으므로
+			// btn 참조는 재사용 불가 — 임시 element로 호출하되 실제 UI는 render가 반영).
+			if (this.processingQueue.length > 0) {
+				const nextRec = this.processingQueue.shift()!;
+				void this.processRecording(nextRec, document.createElement("button"));
+			}
 		}
 	}
 
@@ -1168,6 +1215,41 @@ export class MeetNoteSidePanel extends ItemView {
 			.replace(/^ws(s?):\/\//, "http$1://")
 			.replace(/\/ws\/?$/, "")
 			.replace(/\/$/, "");
+	}
+
+	/**
+	 * Batch save 후, 문서에 남아있는 "화자N" 라벨을 등록된 실명으로 일괄 치환.
+	 *
+	 * 서버의 update_document_speaker는 meta speaker_map 기준으로 old/new를 판단하는데,
+	 * DB 매칭 결과로 meta에 이미 실명이 들어간 경우 old==new → skip되어 문서의
+	 * "화자N"이 그대로 남는다. 이를 플러그인에서 직접 보정.
+	 */
+	private async sweepSpeakerLabelsInDocument(
+		speakerInputs: Array<{ label: string; currentName: string; nameInput: HTMLInputElement }>,
+	): Promise<void> {
+		const docPath = await this.getSelectedDocPath();
+		if (!docPath) return;
+		const file = this.app.vault.getAbstractFileByPath(docPath);
+		if (!file) return;
+
+		try {
+			await this.app.vault.process(file as TFile, (content) => {
+				let updated = content;
+				for (const { currentName, nameInput } of speakerInputs) {
+					const newName = nameInput.value.trim();
+					if (!newName || newName === currentName) continue;
+					// currentName이 "화자N"이면: 문서에서 해당 패턴 전체 치환
+					// currentName이 실명이면: 실명 → 새 실명 치환 (reassign 케이스)
+					const escaped = currentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+					// 화자N(?!\\d) — 화자10이 화자1 매칭에 걸리지 않도록
+					const re = new RegExp(escaped + "(?!\\d)", "g");
+					updated = updated.replace(re, newName);
+				}
+				return updated;
+			});
+		} catch (err) {
+			console.error("[MeetNote] sweepSpeakerLabelsInDocument failed:", err);
+		}
 	}
 
 	/** Update document's participants list from meta (auto + manual) */

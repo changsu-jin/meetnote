@@ -23,7 +23,8 @@ export default class MeetNotePlugin extends Plugin {
 	readonly applySummaryToVault = applySummaryToVault;
 	readonly summarize = summarize;
 
-	private backendClient: BackendClient;
+	// side-panel에서 연결 상태(backendClient.connected)를 읽어 녹음 중 경고 표시에 사용
+	backendClient: BackendClient;
 	private writer: MeetingWriter;
 	private audioCapture: AudioCapture | null = null;
 	statusBar: RecorderStatusBar;
@@ -134,7 +135,7 @@ export default class MeetNotePlugin extends Plugin {
 						const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 						if (leaves.length > 0) {
 							const panel = leaves[0].view as MeetNoteSidePanel;
-							panel.render();
+							if (panel && typeof panel.render === "function") panel.render();
 						}
 					}, 500);
 				}
@@ -150,9 +151,32 @@ export default class MeetNotePlugin extends Plugin {
 				this.statusBar.setConnectionStatus(connected);
 				if (connected) {
 					console.log("[MeetNote] 서버에 연결되었습니다.");
+					if (this.isRecording) {
+						// 녹음 중 재연결 — 서버가 재시작됐으면 이전 녹음 세션이 소실됨.
+						// 라이브 전사는 MD에 남아있지만 WAV 오디오는 복구 불가.
+						new Notice(
+							"⚠ 서버 재연결됨 — 녹음 세션이 유실되었을 수 있습니다.\n" +
+							"라이브 전사는 문서에 보존되지만, 오디오(WAV)는 손실 가능.\n" +
+							"중지 버튼을 눌러 현재 상태를 저장하세요.",
+							15000,
+						);
+						console.warn("[MeetNote] 녹음 중 서버 재연결 — 세션 유실 가능");
+					}
 					this.pickupPendingResults();
 				} else {
 					console.log("[MeetNote] 서버 연결이 끊어졌습니다.");
+					if (this.isRecording) {
+						// 녹음 중 연결 끊김 — 즉시 경고.
+						// 오디오 청크가 서버에 전달되지 않으므로 WAV 저장 불가.
+						new Notice(
+							"⚠ 녹음 중 서버 연결 끊김!\n" +
+							"오디오가 서버에 전달되지 않습니다.\n" +
+							"라이브 전사는 문서에 계속 기록되지만, 처리용 WAV는 유실됩니다.\n" +
+							"서버 상태를 확인하세요.",
+							20000,
+						);
+						console.error("[MeetNote] 녹음 중 서버 연결 끊김 — 오디오 유실 위험");
+					}
 				}
 				// Debounced side panel refresh (prevent flicker on reconnect loops)
 				if (this._sidePanelRefreshTimer) clearTimeout(this._sidePanelRefreshTimer);
@@ -160,7 +184,7 @@ export default class MeetNotePlugin extends Plugin {
 					const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 					if (leaves.length > 0) {
 						const panel = leaves[0].view as MeetNoteSidePanel;
-						panel.render();
+						if (panel && typeof panel.render === "function") panel.render();
 					}
 				}, 2000);
 			});
@@ -471,7 +495,7 @@ export default class MeetNotePlugin extends Plugin {
 					const leaves = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 					if (leaves.length > 0) {
 						const panel = leaves[0].view as MeetNoteSidePanel;
-						panel.render();
+						if (panel && typeof panel.render === "function") panel.render();
 					}
 				}
 			} catch { /* server might be reconnecting */ }

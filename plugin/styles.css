@@ -428,6 +428,13 @@
 	50% { opacity: 1; }
 }
 
+.meetnote-rec-warn {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	animation: meetnote-rec-blink 0.8s ease-in-out infinite;
+	font-weight: 600;
+}
+
 /* ── Offline banner ───────────────────────────────────────── */
 
 .meetnote-offline-banner {
