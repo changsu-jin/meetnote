@@ -231,10 +231,13 @@ class Transcriber:
             compression_ratio_threshold=2.4,
             no_speech_threshold=0.6,
             hallucination_silence_threshold=0.5,
-            condition_on_previous_text=True,
+            # condition_on_previous_text=False: 이전 토큰이 다음 디코딩에 전파되어
+            # 환각이 눈덩이처럼 불어나는 현상을 차단 (Whisper 공식 권장 토글).
+            condition_on_previous_text=False,
         )
 
-        return self._parse_mlx_result(result, time_offset)
+        segments = self._parse_mlx_result(result, time_offset)
+        return self._filter_repeated_hallucinations(segments)
 
     def _mlx_transcribe_file(self, file_path: Path) -> list[TranscriptionSegment]:
         """Transcribe a WAV file using MLX Whisper."""
@@ -317,7 +320,7 @@ class Transcriber:
                     text=seg.text.strip(),
                 )
             )
-        return results
+        return self._filter_repeated_hallucinations(results)
 
     def _fw_transcribe_file(self, file_path: Path) -> list[TranscriptionSegment]:
         """Transcribe a WAV file using faster-whisper."""
@@ -348,8 +351,46 @@ class Transcriber:
                 )
             )
 
+        results = self._filter_repeated_hallucinations(results)
         logger.info("Transcribed %d segments from file.", len(results))
         return results
+
+    # ------------------------------------------------------------------
+    # Hallucination filtering
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _filter_repeated_hallucinations(
+        segments: list[TranscriptionSegment],
+    ) -> list[TranscriptionSegment]:
+        """동일 텍스트가 연속해서 반복되는 환각 패턴을 압축한다.
+
+        Whisper가 무음/저음량 입력에서 훈련 데이터 최빈 문구("감사합니다.", "시청해주셔서 감사합니다" 등)
+        를 30초 청크마다 동일하게 생성하는 케이스를 방어한다. 세 번째 이상의 연속 동일 텍스트는
+        버리고, 앞의 두 개만 남겨 사용자가 반복 여부를 확인할 수 있게 한다.
+        """
+        if len(segments) < 3:
+            return segments
+
+        filtered: list[TranscriptionSegment] = []
+        repeat_count = 0
+        prev_text = ""
+        dropped = 0
+        for seg in segments:
+            normalized = seg.text.strip()
+            if normalized and normalized == prev_text:
+                repeat_count += 1
+                if repeat_count >= 2:  # 이미 2회 연속 → 3번째부터는 drop
+                    dropped += 1
+                    continue
+            else:
+                repeat_count = 0
+            prev_text = normalized
+            filtered.append(seg)
+
+        if dropped > 0:
+            logger.info("Dropped %d repeated hallucination segments.", dropped)
+        return filtered
 
     # ------------------------------------------------------------------
     # Helpers

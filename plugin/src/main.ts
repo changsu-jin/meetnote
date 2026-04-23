@@ -431,6 +431,61 @@ export default class MeetNotePlugin extends Plugin {
 				new Notice(`오디오 캡처 오류: ${message}`);
 				console.error("[MeetNote] Audio capture error:", message);
 			},
+			onTrackEnded: () => {
+				// 일부 환경(Electron, pause/resume 전이 등)에서 `track.onended`가
+				// spurious하게 발동한 뒤 track이 곧바로 다시 live로 돌아오는 케이스가
+				// 관측됨 (Playwright 02-recording-flow에서 재현). 1.5초 grace 후
+				// 실제로 트랙이 죽었는지 재확인하고, 그때까지 회복 안 되면 자동 정지.
+				console.warn("[MeetNote] onTrackEnded — re-checking after grace period");
+				setTimeout(() => {
+					if (!this.isRecording) return;
+					if (this.audioCapture?.isTrackAlive()) {
+						console.log("[MeetNote] Track recovered after spurious onended");
+						return;
+					}
+					new Notice(
+						"⚠ 마이크 입력이 중단되었습니다 (장치 분리/권한 해제).\n" +
+						"녹음을 자동으로 정지합니다. 시스템 설정에서 마이크 권한을 확인하세요.",
+						20000,
+					);
+					console.error("[MeetNote] Microphone track ended — auto-stopping recording");
+					if (this.isRecording) this.stopRecording();
+				}, 1500);
+			},
+			onTrackMuted: () => {
+				// OS나 다른 앱이 마이크를 일시적으로 음소거. 해제될 수 있으니 정지는 하지 않음.
+				new Notice(
+					"⚠ 마이크가 일시 음소거되었습니다. 입력이 복귀할 때까지 녹음 내용이 비어있습니다.",
+					10000,
+				);
+				console.warn("[MeetNote] Microphone muted");
+			},
+			onTrackUnmuted: () => {
+				new Notice("마이크 입력이 복귀했습니다.");
+			},
+			onSilence: (consecutive) => {
+				// 연속 무음 30초 이상. 마이크는 살아있으나 실제 소리가 안 들어옴.
+				// 시작 직후 30초 안에 감지되면 abort.
+				const elapsedMs = this.getRecordedElapsedMs();
+				if (elapsedMs < 35_000) {
+					new Notice(
+						"⚠ 녹음이 시작됐지만 마이크 입력이 감지되지 않습니다 (30초간 무음).\n" +
+						"녹음을 자동으로 정지합니다. 마이크 장치와 권한을 확인하세요.",
+						20000,
+					);
+					console.error("[MeetNote] Silent from start — auto-stopping recording");
+					if (this.isRecording) this.stopRecording();
+					return;
+				}
+				// 녹음 중 연속 무음 경고 — 반복적으로 재알림하되 중단하지 않음.
+				const seconds = consecutive * 5;
+				new Notice(
+					`⚠ 마이크 입력이 ${seconds}초째 감지되지 않습니다.\n` +
+					"마이크 연결을 확인하세요. (계속 무음이면 녹음은 무음 WAV로 저장됩니다)",
+					15000,
+				);
+				console.warn(`[MeetNote] Silent for ${seconds}s (${consecutive} consecutive chunks)`);
+			},
 		});
 
 		const deviceId = this.settings.audioDevice || undefined;

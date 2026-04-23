@@ -97,6 +97,21 @@
 |----|---------|-----------|:------:|
 | S39 | 화자 등록 시 unregistered_speakers 카운트 0으로 갱신 | test_recordings.py | O |
 
+### 무음 녹음 방어 (ADR-006)
+
+| ID | 시나리오 | 테스트 파일 | 자동화 |
+|----|---------|-----------|:------:|
+| S46 | 무음 WAV 정지 시 meta.json에 silent=true 기록 | test_recordings.py | O |
+| S47 | silent meta가 있는 WAV는 process-file에서 STT 건너뛰고 실패 사유만 반환 | test_recordings.py | O |
+| S48 | Whisper 결과에서 동일 텍스트 3회 이상 연속 반복은 앞 2개만 남기고 drop | test_transcriber_filter.py | O |
+| S49 | onTrackEnded 발동 후 grace-period(1.5s) 재확인에서 track이 live면 녹음 유지 | 09-silent-defense.spec.ts | O |
+| S50 | silent process-file 응답에 silent:true + SYSTEM 화자 실패 세그먼트 포함 | test_recordings.py | O |
+| S51 | 이어 녹음 중 일부가 silent이면 병합 대상에서 제외, 정상 WAV만 처리 | test_recordings.py | O |
+| S52 | peak 경계값(int16 32/33/34)에서 silent 판정 정확성 | test_recordings.py | O |
+| S53 | AudioCapture 시작 시 track.readyState !== "live"이면 onError + cleanup | 09-silent-defense.spec.ts | O |
+| S54 | onTrackMuted는 녹음 유지 (자동 정지 X) — 일시 음소거는 복귀 가능 | 09-silent-defense.spec.ts | O |
+| S55 | pause 중에는 silentChunkCount 증가 없음, resume 후 다시 카운트 재개 | 09-silent-defense.spec.ts | O |
+
 ### 최종 해피 패스 (real audio full pipeline — 운영 흐름 재현)
 
 > **의도**: 단위 테스트가 아니라, 한 명의 실제 운영 사용자가 전체 사이클
@@ -121,7 +136,7 @@
 | H7 | 운영 코드와 동일한 포맷으로 /email/send 호출 — meetnote 섹션만 body (녹취록 제외), `[MeetNote] ${docName}` subject, `vault_file_path` + `include_gitlab_link` 전달 (SMTP 미설정 시 SKIP) | 99-happy-path.spec.ts | O |
 | H8 | 완성된 회의록을 Obsidian workspace activeFile로 열기 | 99-happy-path.spec.ts | O |
 
-**커버리지: 54/54 (100%)**
+**커버리지: 64/64 (100%)**
 
 ## 시나리오 상세
 
@@ -229,6 +244,46 @@
 ### S39: 화자 등록 후 unregistered count 0
 **전제**: meta.speaker_map = {화자1: {name: 화자A, email: ...}, 화자2: {...}}
 **검증**: GET /recordings/all 응답의 unregistered_speakers == 0
+
+### S46: 무음 WAV 정지 시 silent 플래그 기록 (ADR-006)
+**전제**: WebSocket start → 무음 PCM 청크 전송 → stop
+**검증**: 생성된 meta.json에 `silent: true`, `peak_int16` 기록
+
+### S47: silent 녹음은 STT 건너뜀 (ADR-006)
+**전제**: meta.json에 `silent: true` 설정된 WAV 존재
+**검증**: `/process-file` 응답이 `silent: true`, segments는 실패 사유 1개만, .done 마커 생성, transcriber.transcribe_file 호출 0회
+
+### S48: 환각 반복 세그먼트 필터 (ADR-006)
+**전제**: TranscriptionSegment 28개 전부 text="감사합니다." (서로 다른 timestamp)
+**검증**: `Transcriber._filter_repeated_hallucinations` 반환 길이 == 2
+
+### S49: onTrackEnded grace-period 재확인 (ADR-006)
+**전제**: 녹음 시작 후 정상 track(live)인 상태에서 `callbacks.onTrackEnded()` 수동 호출
+**검증**: 호출 후 2초 대기 → `plugin.isRecording === true` (spurious 이벤트는 무시되어야 함). pause/resume 전이 중 발동한 spurious onended로 인한 오정지 회귀 방지.
+
+### S50: silent process-file 응답 형식 (ADR-006)
+**전제**: meta.silent=true인 WAV에 process-file 호출
+**검증**: 응답 JSON에 `silent: true`, `segments_data[0].speaker === "SYSTEM"`, `segments_data[0].text`에 "녹음 실패" 포함
+
+### S51: 이어 녹음 + silent 병합 제외 (ADR-006)
+**전제**: 같은 document_path를 공유하는 WAV 2개 중 첫 번째는 silent=true, 두 번째는 정상
+**검증**: `_find_related_recordings`가 두 번째 WAV만 반환 (silent는 제외). 정상 WAV에 대한 process-file이 silent 구간 없이 처리.
+
+### S52: peak 경계값 silent 판정 (ADR-006)
+**전제**: PCM peak = 32, 33, 34인 세 녹음을 stop
+**검증**: peak=32 → silent=true, peak=33/34 → silent 필드 없음 (또는 false). threshold는 strict `< 33`.
+
+### S53: readyState 가드 (ADR-006)
+**전제**: `navigator.mediaDevices.getUserMedia`를 오버라이드하여 첫 track의 readyState를 "ended"로 만드는 stream 반환
+**검증**: AudioCapture.start() 호출 → `onError("마이크가 준비되지 않았습니다...")`, `_isCapturing === false`, stream cleanup
+
+### S54: onTrackMuted는 녹음 유지 (ADR-006)
+**전제**: 녹음 시작 → `callbacks.onTrackMuted()` 수동 호출
+**검증**: 호출 후 2초 대기 → `plugin.isRecording === true`, Notice 텍스트에 "일시 음소거" 포함 (자동 정지 X)
+
+### S55: pause 중 silentChunkCount 동결 (ADR-006)
+**전제**: 녹음 시작 → 몇 초 후 pause → 일정 시간 대기
+**검증**: pause 전후의 `audioCapture.consecutiveSilentChunks` 값 변화 없음 (pause 중 onaudioprocess skip). resume 후 새 청크 유입 시 다시 증가.
 
 ---
 

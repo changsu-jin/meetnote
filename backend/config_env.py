@@ -46,7 +46,7 @@ class WhisperConfig:
     language: str = "ko"
     device: str = "auto"
     compute_type: str = "int8"
-    initial_prompt: str = "회의, 프로젝트, 스프린트, API, 배포, 리뷰, QA, 일정, 담당자"
+    initial_prompt: str = "회의, 프로젝트, 스프린트, 배포, 일정, 담당자"
 
 
 @dataclass(frozen=True)
@@ -125,7 +125,7 @@ def load_config() -> AppConfig:
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
             initial_prompt=os.environ.get(
                 "WHISPER_INITIAL_PROMPT",
-                "회의, 프로젝트, 스프린트, API, 배포, 리뷰, QA, 일정, 담당자",
+                "회의, 프로젝트, 스프린트, 배포, 일정, 담당자",
             ),
         ),
         diarization=DiarizationConfig(

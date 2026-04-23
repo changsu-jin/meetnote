@@ -14,7 +14,7 @@ whisper:
   language: "ko"
   device: "cpu"  # cpu 또는 cuda
   compute_type: "int8"  # int8, float16, float32
-  initial_prompt: "회의, 프로젝트, 스프린트, API, 배포, 리뷰, QA, 일정, 담당자"  # 도메인 키워드 힌트 (전사 정확도 향상)
+  initial_prompt: "회의, 프로젝트, 스프린트, 배포, 일정, 담당자"  # 도메인 키워드 힌트 (전사 정확도 향상). 환각 반복 방지를 위해 "Q/A/QA" 등 단일 문자 토큰은 포함하지 않음
 
 diarization:
   huggingface_token: ""  # .env 파일 또는 환경변수 HUGGINGFACE_TOKEN으로 설정

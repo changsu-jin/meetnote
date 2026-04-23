@@ -334,7 +334,7 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# ── [3/4] Playwright E2E (01~08, happy path 제외) ────────────
+# ── [3/4] Playwright E2E (01~09, happy path 제외) ────────────
 section "[3/4] Playwright E2E 테스트"
 cd "$PLUGIN"
 
@@ -353,15 +353,16 @@ npx playwright test --config tests/playwright.config.ts \
     tests/e2e/06-participants.spec.ts \
     tests/e2e/07-recording-list.spec.ts \
     tests/e2e/08-summary-rendering.spec.ts \
+    tests/e2e/09-silent-defense.spec.ts \
     > /tmp/meetnote-test-e2e.log 2>&1
 E2E_EXIT=$?
 kill $TAIL_PID 2>/dev/null; wait $TAIL_PID 2>/dev/null
 if [ $E2E_EXIT -eq 0 ]; then
     E2E_RESULT=$(grep -E "[0-9]+ passed" /tmp/meetnote-test-e2e.log | tail -1)
-    step "playwright (01~08)" ok "$E2E_RESULT"
+    step "playwright (01~09)" ok "$E2E_RESULT"
     PASS=$((PASS + 1))
 else
-    step "playwright (01~08)" fail
+    step "playwright (01~09)" fail
     grep -E "✘|failed|Error" /tmp/meetnote-test-e2e.log | head -10
     FAIL=$((FAIL + 1))
 fi
@@ -635,6 +636,37 @@ REPORTEOF
 
 echo "  리포트 저장: $REPORT_FILE"
 echo ""
+
+# ── 수동 체크리스트 (자동화 불가 영역) ─────────────────────────────
+# 실제 하드웨어/OS 상태가 필요해 Playwright로 검증하기 어려운 항목을
+# 사용자가 주기적으로 수동 확인할 수 있도록 나열. 리포트에도 기록.
+section "수동 체크리스트 (실제 마이크/OS 상태 필요)"
+cat <<'MANUAL'
+  아래 항목은 자동화가 어려워 주기적 실사용 검증이 필요합니다.
+  증상 재현 시 .internal/decisions/ADR-006-silent-recording-defense.md 참조.
+
+  [ ] 1. 마이크 권한 해제 후 녹음 시작 → 30초 내 자동 정지 + Notice
+         (시스템 설정 → 개인정보 → 마이크에서 Obsidian 권한 off → 녹음)
+  [ ] 2. AirPods/Bluetooth 마이크 분리 중 녹음 → grace(1.5s) 후 자동 정지
+         (녹음 중 AirPods 전원 off 또는 연결 해제)
+  [ ] 3. 슬립/웨이크 직후 첫 녹음 → 무음이면 30초 내 자동 정지
+         (2026-04-21 증상 재현 검증)
+  [ ] 4. 조용한 회의실(배경 노이즈 낮음) → false-positive 없이 정상 녹음
+         (peak threshold int16 33 경계의 실제 동작 확인)
+  [ ] 5. 증상 재발 시 복구: sudo killall coreaudiod → Obsidian 재시작
+         (맥북 재부팅 전 1차 조치)
+
+MANUAL
+cat >> "$REPORT_FILE" << 'REPORTEOF'
+
+## 수동 체크리스트 (실제 마이크/OS 상태 필요)
+
+- [ ] 1. 마이크 권한 해제 후 녹음 시작 → 30초 내 자동 정지 + Notice
+- [ ] 2. AirPods/Bluetooth 마이크 분리 중 녹음 → grace(1.5s) 후 자동 정지
+- [ ] 3. 슬립/웨이크 직후 첫 녹음 → 무음이면 30초 내 자동 정지 (2026-04-21 증상 재현)
+- [ ] 4. 조용한 회의실(배경 노이즈 낮음) → false-positive 없이 정상 녹음
+- [ ] 5. 증상 재발 시 복구: `sudo killall coreaudiod` → Obsidian 재시작
+REPORTEOF
 
 if [ $FAIL -eq 0 ] && [ $HAPPY_FAILED -eq 0 ]; then
     echo -e "${GREEN}✓ 전체 통과${NC}"

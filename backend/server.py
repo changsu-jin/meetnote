@@ -794,6 +794,80 @@ async def mark_results_written(filename: str):
     return {"ok": True}
 
 
+async def _handle_silent_recording(
+    wav_path: str, vault_file_path: str, meta: dict
+) -> dict:
+    """무음으로 판정된 녹음은 STT/diarization을 건너뛰고 실패 사유만 기록한다.
+
+    Whisper가 무음 WAV에서 "감사합니다" 등 훈련 데이터 최빈 문구를 환각으로 반복 출력하는
+    문제를 원천 차단한다. 문서에는 명시적 실패 안내를 남기고, .done 마커를 찍어
+    대기 큐에서 제거한다.
+    """
+    logger.warning("Skipping silent recording: %s (peak=%s)", wav_path, meta.get("peak_int16", 0))
+
+    failure_segments: list[dict] = [
+        {
+            "timestamp": 0.0,
+            "speaker": "SYSTEM",
+            "text": "(녹음 실패 — 마이크 입력이 감지되지 않았습니다. 시스템 마이크 권한과 장치 연결을 확인한 후 다시 녹음해주세요.)",
+        }
+    ]
+    speaking_stats: list[dict] = []
+    speaker_map: dict[str, str] = {}
+
+    # 세션에 연결된 WS가 있으면 final 메시지를 보내 플러그인 UI가 다음 단계로 진행되도록.
+    ws = None
+    for s in state.sessions.values():
+        ws = s.ws
+        break
+    if ws is not None:
+        await ws_send(ws, {
+            "type": "final",
+            "segments": failure_segments,
+            "speaker_map": speaker_map,
+            "speaking_stats": speaking_stats,
+            "silent": True,
+        })
+
+    if vault_file_path:
+        try:
+            _write_result_to_vault(vault_file_path, failure_segments, speaker_map, speaking_stats)
+        except Exception as exc:
+            logger.warning("Silent recording vault write failed: %s", exc)
+
+    # meta.json에 processing_results 저장 (오프라인 pickup 대비)
+    import json as _json_s
+    meta_path = Path(wav_path).with_suffix(".meta.json")
+    try:
+        meta_now = _json_s.loads(meta_path.read_text()) if meta_path.exists() else {}
+        meta_now["processing_results"] = {
+            "segments_data": failure_segments,
+            "speaking_stats": speaking_stats,
+            "speaker_map": speaker_map,
+            "processed_at": __import__("datetime").datetime.now().isoformat(),
+            "silent": True,
+        }
+        if vault_file_path:
+            meta_now["vault_file_path"] = vault_file_path
+        meta_path.write_text(_json_s.dumps(meta_now, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning("Failed to save silent meta: %s", exc)
+
+    # .done 마커 — 대기 큐에서 제거
+    done_path = Path(wav_path).with_suffix(".done")
+    done_path.write_text(f"silent, skipped at {__import__('datetime').datetime.now().isoformat()}")
+
+    return {
+        "ok": True,
+        "silent": True,
+        "segments": 1,
+        "segments_data": failure_segments,
+        "speaking_stats": speaking_stats,
+        "speaker_map": speaker_map,
+        "message": "Silent recording — skipped transcription.",
+    }
+
+
 def _find_related_recordings(wav_path: str, skip_done: bool = True) -> list[Path]:
     """Find all WAV files linked to the same document_path (for 이어 녹음 merge/cascade).
 
@@ -826,8 +900,15 @@ def _find_related_recordings(wav_path: str, skip_done: bool = True) -> list[Path
             continue
         try:
             fm = _json.loads(m.read_text())
-            if fm.get("document_path") == doc_path:
-                related.append(f)
+            if fm.get("document_path") != doc_path:
+                continue
+            # Silent WAV는 병합 대상에서 제외 — 이어 녹음 중 일부가 무음으로 저장된 경우,
+            # 병합하여 처리하면 무음 구간에서 Whisper 환각이 발생해 정상 WAV의 결과를
+            # 오염시킴. silent 플래그가 있는 WAV는 skip하되, 대상 WAV 자체가 silent이면
+            # 그대로 반환(상위 호출자가 silent guard로 처리).
+            if fm.get("silent") and f != target_path:
+                continue
+            related.append(f)
         except Exception:
             continue
 
@@ -869,6 +950,18 @@ async def process_file(req: ProcessFileRequest):
     wav_path = req.file_path
     if not Path(wav_path).exists():
         return {"ok": False, "message": f"File not found: {wav_path}"}
+
+    # Silent recording guard — handle_stop에서 무음으로 판정된 녹음은 전사/분리를 건너뛰고
+    # 빈 결과 + 실패 사유만 반환한다. Whisper 환각("감사합니다" 반복)을 문서에 찍지 않음.
+    import json as _json_silent
+    _meta_path_silent = Path(wav_path).with_suffix(".meta.json")
+    if _meta_path_silent.exists():
+        try:
+            _meta_silent = _json_silent.loads(_meta_path_silent.read_text())
+        except Exception:
+            _meta_silent = {}
+        if _meta_silent.get("silent"):
+            return await _handle_silent_recording(wav_path, req.vault_file_path, _meta_silent)
 
     # Find related recordings (이어 녹음) and merge if needed
     related_wavs = _find_related_recordings(wav_path)
@@ -1237,14 +1330,31 @@ async def handle_stop(ws: WebSocket):
         session.reset()
         return
 
+    # Silent WAV detection — 완전 무음(마이크 입력 실패)은 처리 파이프라인에서
+    # Whisper 환각("감사합니다" 반복 등)을 유발하므로 플래그를 기록해 downstream에서 skip한다.
+    # peak/rms는 int16 PCM을 float로 변환하지 않고 그대로 계산 (메모리 절약).
+    pcm_int16 = np.frombuffer(bytes(session.audio_buffer), dtype=np.int16)
+    audio_peak_int16 = int(np.max(np.abs(pcm_int16))) if pcm_int16.size else 0
+    # int16 최대값 32768 기준 normalized peak. 0.001 ≈ int16 33 — 배경 잡음보다 한참 아래.
+    SILENT_PEAK_THRESHOLD = 33  # int16 units
+    is_silent = audio_peak_int16 < SILENT_PEAK_THRESHOLD
+
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     user_slug = session._user_id.split("@")[0].replace(".", "_") if session._user_id else "unknown"
     wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
     await asyncio.to_thread(_save_pcm_as_wav, bytes(session.audio_buffer), wav_path)
 
-    logger.info("Recording saved to %s (%.1f MB)",
-                wav_path, len(session.audio_buffer) / 1024 / 1024)
+    logger.info("Recording saved to %s (%.1f MB, peak=%d%s)",
+                wav_path, len(session.audio_buffer) / 1024 / 1024,
+                audio_peak_int16, " — SILENT" if is_silent else "")
+
+    if is_silent:
+        logger.warning("Silent recording detected: %s — will skip transcription", wav_path)
+        await ws_send(ws, {
+            "type": "warning",
+            "message": "마이크 입력이 감지되지 않아 녹음이 무음으로 저장되었습니다. 처리 단계에서 건너뜁니다.",
+        })
 
     if state.crypto:
         state.crypto.audit.log("recording_stopped", {"file": wav_path, "user_id": session._user_id})
@@ -1260,6 +1370,9 @@ async def handle_stop(ws: WebSocket):
     }
     if session._continue_from:
         meta["continued_from"] = session._continue_from
+    if is_silent:
+        meta["silent"] = True
+        meta["peak_int16"] = audio_peak_int16
     meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Queue mode: save WAV only, skip post-processing

@@ -7,6 +7,24 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
+## [0.3.5] — 2026-04-21
+
+### Added
+- 무음 녹음 다층 방어 [ADR-006] — 마이크 실패로 인한 "감사합니다" 반복 환각이 문서에 도배되는 문제를 원천 차단
+  - 플러그인 `AudioCapture` — MediaStreamTrack onended/onmute/onunmute 감시, readyState 검증, 청크 RMS 기반 연속 무음 감지 (30초 간격 콜백)
+  - 플러그인 `main.ts` — 시작 직후 30초 내 무음이면 자동 정지, 장치 분리 시 자동 정지, 중간 무음은 경고 Notice
+  - 서버 `handle_stop` — PCM buffer peak 검사, 임계치 미만이면 meta.json에 `silent=true` + `peak_int16` 기록
+  - 서버 `/process-file` — silent 플래그 감지 시 STT/diarization 건너뛰고 실패 사유만 반환, `.done` 마커로 대기 큐 제거
+- 이어 녹음에서 silent WAV는 `_find_related_recordings`에서 병합 대상 제외 (정상 WAV 결과 오염 방지)
+- 테스트: S46~S55 추가 (`backend/tests/test_recordings.py`, `backend/tests/test_transcriber_filter.py`, `plugin/tests/e2e/09-silent-defense.spec.ts`)
+- `run-tests.sh` 완료 시 수동 체크리스트 5개 출력 (자동화 어려운 실제 하드웨어 시나리오)
+
+### Changed
+- Whisper 환각 억제 [ADR-006]
+  - `initial_prompt`에서 "QA", "API", "리뷰" 단일/축약 토큰 제거 → 긴 한국어 도메인 어휘만 유지 ("Q" 반복 환각 원인 차단)
+  - MLX 경로 `condition_on_previous_text=True → False` (환각 눈덩이 전파 차단)
+  - 전사 결과 후처리에서 동일 텍스트 3회 이상 연속 반복 시 세 번째부터 drop (`_filter_repeated_hallucinations`)
+
 ## [0.3.0] — 2026-04-12 (Phase 3)
 
 ### Added

@@ -355,6 +355,8 @@ var import_obsidian = require("obsidian");
 // src/audio-capture.ts
 var CHUNK_DURATION_SECONDS = 5;
 var TARGET_SAMPLE_RATE = 16e3;
+var SILENCE_RMS_THRESHOLD = 1e-3;
+var SILENCE_CHUNK_COUNT_WARN = 6;
 var AudioCapture = class {
   constructor(callbacks) {
     this.stream = null;
@@ -365,6 +367,7 @@ var AudioCapture = class {
     this.samplesCollected = 0;
     this._isCapturing = false;
     this._isPaused = false;
+    this.silentChunkCount = 0;
     this.callbacks = callbacks;
   }
   get isCapturing() {
@@ -372,6 +375,20 @@ var AudioCapture = class {
   }
   get isPaused() {
     return this._isPaused;
+  }
+  /** 연속 무음 청크 수. 테스트/진단용으로 노출. */
+  get consecutiveSilentChunks() {
+    return this.silentChunkCount;
+  }
+  /**
+   * 현재 트랙이 실제로 살아있는지 재확인한다.
+   * 일부 환경(Electron, pause/resume 전이 등)에서 `track.onended`가
+   * spurious하게 발동되는 경우가 있어, 콜백을 자동 정지로 연결하기 전에
+   * grace period 후 이 메서드로 재확인한다.
+   */
+  isTrackAlive() {
+    const track = this.stream?.getAudioTracks?.()[0];
+    return !!track && track.readyState === "live" && this.stream?.active !== false;
   }
   pause() {
     if (this._isCapturing && !this._isPaused) {
@@ -400,8 +417,31 @@ var AudioCapture = class {
         }
       };
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = this.stream.getAudioTracks()[0];
+      if (!track) {
+        this.callbacks.onError("\uB9C8\uC774\uD06C \uD2B8\uB799\uC744 \uAC00\uC838\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        this.cleanup();
+        return;
+      }
+      if (track.readyState !== "live") {
+        this.callbacks.onError(`\uB9C8\uC774\uD06C\uAC00 \uC900\uBE44\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4 (readyState=${track.readyState}).`);
+        this.cleanup();
+        return;
+      }
+      track.onended = () => {
+        console.warn("[MeetNote] MediaStreamTrack ended \u2014 \uB9C8\uC774\uD06C \uB04A\uAE40");
+        this.callbacks.onTrackEnded?.();
+      };
+      track.onmute = () => {
+        console.warn("[MeetNote] MediaStreamTrack muted");
+        this.callbacks.onTrackMuted?.();
+      };
+      track.onunmute = () => {
+        console.log("[MeetNote] MediaStreamTrack unmuted");
+        this.callbacks.onTrackUnmuted?.();
+      };
       this.audioContext = new AudioContext({
-        sampleRate: this.stream.getAudioTracks()[0].getSettings().sampleRate || 44100
+        sampleRate: track.getSettings().sampleRate || 44100
       });
       this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
       this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
@@ -409,6 +449,7 @@ var AudioCapture = class {
       const samplesPerChunk = TARGET_SAMPLE_RATE * CHUNK_DURATION_SECONDS;
       this.buffer = [];
       this.samplesCollected = 0;
+      this.silentChunkCount = 0;
       this.scriptProcessor.onaudioprocess = (event) => {
         if (!this._isCapturing || this._isPaused) return;
         const inputData = event.inputBuffer.getChannelData(0);
@@ -465,10 +506,30 @@ var AudioCapture = class {
       merged.set(arr, offset);
       offset += arr.length;
     }
+    const rms = this.computeRms(merged);
+    if (rms < SILENCE_RMS_THRESHOLD) {
+      this.silentChunkCount++;
+      if (this.silentChunkCount === SILENCE_CHUNK_COUNT_WARN || this.silentChunkCount > SILENCE_CHUNK_COUNT_WARN && this.silentChunkCount % SILENCE_CHUNK_COUNT_WARN === 0) {
+        this.callbacks.onSilence?.(this.silentChunkCount);
+      }
+    } else {
+      if (this.silentChunkCount > 0) {
+        console.log(`[MeetNote] \uBB34\uC74C \uD574\uC81C (\uC5F0\uC18D ${this.silentChunkCount}\uAC1C \uCCAD\uD06C \uD6C4 \uBCF5\uADC0)`);
+      }
+      this.silentChunkCount = 0;
+    }
     const pcm = this.float32ToInt16(merged);
     this.buffer = [];
     this.samplesCollected = 0;
     this.callbacks.onChunk(pcm.buffer);
+  }
+  computeRms(samples) {
+    if (samples.length === 0) return 0;
+    let sumSquares = 0;
+    for (let i = 0; i < samples.length; i++) {
+      sumSquares += samples[i] * samples[i];
+    }
+    return Math.sqrt(sumSquares / samples.length);
   }
   float32ToInt16(float32) {
     const int16 = new Int16Array(float32.length);
@@ -506,11 +567,17 @@ var AudioCapture = class {
       this.audioContext = null;
     }
     if (this.stream) {
-      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream.getTracks().forEach((t) => {
+        t.onended = null;
+        t.onmute = null;
+        t.onunmute = null;
+        t.stop();
+      });
       this.stream = null;
     }
     this.buffer = [];
     this.samplesCollected = 0;
+    this.silentChunkCount = 0;
   }
 };
 
@@ -1275,6 +1342,9 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
     this.refreshInterval = null;
     this.headerRefreshInterval = null;
     this.processing = false;
+    // 자동 처리 큐 — 현재 처리 중일 때 추가 클릭은 이 큐에 쌓이고,
+    // processRecording finally에서 다음 항목을 자동으로 꺼내 처리한다.
+    this.processingQueue = [];
     this.serverProcess = null;
     this.selectedWavPath = "";
     // WAV path for speaker mapping context
@@ -1385,11 +1455,12 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
       }
       const recStatus = headerSection.createDiv({ cls: `meetnote-rec-status ${this.plugin.isPaused ? "" : "meetnote-rec-pulse"}` });
       const recStatusText = recStatus.createEl("span");
+      const wsConnectedForTimer = this.plugin.backendClient?.connected ?? serverOnline;
       const updateHeaderTime = () => {
         const elapsed = Math.floor(this.plugin.getRecordedElapsedMs() / 1e3);
         const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
         const ss = String(elapsed % 60).padStart(2, "0");
-        const disconnectMark = wsConnected ? "" : " \u26A0";
+        const disconnectMark = wsConnectedForTimer ? "" : " \u26A0";
         recStatusText.setText(this.plugin.isPaused ? `\u23F8 \uC77C\uC2DC\uC911\uC9C0 ${mm}:${ss}${disconnectMark}` : `\u{1F534} \uB179\uC74C \uC911 ${mm}:${ss}${disconnectMark}`);
       };
       updateHeaderTime();
@@ -1413,7 +1484,8 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
     }
     if (this.processing) {
       const progressSection = container.createDiv({ cls: "meetnote-progress-section" });
-      const title = this.processingDocName ? `\uCC98\uB9AC \uC911: ${this.processingDocName}` : "\uCC98\uB9AC \uC911...";
+      const queueSuffix = this.processingQueue.length > 0 ? ` (+${this.processingQueue.length}\uAC74 \uB300\uAE30)` : "";
+      const title = this.processingDocName ? `\uCC98\uB9AC \uC911: ${this.processingDocName}${queueSuffix}` : `\uCC98\uB9AC \uC911...${queueSuffix}`;
       progressSection.createEl("h4", { text: title });
       const stageEl = progressSection.createEl("div", { text: "\uC900\uBE44 \uC911...", cls: "meetnote-progress-stage" });
       const progressBar = progressSection.createDiv({ cls: "meetnote-progress" });
@@ -1474,7 +1546,13 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
               setTimeout(() => this.render(), 1e3);
             });
           }
-          const btn = btnGroup.createEl("button", { text: "\uCC98\uB9AC", cls: "meetnote-process-btn" });
+          const queueIdx = this.processingQueue.findIndex((q) => q.path === rec.path);
+          const isProcessingThis = this.processing && this.processingDocName === (rec.document_name || rec.filename);
+          let btnText = "\uCC98\uB9AC";
+          if (isProcessingThis) btnText = "\uCC98\uB9AC \uC911...";
+          else if (queueIdx >= 0) btnText = `\uB300\uAE30 \uC911 #${queueIdx + 1}`;
+          const btn = btnGroup.createEl("button", { text: btnText, cls: "meetnote-process-btn" });
+          if (isProcessingThis || queueIdx >= 0) btn.setAttribute("disabled", "true");
           btn.addEventListener("click", () => this.processRecording(rec, btn));
           const delBtn = btnGroup.createEl("button", { text: "\uC0AD\uC81C", cls: "meetnote-delete-btn" });
           delBtn.addEventListener("click", () => {
@@ -1691,8 +1769,9 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
                 }
               }
               if (count > 0) {
-                new import_obsidian4.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
+                await this.sweepSpeakerLabelsInDocument(speakerInputs);
                 await this.updateDocumentParticipants();
+                new import_obsidian4.Notice(`${count}\uBA85 \uCC98\uB9AC \uC644\uB8CC!`);
                 await this.render();
               } else {
                 new import_obsidian4.Notice("\uBCC0\uACBD\uD560 \uC774\uB984\uC744 \uC785\uB825\uD558\uC138\uC694.");
@@ -1934,8 +2013,16 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
     return content;
   }
   async processRecording(rec, btn) {
+    if (this.processingQueue.some((q) => q.path === rec.path)) {
+      new import_obsidian4.Notice("\uC774\uBBF8 \uB300\uAE30\uC5F4\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
+      return;
+    }
     if (this.processing) {
-      new import_obsidian4.Notice("\uB2E4\uB978 \uD68C\uC758\uB97C \uCC98\uB9AC \uC911\uC785\uB2C8\uB2E4. \uC644\uB8CC \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.");
+      this.processingQueue.push(rec);
+      new import_obsidian4.Notice(
+        `\uB300\uAE30\uC5F4 \uCD94\uAC00: ${rec.document_name || rec.filename} (${this.processingQueue.length}\uBC88\uC9F8)`
+      );
+      await this.render();
       return;
     }
     let vaultFilePath = "";
@@ -2048,6 +2135,10 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
       this.processing = false;
       this.processingDocName = "";
       await this.render();
+      if (this.processingQueue.length > 0) {
+        const nextRec = this.processingQueue.shift();
+        void this.processRecording(nextRec, document.createElement("button"));
+      }
     }
   }
   async checkServerHealth() {
@@ -2269,6 +2360,34 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
   }
   getHttpBaseUrl() {
     return this.plugin.settings.serverUrl.replace(/^ws(s?):\/\//, "http$1://").replace(/\/ws\/?$/, "").replace(/\/$/, "");
+  }
+  /**
+   * Batch save 후, 문서에 남아있는 "화자N" 라벨을 등록된 실명으로 일괄 치환.
+   *
+   * 서버의 update_document_speaker는 meta speaker_map 기준으로 old/new를 판단하는데,
+   * DB 매칭 결과로 meta에 이미 실명이 들어간 경우 old==new → skip되어 문서의
+   * "화자N"이 그대로 남는다. 이를 플러그인에서 직접 보정.
+   */
+  async sweepSpeakerLabelsInDocument(speakerInputs) {
+    const docPath = await this.getSelectedDocPath();
+    if (!docPath) return;
+    const file = this.app.vault.getAbstractFileByPath(docPath);
+    if (!file) return;
+    try {
+      await this.app.vault.process(file, (content) => {
+        let updated = content;
+        for (const { currentName, nameInput } of speakerInputs) {
+          const newName = nameInput.value.trim();
+          if (!newName || newName === currentName) continue;
+          const escaped = currentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(escaped + "(?!\\d)", "g");
+          updated = updated.replace(re, newName);
+        }
+        return updated;
+      });
+    } catch (err) {
+      console.error("[MeetNote] sweepSpeakerLabelsInDocument failed:", err);
+    }
   }
   /** Update document's participants list from meta (auto + manual) */
   async updateDocumentParticipants() {
@@ -2803,6 +2922,51 @@ participants: []
       onError: (message) => {
         new import_obsidian5.Notice(`\uC624\uB514\uC624 \uCEA1\uCC98 \uC624\uB958: ${message}`);
         console.error("[MeetNote] Audio capture error:", message);
+      },
+      onTrackEnded: () => {
+        console.warn("[MeetNote] onTrackEnded \u2014 re-checking after grace period");
+        setTimeout(() => {
+          if (!this.isRecording) return;
+          if (this.audioCapture?.isTrackAlive()) {
+            console.log("[MeetNote] Track recovered after spurious onended");
+            return;
+          }
+          new import_obsidian5.Notice(
+            "\u26A0 \uB9C8\uC774\uD06C \uC785\uB825\uC774 \uC911\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4 (\uC7A5\uCE58 \uBD84\uB9AC/\uAD8C\uD55C \uD574\uC81C).\n\uB179\uC74C\uC744 \uC790\uB3D9\uC73C\uB85C \uC815\uC9C0\uD569\uB2C8\uB2E4. \uC2DC\uC2A4\uD15C \uC124\uC815\uC5D0\uC11C \uB9C8\uC774\uD06C \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694.",
+            2e4
+          );
+          console.error("[MeetNote] Microphone track ended \u2014 auto-stopping recording");
+          if (this.isRecording) this.stopRecording();
+        }, 1500);
+      },
+      onTrackMuted: () => {
+        new import_obsidian5.Notice(
+          "\u26A0 \uB9C8\uC774\uD06C\uAC00 \uC77C\uC2DC \uC74C\uC18C\uAC70\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC785\uB825\uC774 \uBCF5\uADC0\uD560 \uB54C\uAE4C\uC9C0 \uB179\uC74C \uB0B4\uC6A9\uC774 \uBE44\uC5B4\uC788\uC2B5\uB2C8\uB2E4.",
+          1e4
+        );
+        console.warn("[MeetNote] Microphone muted");
+      },
+      onTrackUnmuted: () => {
+        new import_obsidian5.Notice("\uB9C8\uC774\uD06C \uC785\uB825\uC774 \uBCF5\uADC0\uD588\uC2B5\uB2C8\uB2E4.");
+      },
+      onSilence: (consecutive) => {
+        const elapsedMs = this.getRecordedElapsedMs();
+        if (elapsedMs < 35e3) {
+          new import_obsidian5.Notice(
+            "\u26A0 \uB179\uC74C\uC774 \uC2DC\uC791\uB410\uC9C0\uB9CC \uB9C8\uC774\uD06C \uC785\uB825\uC774 \uAC10\uC9C0\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 (30\uCD08\uAC04 \uBB34\uC74C).\n\uB179\uC74C\uC744 \uC790\uB3D9\uC73C\uB85C \uC815\uC9C0\uD569\uB2C8\uB2E4. \uB9C8\uC774\uD06C \uC7A5\uCE58\uC640 \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694.",
+            2e4
+          );
+          console.error("[MeetNote] Silent from start \u2014 auto-stopping recording");
+          if (this.isRecording) this.stopRecording();
+          return;
+        }
+        const seconds = consecutive * 5;
+        new import_obsidian5.Notice(
+          `\u26A0 \uB9C8\uC774\uD06C \uC785\uB825\uC774 ${seconds}\uCD08\uC9F8 \uAC10\uC9C0\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.
+\uB9C8\uC774\uD06C \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694. (\uACC4\uC18D \uBB34\uC74C\uC774\uBA74 \uB179\uC74C\uC740 \uBB34\uC74C WAV\uB85C \uC800\uC7A5\uB429\uB2C8\uB2E4)`,
+          15e3
+        );
+        console.warn(`[MeetNote] Silent for ${seconds}s (${consecutive} consecutive chunks)`);
       }
     });
     const deviceId = this.settings.audioDevice || void 0;
