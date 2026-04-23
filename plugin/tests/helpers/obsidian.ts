@@ -45,6 +45,27 @@ export async function connectObsidian(): Promise<ObsidianInstance> {
 		window = pages[0];
 	}
 
+	// Vault 이름 가드 — 혹시라도 엉뚱한 vault(운영 등)에 연결되면 즉시 abort.
+	// run-tests.sh는 --user-data-dir로 운영 Obsidian과 구조적 격리를 하지만,
+	// user-data-dir seed가 깨졌거나 수동으로 Obsidian이 다른 vault를 열었을 때의
+	// 이중 안전장치. 환경변수 TEST_VAULT_NAME으로 기대 vault 이름 지정 (기본 "test").
+	const expected = process.env.TEST_VAULT_NAME || "test";
+	const actual = await window.evaluate(() => {
+		try {
+			return (window as any).app?.vault?.getName?.() ?? null;
+		} catch {
+			return null;
+		}
+	});
+	if (actual !== expected) {
+		await browser.close().catch(() => {});
+		throw new Error(
+			`❌ 잘못된 vault에 연결되었습니다: '${actual}' (기대: '${expected}'). ` +
+			`운영 vault 오염 방지를 위해 abort합니다. ` +
+			`run-tests.sh가 --user-data-dir=~/.meetnote-test-obsidian로 실행되는지 확인하세요.`
+		);
+	}
+
 	return { browser, window };
 }
 

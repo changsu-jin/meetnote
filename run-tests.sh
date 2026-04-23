@@ -31,7 +31,14 @@ PLUGIN="$ROOT/plugin"
 REPORT_FILE="$ROOT/.internal/TEST_REPORT.md"
 TEST_EMAIL="cs.jin@purple.io"
 TEST_VAULT="/Users/changsu.jin/Works/data/obsidian-vault/test"
+TEST_VAULT_NAME="test"
 SERVER_PORT=8766
+
+# 테스트 전용 Obsidian 인스턴스 — 운영 Obsidian과 완전 격리된 user-data-dir.
+# 이 격리 덕분에 운영 vault를 열어둔 상태로 업무하면서 테스트를 동시 실행할 수 있다.
+# pkill/pgrep도 이 경로 패턴으로만 매칭하여 운영 Obsidian을 절대 건드리지 않는다.
+TEST_OBSIDIAN_DIR="$HOME/.meetnote-test-obsidian"
+export TEST_VAULT_NAME  # helpers/obsidian.ts가 vault 이름 가드에 사용
 
 # Obsidian CDP는 127.0.0.1에만 리슨하지만 Node 18+의 dns.lookup은
 # verbatim 모드라 localhost를 ::1(IPv6)로 먼저 해석해 ECONNREFUSED가 난다.
@@ -122,8 +129,19 @@ cleanup_by_pattern "python server.py --port ${SERVER_PORT}" "python.*server\.py.
 cleanup_by_pattern "pytest" "python -m pytest tests/"
 cleanup_by_pattern "playwright test" "node.*@playwright/test"
 cleanup_by_pattern "tail -f /tmp/meetnote-test" "tail -f /tmp/meetnote-test-"
-cleanup_by_pattern "Obsidian" "Obsidian.*--remote-debugging-port=9222"
-pkill -9 -f "Obsidian" 2>/dev/null || true
+# 테스트 전용 Obsidian만 kill — user-data-dir 경로 패턴으로 운영 Obsidian과 구분한다.
+# 과거 pkill -9 -f "Obsidian"이 운영 Obsidian까지 무차별 종료해 vault가 섞이는
+# 구조적 버그가 있었다 (2026-04-23 확인). 절대 복원하지 말 것.
+cleanup_by_pattern "테스트 Obsidian" "Obsidian.*meetnote-test-obsidian"
+# CDP 포트 9222는 이 프로젝트의 테스트 전용 약속. 점유자가 있으면 강제 정리한다.
+# 운영 Obsidian은 --remote-debugging-port 없이 실행되므로 이 포트를 쓰지 않는다.
+# 이전 run-tests.sh가 띄운 (user-data-dir 없는) 레거시 인스턴스나 다른 점유자를
+# 구조적으로 비워 새 격리 인스턴스가 뜰 수 있게 한다.
+CDP_9222_PIDS=$(lsof -ti :9222 2>/dev/null || true)
+if [ -n "$CDP_9222_PIDS" ]; then
+    echo "$CDP_9222_PIDS" | xargs kill -9 2>/dev/null
+    step "CDP 9222 점유자" warn "killed $(echo "$CDP_9222_PIDS" | wc -w | tr -d ' ')"
+fi
 
 sleep 2
 if lsof -ti :${SERVER_PORT} > /dev/null 2>&1; then
@@ -197,11 +215,31 @@ if [ -f "$WARMUP_WAV" ]; then
     fi
 fi
 
+ensure_test_obsidian_config() {
+    # 테스트 전용 user-data-dir이 비어 있으면 Obsidian이 welcome/vault-picker 화면을 띄워
+    # Playwright가 .workspace를 찾지 못하고 멈춘다. obsidian.json을 직접 seed하여
+    # 첫 실행부터 test vault가 자동으로 열리도록 만든다. 해시값은 임의이고,
+    # Obsidian 내부 식별자로만 쓰이므로 고정 값 사용.
+    mkdir -p "$TEST_OBSIDIAN_DIR"
+    local cfg="$TEST_OBSIDIAN_DIR/obsidian.json"
+    if [ ! -f "$cfg" ]; then
+        local now_ms=$(date +%s)000
+        cat > "$cfg" <<EOF
+{"vaults":{"meetnotetestvault":{"path":"$TEST_VAULT","ts":$now_ms,"open":true}},"cli":true}
+EOF
+        step "Obsidian 설정 seed" ok "~/.meetnote-test-obsidian/obsidian.json (test vault 자동 오픈)"
+    fi
+}
+
 start_obsidian() {
     # nohup + stdin /dev/null + append log — run-tests.sh가 pipe/terminal로 돌다
     # 죽어도 Obsidian이 SIGHUP을 받지 않도록 완전 분리.
+    # --user-data-dir로 운영 Obsidian과 완전 격리된 인스턴스를 띄움.
+    ensure_test_obsidian_config
     echo "=== $(date '+%H:%M:%S') start_obsidian ===" >> /tmp/meetnote-obsidian.log
-    nohup /Applications/Obsidian.app/Contents/MacOS/Obsidian --remote-debugging-port=9222 \
+    nohup /Applications/Obsidian.app/Contents/MacOS/Obsidian \
+        --remote-debugging-port=9222 \
+        --user-data-dir="$TEST_OBSIDIAN_DIR" \
         >> /tmp/meetnote-obsidian.log 2>&1 < /dev/null &
     disown
     for i in $(seq 1 15); do
@@ -215,12 +253,13 @@ start_obsidian() {
 
 ensure_obsidian() {
     # CDP가 살아 있지 않으면 한 번 재시작 시도.
+    # 운영 Obsidian은 --user-data-dir이 다르므로 이 패턴에 매칭되지 않음.
     if curl -s --connect-timeout 1 http://127.0.0.1:9222/json/version 2>/dev/null | grep -qF '"Browser"'; then
         return 0
     fi
     echo -e "  ${YELLOW}⚠${NC} Obsidian CDP 응답 없음 — 재시작 시도 ($(date '+%H:%M:%S'))"
     echo "=== $(date '+%H:%M:%S') ensure_obsidian detected dead Obsidian ===" >> /tmp/meetnote-obsidian.log
-    pkill -9 -f "Obsidian.*--remote-debugging-port=9222" 2>/dev/null || true
+    pkill -9 -f "Obsidian.*meetnote-test-obsidian" 2>/dev/null || true
     sleep 1
     start_obsidian
 }
@@ -235,7 +274,7 @@ obsidian_watch_start() {
             else
                 state="DEAD"
             fi
-            pid=$(pgrep -f "Obsidian.*--remote-debugging-port=9222" | head -1)
+            pid=$(pgrep -f "Obsidian.*meetnote-test-obsidian" | head -1)
             echo "$ts watch state=$state pid=${pid:-none}" >> /tmp/meetnote-obsidian.log
             sleep 5
         done
