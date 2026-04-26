@@ -788,6 +788,14 @@ var BackendClient = class {
   sendResume() {
     this.send({ type: "resume" });
   }
+  /**
+   * 녹음 중 MD 파일이 rename되었을 때 활성 session의 document_path/name을
+   * 즉시 갱신하도록 backend에 알린다. 이게 없으면 stop 시점에 in-memory 옛
+   * 값으로 meta.json이 저장되어 사이드패널에 옛 이름으로 노출됨.
+   */
+  sendUpdateDocument(config) {
+    this.send({ type: "update_document", config });
+  }
   /** Send a binary audio chunk (PCM data) to the server. */
   sendAudioChunk(pcmData) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -2781,6 +2789,13 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
         if (!file.path.endsWith(".md")) return;
+        if (this.isRecording && this.writer.currentFile === file) {
+          this.backendClient.sendUpdateDocument({
+            document_path: file.path,
+            document_name: file.basename
+          });
+          console.log(`[MeetNote] Active recording renamed: ${oldPath} \u2192 ${file.path}`);
+        }
         try {
           const content = await this.app.vault.cachedRead(file);
           if (!content.includes("type: meeting")) return;

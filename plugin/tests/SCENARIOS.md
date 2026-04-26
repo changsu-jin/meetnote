@@ -111,6 +111,7 @@
 | S53 | AudioCapture 시작 시 track.readyState !== "live"이면 onError + cleanup | 09-silent-defense.spec.ts | O |
 | S54 | onTrackMuted는 녹음 유지 (자동 정지 X) — 일시 음소거는 복귀 가능 | 09-silent-defense.spec.ts | O |
 | S55 | pause 중에는 silentChunkCount 증가 없음, resume 후 다시 카운트 재개 | 09-silent-defense.spec.ts | O |
+| S56 | 녹음 중 MD rename 시 활성 session의 document_path/name 즉시 갱신, stop 후 새 경로로 meta.json 저장 | test_recordings.py | O |
 
 ### 최종 해피 패스 (real audio full pipeline — 운영 흐름 재현)
 
@@ -136,7 +137,7 @@
 | H7 | 운영 코드와 동일한 포맷으로 /email/send 호출 — meetnote 섹션만 body (녹취록 제외), `[MeetNote] ${docName}` subject, `vault_file_path` + `include_gitlab_link` 전달 (SMTP 미설정 시 SKIP) | 99-happy-path.spec.ts | O |
 | H8 | 완성된 회의록을 Obsidian workspace activeFile로 열기 | 99-happy-path.spec.ts | O |
 
-**커버리지: 64/64 (100%)**
+**커버리지: 65/65 (100%)**
 
 ## 시나리오 상세
 
@@ -284,6 +285,10 @@
 ### S55: pause 중 silentChunkCount 동결 (ADR-006)
 **전제**: 녹음 시작 → 몇 초 후 pause → 일정 시간 대기
 **검증**: pause 전후의 `audioCapture.consecutiveSilentChunks` 값 변화 없음 (pause 중 onaudioprocess skip). resume 후 새 청크 유입 시 다시 증가.
+
+### S56: 녹음 중 rename 시 backend session 갱신
+**전제**: WebSocket start("old name", "meetings/old.md") → audio chunk → update_document("new name", "meetings/new.md") → stop
+**검증**: stop 후 생성된 meta.json의 `document_path` == "meetings/new.md", `document_name` == "new name". 사이드패널 대기 중 목록에 새 이름으로 표시된다.
 
 ---
 

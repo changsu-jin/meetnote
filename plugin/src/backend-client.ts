@@ -38,7 +38,17 @@ export interface ResumeCommand {
 	type: "resume";
 }
 
-export type OutboundMessage = StartCommand | StopCommand | PauseCommand | ResumeCommand;
+export interface UpdateDocumentCommand {
+	type: "update_document";
+	config: { document_path: string; document_name: string };
+}
+
+export type OutboundMessage =
+	| StartCommand
+	| StopCommand
+	| PauseCommand
+	| ResumeCommand
+	| UpdateDocumentCommand;
 
 // Inbound messages
 export interface ChunkMessage {
@@ -237,6 +247,15 @@ export class BackendClient {
 
 	sendResume(): void {
 		this.send({ type: "resume" });
+	}
+
+	/**
+	 * 녹음 중 MD 파일이 rename되었을 때 활성 session의 document_path/name을
+	 * 즉시 갱신하도록 backend에 알린다. 이게 없으면 stop 시점에 in-memory 옛
+	 * 값으로 meta.json이 저장되어 사이드패널에 옛 이름으로 노출됨.
+	 */
+	sendUpdateDocument(config: { document_path: string; document_name: string }): void {
+		this.send({ type: "update_document", config });
 	}
 
 	/** Send a binary audio chunk (PCM data) to the server. */

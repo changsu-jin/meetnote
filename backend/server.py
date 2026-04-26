@@ -1281,6 +1281,25 @@ async def handle_audio_chunk(ws: WebSocket, pcm_data: bytes):
         await ws_send(ws, {"type": "error", "message": f"Chunk transcription error: {exc}"})
 
 
+async def handle_update_document(ws: WebSocket, config: dict[str, Any]):
+    """Update active recording session's document path/name.
+
+    녹음 중 vault에서 MD 파일이 rename되었을 때 plugin이 호출. session의
+    in-memory 값을 즉시 갱신하여 stop 시점에 새 경로로 meta.json이 저장되도록 한다.
+    """
+    session = state.get_session(ws)
+    if not session.recording:
+        return  # 활성 녹음 없음 — 조용히 무시
+
+    new_path = config.get("document_path", "")
+    new_name = config.get("document_name", "")
+    if new_path and new_path != session._document_path:
+        logger.info("Active recording renamed: %s → %s", session._document_path, new_path)
+        session._document_path = new_path
+    if new_name and new_name != session._document_name:
+        session._document_name = new_name
+
+
 async def handle_pause(ws: WebSocket):
     """Pause the current recording session."""
     session = state.get_session(ws)
@@ -1468,6 +1487,13 @@ async def websocket_endpoint(ws: WebSocket):
 
                     elif msg_type == "resume":
                         await handle_resume(ws)
+
+                    elif msg_type == "update_document":
+                        # 녹음 중 vault에서 MD 파일이 rename되면 plugin이 즉시
+                        # 활성 session의 document_path/name을 갱신해달라고 요청.
+                        # 이게 없으면 stop 시점에 in-memory 옛 값으로 meta.json이
+                        # 저장되어 사이드패널에 옛 이름으로 노출됨.
+                        await handle_update_document(ws, data.get("config", {}))
 
                     elif msg_type == "pong":
                         pass

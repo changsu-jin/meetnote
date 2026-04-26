@@ -9,6 +9,9 @@ All notable changes to MeetNote are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- 녹음 중 MD 파일명 변경 시 사이드패널 대기 중 목록이 옛 이름으로 노출되던 버그 (REC-100). 기존 `vault.on("rename")` 핸들러는 디스크 `meta.json`의 path만 갱신했는데 녹음 중인 세션은 아직 meta.json이 없어 no-op이 되었음. 새 WebSocket 메시지 `update_document`로 backend의 활성 세션 in-memory `_document_path`/`_document_name`도 즉시 갱신하여 stop 시점에 새 경로로 meta.json 저장. 시나리오 S56 추가.
+
 ### Added
 - `docs/DEVELOPMENT.md` — 다른 맥북에 운영/테스트 환경을 동시 셋업하는 가이드 (격리 동작 원리, 환경변수, 트러블슈팅 포함)
 

@@ -259,6 +259,19 @@ export default class MeetNotePlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on("rename", async (file, oldPath) => {
 				if (!file.path.endsWith(".md")) return;
+
+				// 녹음 중에 현재 녹음 중인 파일이 rename되면 backend 활성 session의
+				// document_path/name을 즉시 갱신. 디스크 meta.json은 stop 후 생성되므로
+				// update-meta(아래 호출)는 활성 session에 영향 못 줌. WebSocket으로
+				// in-memory 값을 직접 갱신해야 stop 시점에 새 경로로 meta가 저장된다.
+				if (this.isRecording && this.writer.currentFile === file) {
+					this.backendClient.sendUpdateDocument({
+						document_path: file.path,
+						document_name: (file as TFile).basename,
+					});
+					console.log(`[MeetNote] Active recording renamed: ${oldPath} → ${file.path}`);
+				}
+
 				try {
 					const content = await this.app.vault.cachedRead(file as TFile);
 					if (!content.includes("type: meeting")) return;

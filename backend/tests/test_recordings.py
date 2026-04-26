@@ -528,6 +528,60 @@ def test_find_related_excludes_silent(client, tmp_recordings):
     assert wav_silent.name in related_silent_names
 
 
+def test_update_document_during_recording(client, tmp_recordings):
+    """S56 (REC-100): 녹음 중 update_document 메시지 받으면 stop 시 새 path/name으로 meta.json 저장.
+
+    버그 원인: vault rename 핸들러가 디스크의 meta.json만 갱신하는데, 녹음 중인
+    세션은 아직 meta.json이 없어 no-op. 따라서 backend in-memory 세션도 즉시
+    갱신해야 한다.
+    """
+    from tests.conftest import make_pcm_silence
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({
+            "type": "start",
+            "config": {
+                "document_name": "old name",
+                "document_path": "meetings/old.md",
+                "user_id": "test@example.com",
+            },
+        }))
+        ws.receive_json()
+
+        ws.send_bytes(make_pcm_silence(0.5))
+
+        # rename mid-recording
+        ws.send_text(json.dumps({
+            "type": "update_document",
+            "config": {
+                "document_path": "meetings/new.md",
+                "document_name": "new name",
+            },
+        }))
+
+        ws.send_bytes(make_pcm_silence(0.5))
+        ws.send_text(json.dumps({"type": "stop"}))
+
+        for _ in range(10):
+            try:
+                msg = ws.receive_json(mode="text")
+                if msg.get("type") == "status" and msg.get("recording") is False:
+                    break
+            except Exception:
+                break
+
+    metas = list(tmp_recordings.glob("*.meta.json"))
+    found = None
+    for m in metas:
+        d = json.loads(m.read_text())
+        if d.get("document_path") == "meetings/new.md":
+            found = d
+            break
+    paths = [json.loads(m.read_text()).get("document_path") for m in metas]
+    assert found is not None, f"new path meta not found, available: {paths}"
+    assert found["document_name"] == "new name"
+
+
 def _stop_with_peak(client, tmp_recordings, peak_value: int) -> dict:
     """WS start→PCM with single peak sample→stop. Return the matching meta dict."""
     import struct as _struct
