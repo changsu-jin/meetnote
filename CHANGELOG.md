@@ -7,7 +7,7 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
-## [Unreleased]
+## [0.3.6] — 2026-04-26
 
 ### Fixed
 - 녹음 중 MD 파일명 변경 시 사이드패널 대기 중 목록이 옛 이름으로 노출되던 버그 (REC-100). 기존 `vault.on("rename")` 핸들러는 디스크 `meta.json`의 path만 갱신했는데 녹음 중인 세션은 아직 meta.json이 없어 no-op이 되었음. 새 WebSocket 메시지 `update_document`로 backend의 활성 세션 in-memory `_document_path`/`_document_name`도 즉시 갱신하여 stop 시점에 새 경로로 meta.json 저장. 시나리오 S56 추가.

@@ -1,7 +1,7 @@
 {
 	"id": "meetnote",
 	"name": "MeetNote",
-	"version": "0.3.5",
+	"version": "0.3.6",
 	"minAppVersion": "1.0.0",
 	"description": "회의 음성을 자동 녹음하고 화자구분하여 회의록을 작성하는 플러그인",
 	"author": "changsu.jin",
