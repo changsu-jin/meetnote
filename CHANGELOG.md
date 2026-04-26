@@ -7,6 +7,21 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
+## [Unreleased]
+
+### Added
+- `docs/DEVELOPMENT.md` — 다른 맥북에 운영/테스트 환경을 동시 셋업하는 가이드 (격리 동작 원리, 환경변수, 트러블슈팅 포함)
+
+### Changed
+- `run-tests.sh` 사용자별 하드코딩 값 환경변수로 분리: `MEETNOTE_TEST_VAULT`, `MEETNOTE_TEST_EMAIL`, `MEETNOTE_TEST_VAULT_NAME`, `MEETNOTE_TEST_SERVER_PORT` (기본값은 그대로 cs.jin 환경)
+- 테스트 서버를 CPU 강제 실행 (`WHISPER_DEVICE=cpu`, `DIARIZATION_DEVICE=cpu`) — 운영 서버(8765)와 같은 머신에서 MPS Metal command buffer 충돌(`AGXG14XFamilyCommandBuffer assertion`) 회피. 운영 GPU와 동시 실행 안정화.
+- `transcriber.py`: `WHISPER_DEVICE=cpu`이면 MLX(Apple GPU 전용) 우회하고 faster-whisper 사용
+- `diarizer.py`: `DIARIZATION_DEVICE` env override 추가
+- 테스트 vault `.obsidian/appearance.json` 자동 라이트 테마 강제 (key는 `theme`, 잘못 쓰던 `baseTheme` 수정)
+- run-tests.sh 종료 시 격리 테스트 Obsidian 자동 kill — 다음 실행 깨끗한 상태 보장
+- 09-silent-defense.spec.ts E2E 추가 누락 수정: run-tests.sh playwright 인자에 09 spec 포함
+- S42 `.done` 마커 polling 한도 45s → 180s (CPU 처리 시간 마진)
+
 ## [0.3.5] — 2026-04-21
 
 ### Added

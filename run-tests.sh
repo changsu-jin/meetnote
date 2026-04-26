@@ -29,10 +29,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 BACKEND="$ROOT/backend"
 PLUGIN="$ROOT/plugin"
 REPORT_FILE="$ROOT/.internal/TEST_REPORT.md"
-TEST_EMAIL="cs.jin@purple.io"
-TEST_VAULT="/Users/changsu.jin/Works/data/obsidian-vault/test"
-TEST_VAULT_NAME="test"
-SERVER_PORT=8766
+# 사용자별로 다를 수 있는 값들은 환경변수로 오버라이드 가능. 다른 맥북에 옮길 때
+# ~/.zshrc에 export MEETNOTE_TEST_VAULT=... 한 번만 넣으면 끝. 자세한 내용은
+# docs/DEVELOPMENT.md 참고.
+TEST_EMAIL="${MEETNOTE_TEST_EMAIL:-cs.jin@purple.io}"
+TEST_VAULT="${MEETNOTE_TEST_VAULT:-/Users/changsu.jin/Works/data/obsidian-vault/test}"
+TEST_VAULT_NAME="${MEETNOTE_TEST_VAULT_NAME:-test}"
+SERVER_PORT="${MEETNOTE_TEST_SERVER_PORT:-8766}"
 
 # 테스트 전용 Obsidian 인스턴스 — 운영 Obsidian과 완전 격리된 user-data-dir.
 # 이 격리 덕분에 운영 vault를 열어둔 상태로 업무하면서 테스트를 동시 실행할 수 있다.
@@ -171,6 +174,15 @@ rm -rf "$PLUGIN/test-results" 2>/dev/null
 find "$TEST_VAULT" -name "_test_*" -delete 2>/dev/null
 find "$TEST_VAULT" -path "*/meetings/*" -name "*.md" -delete 2>/dev/null
 rmdir "$TEST_VAULT/meetings" 2>/dev/null
+# 테스트 vault 외관을 라이트 테마로 강제. Playwright 스크린샷/스냅샷이
+# 다크 테마에서 가독성이 떨어지고, 운영 사용 vault와 외관을 분리해
+# "지금 보고 있는 게 테스트용"임을 시각적으로 인지하기 쉽게 한다.
+# Obsidian의 테마 키는 "theme" (값: "moonstone"=light, "obsidian"=dark).
+# 잘못된 키("baseTheme")를 쓰면 Obsidian이 무시하고 default로 덮어쓴다.
+mkdir -p "$TEST_VAULT/.obsidian"
+cat > "$TEST_VAULT/.obsidian/appearance.json" <<'EOF'
+{"theme":"moonstone","accentColor":""}
+EOF
 step "데이터 정리" ok
 
 section "프로세스 재시작"
@@ -182,6 +194,12 @@ section "프로세스 재시작"
 # - </dev/null로 stdin 차단 → SIGHUP/EOF 전파 방지
 (
     cd "$BACKEND" && source venv/bin/activate && \
+    # 테스트 서버는 CPU로 강제 — 운영 서버(8765)도 같은 머신에서 MPS를 쓰면
+    # Apple Silicon Metal command buffer 충돌이 일어나 양쪽 또는 한쪽이 죽음
+    # (2026-04-26 확인: AGXG14XFamilyCommandBuffer assertion + resource leak).
+    # 테스트 처리 속도가 약간 느려지지만(STT/diarization ~1.5x), 운영과 동시
+    # 실행이 안정적으로 가능해진다.
+    export WHISPER_DEVICE=cpu DIARIZATION_DEVICE=cpu PYTORCH_ENABLE_MPS_FALLBACK=1 && \
     exec nohup python server.py --port ${SERVER_PORT} > /tmp/meetnote-server.log 2>&1 < /dev/null
 ) &
 disown $! 2>/dev/null || true
@@ -715,6 +733,11 @@ if [ $FAIL -eq 0 ] && [ $HAPPY_FAILED -eq 0 ]; then
 else
     echo -e "${RED}✗ 실패 있음${NC}"
 fi
+
+# 테스트 Obsidian 인스턴스 종료 — 다음 실행 시 깨끗한 상태로 시작.
+# 운영 Obsidian은 user-data-dir 패턴이 다르므로 영향 없음.
+obsidian_watch_stop 2>/dev/null || true
+pkill -9 -f "Obsidian.*meetnote-test-obsidian" 2>/dev/null || true
 
 echo ""
 

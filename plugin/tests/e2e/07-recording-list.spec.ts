@@ -343,7 +343,9 @@ test("S41: 이어 녹음 항목 삭제 시 companion WAV도 함께 삭제", asyn
 
 // ── S42 ─────────────────────────────────────────────────────────────────
 test("S42: 이어 녹음 2개 WAV → 처리 버튼 → 병합 처리 → 단일 완료 항목", async () => {
-	test.setTimeout(60000); // warm-up 후 ~15초, 마진 포함
+	// GPU(MPS): ~15s, CPU(faster-whisper): ~60s. 운영 동시 실행 시 CPU 강제이므로
+	// 기준 시간의 3배 마진을 둠.
+	test.setTimeout(180000);
 
 	const docPath = `meetings/${FIXTURE_PREFIX}s42.md`;
 	const docFull = `${TEST_VAULT}/${docPath}`;
@@ -386,8 +388,10 @@ test("S42: 이어 녹음 2개 WAV → 처리 버튼 → 병합 처리 → 단일
 	await expect(procBtn).toBeVisible({ timeout: 3000 });
 	await procBtn.click({ force: true });
 
-	// .done 마커 polling — 두 WAV 모두 done이어야 집계 시 processed=true
-	const deadline = Date.now() + 45000;
+	// .done 마커 polling — 두 WAV 모두 done이어야 집계 시 processed=true.
+	// GPU(MPS): ~15s, CPU(faster-whisper, 운영 동시 실행 모드): ~50-100s.
+	// 운영 서버와 같은 머신에서 CPU 강제일 때를 기준으로 180초 한도.
+	const deadline = Date.now() + 180000;
 	while (Date.now() < deadline) {
 		const done1 = fs.existsSync(wav1.replace(/\.wav$/, ".done"));
 		const done2 = fs.existsSync(wav2.replace(/\.wav$/, ".done"));

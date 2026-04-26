@@ -93,7 +93,18 @@ class Diarizer:
 
     @staticmethod
     def _resolve_device() -> torch.device:
-        """Select the best available device: CUDA > MPS > CPU."""
+        """Select device: DIARIZATION_DEVICE env override > CUDA > MPS > CPU.
+
+        Env override는 테스트 서버를 운영 서버와 같은 머신에서 동시 실행할 때
+        Apple Silicon MPS의 command buffer 충돌(`A command encoder is already
+        encoding to this command buffer`)을 회피하기 위해 추가됨. 테스트 서버는
+        CPU로 강제하여 운영 서버의 GPU 점유와 분리한다.
+        """
+        import os
+        forced = os.environ.get("DIARIZATION_DEVICE", "").strip().lower()
+        if forced in ("cpu", "cuda", "mps"):
+            logger.info("Diarization device forced via DIARIZATION_DEVICE=%s", forced)
+            return torch.device(forced)
         if torch.cuda.is_available():
             logger.info("CUDA available, using GPU acceleration.")
             return torch.device("cuda")

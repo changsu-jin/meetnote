@@ -82,7 +82,11 @@ class Transcriber:
 
         self._sample_rate: int = config.get("audio", {}).get("sample_rate", 16000)
 
-        self._use_mlx: bool = _is_mlx_available()
+        # MLX는 항상 Apple Silicon MPS(GPU)를 사용한다. device="cpu"가 명시된
+        # 경우엔 MLX를 우회하고 faster-whisper(CPU)로 폴백한다. 같은 머신에서
+        # 운영 서버와 테스트 서버를 동시에 띄울 때 MPS Metal command buffer
+        # 충돌을 회피하기 위함 (2026-04-26 확인).
+        self._use_mlx: bool = _is_mlx_available() and self._device != "cpu"
         self._fw_model = None  # faster-whisper model (lazy)
 
     # ------------------------------------------------------------------
