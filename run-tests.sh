@@ -28,7 +28,7 @@ trap 'echo "[run-tests.sh] broken pipe — aborting" >&2; exit 141' PIPE
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BACKEND="$ROOT/backend"
 PLUGIN="$ROOT/plugin"
-REPORT_FILE="$ROOT/.internal/TEST_REPORT.md"
+REPORT_FILE="$ROOT/.internal/testing/TEST_REPORT.md"
 # 사용자별로 다를 수 있는 값들은 환경변수로 오버라이드 가능. 다른 맥북에 옮길 때
 # ~/.zshrc에 export MEETNOTE_TEST_VAULT=... 한 번만 넣으면 끝. 자세한 내용은
 # docs/DEVELOPMENT.md 참고.

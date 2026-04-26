@@ -139,7 +139,7 @@ bash run-tests.sh
 스크립트는 운영 Obsidian이 켜져 있어도 건드리지 않습니다.
 첫 실행 시 격리 Obsidian 인스턴스에서 trust 다이얼로그가 한 번 뜨면 클릭만 하면 됩니다.
 
-전체 통과 결과는 `.internal/TEST_REPORT.md`에 기록되고, 콘솔 마지막에는 수동 체크리스트(실제 마이크/OS 상태 필요한 항목)가 출력됩니다.
+전체 통과 결과는 `.internal/testing/TEST_REPORT.md`에 기록되고, 콘솔 마지막에는 수동 체크리스트(실제 마이크/OS 상태 필요한 항목)가 출력됩니다.
 
 ---
 
