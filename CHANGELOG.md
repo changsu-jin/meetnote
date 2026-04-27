@@ -7,6 +7,11 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
+## [0.3.7] — 2026-04-27
+
+### Fixed
+- Plugin 업데이트(BRAT 자동 reload) 후 사이드 패널 navigation tab의 마이크 아이콘이 사라져 사용자가 수동으로 사이드 패널을 다시 열어야 하던 현상. `onload()`의 ribbon 등록 시점을 `workspace.onLayoutReady` 콜백으로 옮기고, 같은 콜백에서 사이드 패널이 없으면 자동으로 활성화. Ribbon DOM은 등록 전 `ribbonIconEl?.remove()`로 잔재 정리하여 idempotent. `onunload`에도 ribbon DOM 명시 제거 추가.
+
 ## [0.3.6] — 2026-04-26
 
 ### Fixed

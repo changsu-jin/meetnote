@@ -192,19 +192,6 @@ export default class MeetNotePlugin extends Plugin {
 		// ── Connect to backend ─────────────────────────────────────────
 		this.backendClient.connect();
 
-		// ── Ribbon icon ────────────────────────────────────────────────
-		this.ribbonIconEl = this.addRibbonIcon(
-			"mic",
-			"MeetNote",
-			() => {
-				if (this.isRecording) {
-					this.stopRecording();
-				} else {
-					this.startRecording();
-				}
-			}
-		);
-
 		// ── Commands ───────────────────────────────────────────────────
 		this.addCommand({
 			id: "start-recording",
@@ -321,7 +308,33 @@ export default class MeetNotePlugin extends Plugin {
 			this.showOnboarding();
 		}
 
+		// Layout이 준비된 시점에 ribbon 아이콘 등록 + 사이드 패널 자동 활성화.
+		// onload 본문에서 즉시 등록하면 BRAT의 빠른 disable→enable 시 ribbon이
+		// 사라지는 케이스가 있어, layout ready 후 (필요 시 잔재 제거 후) 등록.
+		this.app.workspace.onLayoutReady(() => {
+			this.registerRibbonIcon();
+			if (this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE).length === 0) {
+				this.activateSidePanel();
+			}
+		});
+
 		console.log("MeetNote plugin loaded");
+	}
+
+	private registerRibbonIcon() {
+		// 잔재 DOM 제거 후 새로 등록 — plugin reload 시 idempotent 보장
+		this.ribbonIconEl?.remove();
+		this.ribbonIconEl = this.addRibbonIcon(
+			"mic",
+			"MeetNote",
+			() => {
+				if (this.isRecording) {
+					this.stopRecording();
+				} else {
+					this.startRecording();
+				}
+			},
+		);
 	}
 
 	async onunload() {
@@ -334,6 +347,10 @@ export default class MeetNotePlugin extends Plugin {
 		}
 		this.backendClient.disconnect();
 		this.statusBar.destroy();
+		// Ribbon DOM 명시 제거 — BRAT의 빠른 disable→enable 시 잔재로 인해
+		// 새 ribbon이 안 보이는 케이스 방지
+		this.ribbonIconEl?.remove();
+		this.ribbonIconEl = null;
 		this.app.workspace.detachLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 		console.log("MeetNote plugin unloaded");
 	}

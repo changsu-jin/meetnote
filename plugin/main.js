@@ -2733,17 +2733,6 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
       }, 2e3);
     });
     this.backendClient.connect();
-    this.ribbonIconEl = this.addRibbonIcon(
-      "mic",
-      "MeetNote",
-      () => {
-        if (this.isRecording) {
-          this.stopRecording();
-        } else {
-          this.startRecording();
-        }
-      }
-    );
     this.addCommand({
       id: "start-recording",
       name: "\uB179\uC74C \uC2DC\uC791",
@@ -2837,7 +2826,27 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
     if (!this.settings.onboardingDone) {
       this.showOnboarding();
     }
+    this.app.workspace.onLayoutReady(() => {
+      this.registerRibbonIcon();
+      if (this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE).length === 0) {
+        this.activateSidePanel();
+      }
+    });
     console.log("MeetNote plugin loaded");
+  }
+  registerRibbonIcon() {
+    this.ribbonIconEl?.remove();
+    this.ribbonIconEl = this.addRibbonIcon(
+      "mic",
+      "MeetNote",
+      () => {
+        if (this.isRecording) {
+          this.stopRecording();
+        } else {
+          this.startRecording();
+        }
+      }
+    );
   }
   async onunload() {
     if (this.isRecording) {
@@ -2849,6 +2858,8 @@ var MeetNotePlugin = class extends import_obsidian5.Plugin {
     }
     this.backendClient.disconnect();
     this.statusBar.destroy();
+    this.ribbonIconEl?.remove();
+    this.ribbonIconEl = null;
     this.app.workspace.detachLeavesOfType(SIDE_PANEL_VIEW_TYPE);
     console.log("MeetNote plugin unloaded");
   }
