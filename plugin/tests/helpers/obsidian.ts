@@ -70,13 +70,16 @@ export async function connectObsidian(): Promise<ObsidianInstance> {
 }
 
 export async function openSidePanel(window: Page): Promise<void> {
-	// Open command palette
-	await window.keyboard.press("Meta+p");
-	await window.waitForTimeout(500);
-	await window.keyboard.type("MeetNote: 사이드 패널 열기");
-	await window.waitForTimeout(500);
-	await window.keyboard.press("Enter");
-	await window.waitForTimeout(2000);
+	// 키보드/IME 의존 제거 — command API 직접 호출.
+	// (한국어 IME composition으로 character가 두 번 입력되는 케이스에서 팔레트가
+	// 안 닫히고 사이드 패널 위를 덮어 후속 spec의 클릭/렌더를 차단하던 문제)
+	// 잔존 팔레트가 떠 있으면 Escape으로 정리한 뒤 명령어 실행.
+	await window.keyboard.press("Escape").catch(() => {});
+	await window.waitForTimeout(150);
+	await window.evaluate(() => {
+		(window as any).app.commands.executeCommandById("meetnote:open-side-panel");
+	});
+	await window.waitForTimeout(800);
 }
 
 export async function waitForPanel(window: Page): Promise<void> {

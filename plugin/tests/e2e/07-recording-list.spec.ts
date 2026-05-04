@@ -120,11 +120,22 @@ async function setEmailAndRender(window: any, email: string) {
 }
 
 async function rerender(window: any) {
-	await window.evaluate(() => {
+	// side-panel.ts의 render()는 `if (this.rendering) return;` 가드가 있어
+	// 직전 setTimeout-기반 render가 in-flight면 조용히 무시된다.
+	// rendering 플래그 정리 후 명시적으로 await.
+	await window.evaluate(async () => {
 		const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
-		for (const leaf of leaves) leaf.view.render();
+		for (const leaf of leaves) {
+			const start = Date.now();
+			while (leaf.view.rendering && Date.now() - start < 5000) {
+				await new Promise((r) => setTimeout(r, 50));
+			}
+			// stuck이면 강제 리셋 후 render (이전 spec의 비정상 종료 방어)
+			if (leaf.view.rendering) leaf.view.rendering = false;
+			await leaf.view.render();
+		}
 	});
-	await window.waitForTimeout(800);
+	await window.waitForTimeout(200);
 }
 
 async function ensureMeetingFile(window: any, vaultRelPath: string, body = "test") {
@@ -383,8 +394,35 @@ test("S42: 이어 녹음 2개 WAV → 처리 버튼 → 병합 처리 → 단일
 		.first();
 	await expect(pendingItem).toBeVisible({ timeout: 5000 });
 
-	// "처리" 버튼 클릭
-	const procBtn = pendingItem.locator('.meetnote-process-btn:has-text("처리")').first();
+	// 직전 spec의 처리 잔존이 S42 click을 큐 뒤로 밀어 timeout 유발.
+	// processing 플래그 + processingQueue 둘 다 비었는지 확인 후 진행.
+	const setupDeadline = Date.now() + 30000;
+	while (Date.now() < setupDeadline) {
+		const busy = await obsidian.window.evaluate(() => {
+			const leaves = (window as any).app.workspace.getLeavesOfType("meetnote-side-panel");
+			if (leaves.length === 0) return false;
+			const view: any = leaves[0].view;
+			return view.processing || (view.processingQueue?.length ?? 0) > 0;
+		});
+		if (!busy) break;
+		await obsidian.window.waitForTimeout(500);
+	}
+
+	// processRecording은 vault.getAbstractFileByPath(document_path)를 본다.
+	// 새 맥북에서 vault 인덱스가 늦게 잡히는 케이스 방어 — 문서를 active로 열어 fallback.
+	await obsidian.window.evaluate(async (p: string) => {
+		const app = (window as any).app;
+		const file = app.vault.getAbstractFileByPath(p);
+		if (file) await app.workspace.getLeaf(false).openFile(file);
+	}, docPath);
+
+	// 큐가 비고 활성 문서 세팅 후 패널 재렌더 — 버튼 핸들러를 fresh rec으로.
+	await rerender(obsidian.window);
+
+	// "처리" 버튼 클릭 — 이때 plugin은 직접 processRecording(rec) 호출
+	const procBtn = obsidian.window
+		.locator(`.meetnote-recording-item:has(.meetnote-recording-title:has-text("${FIXTURE_PREFIX}s42")) .meetnote-process-btn:has-text("처리")`)
+		.first();
 	await expect(procBtn).toBeVisible({ timeout: 3000 });
 	await procBtn.click({ force: true });
 
