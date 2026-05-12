@@ -133,9 +133,11 @@ export class MeetNoteSidePanel extends ItemView {
 			});
 			setIcon(recBtn, isRecording ? "square" : "mic");
 			recBtn.addEventListener("click", () => {
-				(this.app as any).commands.executeCommandById(
-					isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
-				);
+				// [ADR-008] vault별 plugin 인스턴스의 메서드를 직접 호출.
+				// app.commands.executeCommandById는 전역 registry라 같은 plugin ID로
+				// 등록된 다른 vault의 핸들러로 dispatch될 수 있다 (multi-vault 동시 사용 시).
+				if (isRecording) this.plugin.stopRecording();
+				else this.plugin.startRecording();
 				setTimeout(() => this.render(), 1000);
 			});
 
@@ -159,7 +161,7 @@ export class MeetNoteSidePanel extends ItemView {
 		const dashBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "회의 대시보드" } });
 		setIcon(dashBtn, "bar-chart-2");
 		dashBtn.addEventListener("click", () => {
-			(this.app as any).commands.executeCommandById("meetnote:meeting-dashboard");
+			this.plugin.generateDashboard();
 		});
 
 		const refreshBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "새로고침" } });
@@ -250,7 +252,7 @@ export class MeetNoteSidePanel extends ItemView {
 				setIcon(guideBtn, "mic");
 				guideBtn.appendText(" 녹음을 시작해보세요");
 				guideBtn.addEventListener("click", () => {
-					(this.app as any).commands.executeCommandById("meetnote:start-recording");
+					this.plugin.startRecording();
 					setTimeout(() => this.render(), 1000);
 				});
 			} else {

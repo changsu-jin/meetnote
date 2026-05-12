@@ -7,6 +7,11 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
+## [0.3.8] — 2026-05-11
+
+### Fixed
+- 같은 Obsidian 인스턴스에서 두 개 이상의 vault를 동시 사용할 때 사이드 패널 버튼이 의도한 vault의 plugin이 아닌 다른 vault의 plugin으로 dispatch되던 문제 [ADR-008]. 사이드 패널/온보딩의 액션 핸들러를 Obsidian 전역 command registry(`app.commands.executeCommandById`) 대신 plugin 인스턴스 메서드 직접 호출로 변경. 단일 vault 사용 시 동작 동일. Command palette/단축키 경로는 변함 없음. (예: 로컬 MPS + gpu.dev 두 backend를 vault별로 분리해 동시 운영하는 케이스 정상화)
+
 ## [0.3.7] — 2026-04-27
 
 ### Fixed

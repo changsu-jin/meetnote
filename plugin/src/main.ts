@@ -390,7 +390,7 @@ export default class MeetNotePlugin extends Plugin {
 	private continueFromWavPath: string = "";
 	private continueFromDocPath: string = "";
 
-	private async startRecording() {
+	async startRecording() {
 		if (this.isRecording) {
 			new Notice("이미 녹음 중입니다.");
 			return;
@@ -524,7 +524,7 @@ export default class MeetNotePlugin extends Plugin {
 		new Notice("녹음을 시작합니다.");
 	}
 
-	private async stopRecording() {
+	async stopRecording() {
 		if (!this.isRecording) {
 			new Notice("현재 녹음 중이 아닙니다.");
 			return;
@@ -629,7 +629,7 @@ export default class MeetNotePlugin extends Plugin {
 		}
 	}
 
-	private async activateSidePanel(): Promise<void> {
+	async activateSidePanel(): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(SIDE_PANEL_VIEW_TYPE);
 		if (existing.length > 0) {
 			this.app.workspace.revealLeaf(existing[0]);
@@ -656,7 +656,7 @@ export default class MeetNotePlugin extends Plugin {
 	/**
 	 * Find the most recent meeting note in the vault and extract its summary + action items.
 	 */
-	private async generateDashboard() {
+	async generateDashboard() {
 		const mdFiles = this.app.vault.getMarkdownFiles();
 
 		interface MeetingMeta {
@@ -1256,7 +1256,8 @@ class OnboardingModal extends Modal {
 			await this.plugin.saveSettings();
 			new Notice("설정이 저장되었습니다.");
 			this.close();
-			(this.app as any).commands.executeCommandById("meetnote:open-side-panel");
+			// [ADR-008] vault별 plugin 인스턴스의 메서드 직접 호출
+			this.plugin.activateSidePanel();
 		});
 
 		const skipBtn = btnRow.createEl("button", { text: "나중에 설정" });

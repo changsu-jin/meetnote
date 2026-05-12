@@ -1425,9 +1425,8 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
       });
       (0, import_obsidian4.setIcon)(recBtn, isRecording ? "square" : "mic");
       recBtn.addEventListener("click", () => {
-        this.app.commands.executeCommandById(
-          isRecording ? "meetnote:stop-recording" : "meetnote:start-recording"
-        );
+        if (isRecording) this.plugin.stopRecording();
+        else this.plugin.startRecording();
         setTimeout(() => this.render(), 1e3);
       });
       if (isRecording) {
@@ -1448,7 +1447,7 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
     const dashBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "\uD68C\uC758 \uB300\uC2DC\uBCF4\uB4DC" } });
     (0, import_obsidian4.setIcon)(dashBtn, "bar-chart-2");
     dashBtn.addEventListener("click", () => {
-      this.app.commands.executeCommandById("meetnote:meeting-dashboard");
+      this.plugin.generateDashboard();
     });
     const refreshBtn = headerActions.createEl("button", { cls: "meetnote-header-btn", attr: { title: "\uC0C8\uB85C\uACE0\uCE68" } });
     (0, import_obsidian4.setIcon)(refreshBtn, "refresh-cw");
@@ -1526,7 +1525,7 @@ var MeetNoteSidePanel = class extends import_obsidian4.ItemView {
         (0, import_obsidian4.setIcon)(guideBtn, "mic");
         guideBtn.appendText(" \uB179\uC74C\uC744 \uC2DC\uC791\uD574\uBCF4\uC138\uC694");
         guideBtn.addEventListener("click", () => {
-          this.app.commands.executeCommandById("meetnote:start-recording");
+          this.plugin.startRecording();
           setTimeout(() => this.render(), 1e3);
         });
       } else {
@@ -3581,7 +3580,7 @@ var OnboardingModal = class extends import_obsidian5.Modal {
       await this.plugin.saveSettings();
       new import_obsidian5.Notice("\uC124\uC815\uC774 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
       this.close();
-      this.app.commands.executeCommandById("meetnote:open-side-panel");
+      this.plugin.activateSidePanel();
     });
     const skipBtn = btnRow.createEl("button", { text: "\uB098\uC911\uC5D0 \uC124\uC815" });
     skipBtn.addEventListener("click", async () => {

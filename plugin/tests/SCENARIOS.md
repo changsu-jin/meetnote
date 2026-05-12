@@ -86,7 +86,7 @@
 |----|---------|-----------|:------:|
 | S40 | 이어 녹음 WAV 2개가 같은 document_path면 사이드패널에 1건만 표시 | 07-recording-list.spec.ts / test_recordings.py | O |
 | S41 | 이어 녹음 항목 삭제 시 companion WAV도 cascade 삭제 | 07-recording-list.spec.ts / test_recordings.py | O |
-| S42 | 이어 녹음 2개 WAV → "처리" 클릭 → 서버가 병합 처리 → 단일 완료 항목 + 두 WAV 모두 .done | 07-recording-list.spec.ts | O |
+| S42 | 이어 녹음 2개 WAV — 처리 버튼이 plugin → server로 정상 dispatch (UI 흐름 검증, plugin.processing=true 진입 확인) | 07-recording-list.spec.ts | O |
 | S43 | 완료 녹음 항목에 "요약 재생성" 버튼 + parseTranscriptSegments 파서 동작 | 07-recording-list.spec.ts | O |
 | S44 | 처리 중 다른 녹음 클릭 → 큐에 추가 + 버튼 "대기 중 #N" 표시 | 07-recording-list.spec.ts | O |
 | S45 | sweepSpeakerLabels — 참석자 저장 후 문서의 화자N 라벨이 실명으로 치환 | 07-recording-list.spec.ts | O |
