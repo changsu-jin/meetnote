@@ -651,3 +651,61 @@ def test_results_and_written(client, sample_processed_wav):
 
     updated = json.loads(meta_path.read_text())
     assert "processing_results" not in updated
+
+
+def test_save_session_audio_on_disconnect(client, tmp_recordings):
+    """ADR-009: WebSocket disconnect 시 in-memory audio_buffer가 디스크에 자동 저장되어야 한다.
+    Sleep/wake, 네트워크 끊김 등으로 정상 stop 메시지가 누락된 경우 데이터 손실 방지.
+
+    handle_stop과 disconnect cleanup이 공유하는 `_save_session_audio_to_disk_sync` 단위 테스트."""
+    import server
+    from server import RecordingSession, _save_session_audio_to_disk_sync
+    from pathlib import Path
+
+    # 가짜 PCM 데이터 — 16kHz/16-bit/mono 1초 (peak=10000 → 정상 음성으로 판정)
+    sample_rate = 16000
+    samples = [10000 if i % 100 < 50 else -10000 for i in range(sample_rate)]
+    import struct
+    pcm_bytes = struct.pack(f"<{len(samples)}h", *samples)
+
+    # Mock session 생성 — WebSocket 없이 RecordingSession만
+    class _FakeWS:
+        pass
+    session = RecordingSession(_FakeWS())
+    session.recording = True
+    session.audio_buffer = bytearray(pcm_bytes)
+    session._user_id = "test@example.com"
+    session._document_name = "테스트 자동저장"
+    session._document_path = "meetings/auto_saved_test.md"
+
+    # 호출 (auto_saved_on_disconnect=True — disconnect 경로 시뮬레이션)
+    wav_path = _save_session_audio_to_disk_sync(session, auto_saved_on_disconnect=True)
+
+    assert wav_path is not None, "audio_buffer가 있으면 WAV 경로를 반환해야 함"
+    wav_p = Path(wav_path)
+    meta_p = wav_p.with_suffix(".meta.json")
+
+    assert wav_p.exists(), "WAV 파일이 디스크에 저장되어야 함"
+    assert meta_p.exists(), "meta.json 파일이 저장되어야 함"
+
+    meta = json.loads(meta_p.read_text())
+    assert meta.get("auto_saved_on_disconnect") is True, "disconnect 자동 저장 플래그가 있어야 함"
+    assert meta.get("user_id") == "test@example.com"
+    assert meta.get("document_path") == "meetings/auto_saved_test.md"
+    # 정상 음성이라 silent 플래그 없음
+    assert meta.get("silent") is not True
+
+
+def test_save_session_audio_empty_buffer_returns_none():
+    """ADR-009: audio_buffer가 비어있으면 함수는 None을 반환하고 디스크 저장하지 않는다."""
+    from server import RecordingSession, _save_session_audio_to_disk_sync
+
+    class _FakeWS:
+        pass
+    session = RecordingSession(_FakeWS())
+    session.recording = True
+    session.audio_buffer = bytearray()  # 빈 버퍼
+    session._user_id = "test@example.com"
+
+    wav_path = _save_session_audio_to_disk_sync(session, auto_saved_on_disconnect=True)
+    assert wav_path is None, "빈 버퍼는 저장 시도 없이 None 반환"

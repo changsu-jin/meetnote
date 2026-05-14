@@ -1328,6 +1328,74 @@ async def handle_resume(ws: WebSocket):
     await ws_send(ws, {"type": "status", "recording": True, "processing": False, "paused": False})
 
 
+def _save_session_audio_to_disk_sync(
+    session: "RecordingSession",
+    *,
+    auto_saved_on_disconnect: bool = False,
+) -> str | None:
+    """[ADR-009] Session의 in-memory audio_buffer를 WAV + meta.json 으로 디스크에 저장.
+
+    핵심 동작은 동기 — WAV 인코딩(_save_pcm_as_wav)은 별도 스레드 호출 X
+    (disconnect cleanup의 `finally` 블록에서 event loop가 거의 종료될 수 있어
+    `asyncio.to_thread` 사용이 부적절). 호출 비용은 PCM → WAV 헤더 + write,
+    수십 MB 기준 수백 ms 이내. 호출자는 동기 컨텍스트에서 안전하게 사용 가능.
+
+    Returns: 저장된 WAV 경로 (audio_buffer 비어있으면 None).
+    """
+    if len(session.audio_buffer) == 0:
+        return None
+
+    # Silent WAV detection — 완전 무음(마이크 입력 실패)은 처리 파이프라인에서
+    # Whisper 환각("감사합니다" 반복 등)을 유발하므로 플래그를 기록해 downstream에서 skip한다.
+    pcm_int16 = np.frombuffer(bytes(session.audio_buffer), dtype=np.int16)
+    audio_peak_int16 = int(np.max(np.abs(pcm_int16))) if pcm_int16.size else 0
+    SILENT_PEAK_THRESHOLD = 33  # int16 units
+    is_silent = audio_peak_int16 < SILENT_PEAK_THRESHOLD
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    user_slug = session._user_id.split("@")[0].replace(".", "_") if session._user_id else "unknown"
+    wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
+    _save_pcm_as_wav(bytes(session.audio_buffer), wav_path)
+
+    save_tag = " — AUTO-SAVED ON DISCONNECT" if auto_saved_on_disconnect else ""
+    logger.info("Recording saved to %s (%.1f MB, peak=%d%s%s)",
+                wav_path, len(session.audio_buffer) / 1024 / 1024,
+                audio_peak_int16, " — SILENT" if is_silent else "", save_tag)
+
+    if is_silent:
+        logger.warning("Silent recording detected: %s — will skip transcription", wav_path)
+
+    if state.crypto:
+        state.crypto.audit.log("recording_stopped", {
+            "file": wav_path,
+            "user_id": session._user_id,
+            "auto_saved_on_disconnect": auto_saved_on_disconnect,
+        })
+
+    # Save metadata
+    import json as _json
+    meta_path = Path(wav_path).with_suffix(".meta.json")
+    meta = {
+        "user_id": session._user_id,
+        "document_name": session._document_name,
+        "document_path": session._document_path,
+        "started_at": datetime.now().isoformat(),
+    }
+    if session._continue_from:
+        meta["continued_from"] = session._continue_from
+    if is_silent:
+        meta["silent"] = True
+        meta["peak_int16"] = audio_peak_int16
+    if auto_saved_on_disconnect:
+        # [ADR-009] 정상 stop 없이 disconnect로 자동 저장된 케이스 표시. Sleep/wake,
+        # 네트워크 끊김, plugin reload 등 어떤 사유로든 stop 메시지가 누락된 경우.
+        meta["auto_saved_on_disconnect"] = True
+    meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
+
+    return wav_path
+
+
 async def handle_stop(ws: WebSocket):
     """Stop recording and run post-processing pipeline (queue mode only — save WAV)."""
     session = state.get_session(ws)
@@ -1349,50 +1417,25 @@ async def handle_stop(ws: WebSocket):
         session.reset()
         return
 
-    # Silent WAV detection — 완전 무음(마이크 입력 실패)은 처리 파이프라인에서
-    # Whisper 환각("감사합니다" 반복 등)을 유발하므로 플래그를 기록해 downstream에서 skip한다.
-    # peak/rms는 int16 PCM을 float로 변환하지 않고 그대로 계산 (메모리 절약).
-    pcm_int16 = np.frombuffer(bytes(session.audio_buffer), dtype=np.int16)
-    audio_peak_int16 = int(np.max(np.abs(pcm_int16))) if pcm_int16.size else 0
-    # int16 최대값 32768 기준 normalized peak. 0.001 ≈ int16 33 — 배경 잡음보다 한참 아래.
-    SILENT_PEAK_THRESHOLD = 33  # int16 units
-    is_silent = audio_peak_int16 < SILENT_PEAK_THRESHOLD
+    # WAV 인코딩은 별도 스레드에서 실행 (사용자 응답 latency 최소화)
+    wav_path = await asyncio.to_thread(
+        _save_session_audio_to_disk_sync, session, auto_saved_on_disconnect=False,
+    )
 
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    user_slug = session._user_id.split("@")[0].replace(".", "_") if session._user_id else "unknown"
-    wav_path = str(Path(_app_config.recordings_path) / f"meeting_{user_slug}_{timestamp}.wav")
-    await asyncio.to_thread(_save_pcm_as_wav, bytes(session.audio_buffer), wav_path)
-
-    logger.info("Recording saved to %s (%.1f MB, peak=%d%s)",
-                wav_path, len(session.audio_buffer) / 1024 / 1024,
-                audio_peak_int16, " — SILENT" if is_silent else "")
-
+    # silent 판정은 meta에서 확인 (위 함수가 meta에 기록함)
+    import json as _json_local
+    meta_check_path = Path(wav_path).with_suffix(".meta.json") if wav_path else None
+    is_silent = False
+    if meta_check_path and meta_check_path.exists():
+        try:
+            is_silent = bool(_json_local.loads(meta_check_path.read_text()).get("silent"))
+        except Exception:
+            is_silent = False
     if is_silent:
-        logger.warning("Silent recording detected: %s — will skip transcription", wav_path)
         await ws_send(ws, {
             "type": "warning",
             "message": "마이크 입력이 감지되지 않아 녹음이 무음으로 저장되었습니다. 처리 단계에서 건너뜁니다.",
         })
-
-    if state.crypto:
-        state.crypto.audit.log("recording_stopped", {"file": wav_path, "user_id": session._user_id})
-
-    # Save metadata
-    import json as _json
-    meta_path = Path(wav_path).with_suffix(".meta.json")
-    meta = {
-        "user_id": session._user_id,
-        "document_name": session._document_name,
-        "document_path": session._document_path,
-        "started_at": datetime.now().isoformat(),
-    }
-    if session._continue_from:
-        meta["continued_from"] = session._continue_from
-    if is_silent:
-        meta["silent"] = True
-        meta["peak_int16"] = audio_peak_int16
-    meta_path.write_text(_json.dumps(meta, ensure_ascii=False))
 
     # Queue mode: save WAV only, skip post-processing
     session.recording = False
@@ -1517,8 +1560,20 @@ async def websocket_endpoint(ws: WebSocket):
         ping_task.cancel()
         session = state.sessions.get(ws)
         if session and session.recording:
+            # [ADR-009] 정상 stop 없이 disconnect되면 in-memory chunks를 디스크에
+            # 자동 저장하여 데이터 손실 방지. Sleep/wake, 네트워크 끊김, plugin reload,
+            # OS crash 등 어떤 사유로든 stop 메시지가 누락된 경우를 모두 커버.
+            # 정상 stop 경로(handle_stop)는 이미 session.recording=False로 만들고 reset
+            # 했으므로 이 분기로 들어오지 않는다 — fallback이 정상 흐름을 가로채지 않음.
+            try:
+                saved = _save_session_audio_to_disk_sync(session, auto_saved_on_disconnect=True)
+                if saved:
+                    logger.info("Auto-saved orphaned recording on WebSocket close: %s", saved)
+                else:
+                    logger.info("Recording session reset on WebSocket close (empty buffer).")
+            except Exception:
+                logger.exception("Failed to auto-save orphaned recording")
             session.reset()
-            logger.info("Recording session reset on WebSocket close.")
         state.remove_session(ws)
         logger.info("Session removed. Active sessions: %d", len(state.sessions))
 

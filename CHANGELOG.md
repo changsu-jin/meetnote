@@ -7,6 +7,11 @@ All notable changes to MeetNote are documented here.
 ### Changed
 - 요약 프롬프트 — 회의 길이/주제 수에 비례한 분량 스케일링 [ADR-005]. 짧은 회의는 기존처럼 3-5개 bullet, 긴 다주제 회의는 주제별로 7-15개까지 상세하게. 결정사항 "없음" 명시 지침, 액션아이템 누락 방지 지침 추가. (50분 7명 다주제 회의가 1줄로 뭉뚱그려지던 문제 해결)
 
+## [0.3.9] — 2026-05-14
+
+### Fixed
+- **데이터 손실 방지** — WebSocket disconnect 시 in-memory audio_buffer를 디스크에 자동 저장 [ADR-009]. Sleep/wake, 네트워크 끊김, plugin reload, OS crash 등 어떤 사유로 stop 메시지가 누락되어도 녹음 데이터가 보존된다. 자동 저장된 녹음은 meta.json의 `auto_saved_on_disconnect: true` 플래그로 구분. (실제 사고: 2026-05-12 67분 + 2026-05-14 57분 손실 → 본 핫픽스 도입). 정상 stop 흐름은 동작 동일.
+
 ## [0.3.8] — 2026-05-11
 
 ### Fixed

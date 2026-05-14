@@ -113,6 +113,21 @@
 | S55 | pause 중에는 silentChunkCount 증가 없음, resume 후 다시 카운트 재개 | 09-silent-defense.spec.ts | O |
 | S56 | 녹음 중 MD rename 시 활성 session의 document_path/name 즉시 갱신, stop 후 새 경로로 meta.json 저장 | test_recordings.py | O |
 
+### SSO 인증 (REC-80, ADR-007) — `MEETNOTE_TEST_SSO=1` 모드에서만 의미
+
+| ID | 시나리오 | 테스트 파일 | 자동화 |
+|----|---------|-----------|:------:|
+| S57 | SSO ON + 토큰 없음 → 사이드 패널 "로그인이 필요합니다" prompt 표시, 일반 섹션 미렌더 | 10-sso-auth.spec.ts | O |
+| S58 | SSO ON + 토큰 주입됨 → 정상 화면 + 사용자 ID + 로그아웃 버튼 표시 | 10-sso-auth.spec.ts | O |
+| S59 | 로그아웃 클릭 → settings.ssoToken 비워짐 + 로그인 prompt 복귀 | 10-sso-auth.spec.ts | O |
+
+### 데이터 손실 방지 — WebSocket disconnect autosave (ADR-009)
+
+| ID | 시나리오 | 테스트 파일 | 자동화 |
+|----|---------|-----------|:------:|
+| S60 | WebSocket disconnect 시 in-memory audio_buffer가 디스크에 WAV+meta로 자동 저장, meta에 `auto_saved_on_disconnect: true` 플래그 | test_recordings.py | O |
+| S61 | audio_buffer가 비어있으면 disconnect autosave는 None 반환 (디스크 파일 생성 안 함) | test_recordings.py | O |
+
 ### 최종 해피 패스 (real audio full pipeline — 운영 흐름 재현)
 
 > **의도**: 단위 테스트가 아니라, 한 명의 실제 운영 사용자가 전체 사이클
@@ -137,7 +152,7 @@
 | H7 | 운영 코드와 동일한 포맷으로 /email/send 호출 — meetnote 섹션만 body (녹취록 제외), `[MeetNote] ${docName}` subject, `vault_file_path` + `include_gitlab_link` 전달 (SMTP 미설정 시 SKIP) | 99-happy-path.spec.ts | O |
 | H8 | 완성된 회의록을 Obsidian workspace activeFile로 열기 | 99-happy-path.spec.ts | O |
 
-**커버리지: 65/65 (100%)**
+**커버리지: 67/67 (100%)**
 
 ## 시나리오 상세
 
@@ -289,6 +304,26 @@
 ### S56: 녹음 중 rename 시 backend session 갱신
 **전제**: WebSocket start("old name", "meetings/old.md") → audio chunk → update_document("new name", "meetings/new.md") → stop
 **검증**: stop 후 생성된 meta.json의 `document_path` == "meetings/new.md", `document_name` == "new name". 사이드패널 대기 중 목록에 새 이름으로 표시된다.
+
+### S57: SSO ON + 토큰 없음 → 로그인 prompt (REC-80)
+**전제**: SSO ON 모드 (`MEETNOTE_TEST_SSO=1`). `clearSSOToken()`으로 plugin.settings.ssoToken/ssoUserId 비움 → 사이드 패널 re-render
+**검증**: `.meetnote-login-prompt` 가시 + 제목 "로그인이 필요합니다" + 로그인 버튼. `.meetnote-recording-list` 미렌더(early return).
+
+### S58: SSO ON + 토큰 주입됨 → 정상 화면 + 사용자 ID (REC-80)
+**전제**: SSO ON 모드. `injectMockSSOTokenIfNeeded()`로 mock 토큰 주입 → 사이드 패널 re-render
+**검증**: 로그인 prompt 사라짐. `.meetnote-sso-row > .meetnote-sso-user` 가시 + 텍스트 == TEST_SSO_USER_ID. 동일 row에 "로그아웃" 버튼.
+
+### S59: 로그아웃 → 토큰 클리어 + prompt 복귀 (REC-80)
+**전제**: SSO ON + 로그인된 상태 (S58 직후 상태)
+**검증**: 로그아웃 버튼 클릭 → `plugin.settings.ssoToken === ""` 확인. 사이드 패널 re-render → `.meetnote-login-prompt` 다시 가시.
+
+### S60: WebSocket disconnect 시 audio_buffer 자동 디스크 저장 (ADR-009)
+**전제**: 가짜 PCM(16kHz/16bit/mono 1초, peak ≈ 10000)을 채운 `RecordingSession` 인스턴스 (`recording=True`, user_id/document_path 세팅)
+**검증**: `_save_session_audio_to_disk_sync(session, auto_saved_on_disconnect=True)` 호출 → WAV 파일 + meta.json 디스크 생성, meta에 `auto_saved_on_disconnect: true` 플래그 + user_id/document_path 보존. 정상 음성이므로 `silent: true` 없음.
+
+### S61: 빈 audio_buffer는 disconnect autosave에서 안전 skip (ADR-009)
+**전제**: `audio_buffer = bytearray()` (빈 버퍼), `recording=True`
+**검증**: `_save_session_audio_to_disk_sync` 호출 → `None` 반환. 디스크에 WAV/meta 파일 생성되지 않음 (불필요한 빈 파일 방지).
 
 ---
 
